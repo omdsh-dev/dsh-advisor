@@ -87,9 +87,9 @@ builds itself from source: `package.json` declares `"prepare": "pnpm build"` —
 the same build `prepack` runs when packing a tarball — and pnpm runs it
 automatically after installing devDependencies. The devDependencies resolve
 from the committed `peer-stubs/` type shims (`file:./peer-stubs/<name>` for
-the five directly consumed `@deepseek-ai/dsh-*` packages: minimal runtime
-stand-ins for `dsh-{llm,session,commands,timeout}`, type-only for
-`dsh-agent`), so `pnpm install` is self-contained in any clone — no access to
+the fourteen directly consumed `@deepseek-ai/dsh-*` packages: minimal runtime
+stand-ins or type-only shims, each recording the dsh-private commit it
+mirrors), so `pnpm install` is self-contained in any clone — no access to
 private registry packages, no local dsh checkout. (An earlier packaging note
 warned that git installs would fail because the bundle shipped no `prepare`
 script; that catch is resolved — git installs now work end to end.)
@@ -105,17 +105,32 @@ dsh --profile <name>
 
 ## Config
 
-> **Settings page (planned):** editing these settings from the dsh Settings
-> page lands in the same iteration via plan `dsh-advisor-settings-n2`.
-> TODO: document the three-surface relationship (Settings page / plugin-row
-> config / `/advisor` command) after that plan merges.
-
 The advisor is off by default. When enabled, `provider` and `model` are
 **mandatory**: `enabled: true` without both is a hard gate — the advisor never
 starts a model call and reports a disabled-with-reason status. Unknown config
 keys are rejected.
 
-Configure it in the profile's own patch layer (`$DSH_HOME/profiles/<name>/cordis.patch.yml`):
+Configuration composes across **three surfaces** (later layers override earlier
+ones; every surface uses the same key set):
+
+1. **Plugin-row config** — `$DSH_HOME/profiles/<name>/cordis.patch.yml`
+   (below). This is the composition base.
+2. **dsh web Settings page** — the Advisor section (enabled toggle, provider /
+   model selects restricted to system-configured providers and their models,
+   optional fields) saves into the `advisor` settings namespace and overrides
+   the plugin-row config without editing it. Saving applies to new sessions
+   immediately — no restart (the runtime reads the composed value live).
+   Requires a current dsh web build whose shell loads `dshClient` packages and
+   renders `settings.section` slots.
+3. **`/advisor` command** — per-session and ephemeral: it flips a session
+   override, never the persisted config (see [Usage](#usage)).
+
+Both persisted surfaces share the same hard gate: `enabled: true` with empty
+`provider`/`model` never starts a model call (disabled-with-reason). The
+Settings page additionally blocks saving while enabled with a required field
+empty; the host-side gate stays the final line of defense on every path.
+
+Plugin-row config:
 
 ```yaml
 # profiles/<name>/cordis.patch.yml — the profile's user patch layer
@@ -208,8 +223,9 @@ harness iteration roadmap):
   file discovery (next iteration).
 - **No advisor tools** — the reviewer is an independent model call only; it
   cannot verify claims itself (next-next iteration).
-- **No Web UI panel** — advice surfaces only as tagged injected messages
-  (next-next iteration).
+- **No in-session advisor panel** — advice surfaces only as tagged injected
+  messages (the Advisor **Settings** section is a config surface, not a
+  session view; an in-session card is next-next iteration).
 - **No transcript persistence or cost stats** — no resumable advisor history or
   cost observability (next-next iteration).
 - **No secret obfuscation of delta content** — secrets present in the transcript
@@ -231,11 +247,10 @@ harness iteration roadmap):
 The bundle builds itself on install: `package.json` declares
 `"prepare": "pnpm build"` (the same build `prepack` runs), so any clone is
 immediately buildable. The private `@deepseek-ai/dsh-*` runtime dependencies
-resolve at dev time from the committed `peer-stubs/` type shims — the five
+resolve at dev time from the committed `peer-stubs/` type shims — the fourteen
 directly consumed packages are declared as `file:./peer-stubs/<name>`
-devDependencies (minimal runtime stand-ins for
-`dsh-{llm,session,commands,timeout}`, type-only for `dsh-agent`), and each
-shim's `package.json` records the dsh-private commit it mirrors. No local dsh
+devDependencies (minimal runtime stand-ins or type-only shims; each shim's
+`package.json` records the dsh-private commit it mirrors). No local dsh
 checkout or extra setup is needed — a plain `pnpm install` in any clone is
 self-contained. Dev-time `cordis` resolves from the npm registry
 (`^4.0.0-rc.7`) rather than a linked checkout; keep it tracking the dsh host's
@@ -245,8 +260,8 @@ moves.
 ```sh
 pnpm install      # registry deps + file: peer-stubs, no environment setup
 pnpm test         # vitest (unit + the composed integration loop)
-pnpm typecheck    # tsc --noEmit (strict, moduleResolution: bundler)
-pnpm build        # tsc emit to lib/ (runs automatically via prepare/prepack)
+pnpm typecheck    # tsc --noEmit (node) + tsc -p tsconfig.client.json --noEmit + tsc -p tsconfig.spec.json --noEmit
+pnpm build        # tsc -p tsconfig.build.json emit to lib/ + node scripts/build-client.mjs (client bundle)
 pnpm pack         # build + produce dsh-advisor-0.0.1.tgz
 ```
 

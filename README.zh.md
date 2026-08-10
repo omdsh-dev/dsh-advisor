@@ -52,7 +52,7 @@ tarball 附带的是构建产物（`lib/` + `cordis.patch.yml`），因此不会
 
 ### 从 git 安装构建
 
-git 安装（见上）拉取的是**源码而非构建产物**，因此组合包会从源码自行构建：`package.json` 声明了 `"prepare": "pnpm build"` —— 与打包 tarball 时 `prepack` 运行的构建相同 —— pnpm 会在安装完 devDependencies 后自动运行它。devDependencies 从已提交的 `peer-stubs/` 类型垫片解析（五个直接消费的 `@deepseek-ai/dsh-*` 包为 `file:./peer-stubs/<name>`：`dsh-{llm,session,commands,timeout}` 为最小运行时 stand-in，`dsh-agent` 为纯类型），因此任何克隆里的 `pnpm install` 都是自洽的 —— 无需访问私有 registry 包，也无需本地 dsh 检出。（早期的 packaging 说明曾警告 git 安装会失败，因为组合包没有 `prepare` 脚本；该问题已解决 —— git 安装现已端到端可用。）
+git 安装（见上）拉取的是**源码而非构建产物**，因此组合包会从源码自行构建：`package.json` 声明了 `"prepare": "pnpm build"` —— 与打包 tarball 时 `prepack` 运行的构建相同 —— pnpm 会在安装完 devDependencies 后自动运行它。devDependencies 从已提交的 `peer-stubs/` 类型垫片解析（十四个直接消费的 `@deepseek-ai/dsh-*` 包为 `file:./peer-stubs/<name>`：最小运行时 stand-in 或纯类型垫片，每个记录其所镜像的 dsh-private commit），因此任何克隆里的 `pnpm install` 都是自洽的 —— 无需访问私有 registry 包，也无需本地 dsh 检出。（早期的 packaging 说明曾警告 git 安装会失败，因为组合包没有 `prepare` 脚本；该问题已解决 —— git 安装现已端到端可用。）
 
 ### 验证
 
@@ -65,12 +65,17 @@ dsh --profile <name>
 
 ## 配置
 
-> **Settings 页（计划中）：**从 dsh Settings 页编辑这些设置将在同一迭代内通过 plan `dsh-advisor-settings-n2` 落地。
-> TODO：该 plan 合入后，记录三面关系（Settings 页 / 插件行 config / `/advisor` 指令）。
-
 advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabled: true` 而缺少两者之一是一个硬门禁 —— advisor 不会发起任何模型调用，并报告带原因的禁用状态（disabled-with-reason）。未知配置键会被拒绝。
 
-在 profile 自己的 patch 层配置（`$DSH_HOME/profiles/<name>/cordis.patch.yml`）：
+配置在**三个配置面**之间合成（后一层覆盖前一层；各处使用同一组键）：
+
+1. **插件行 config** —— `$DSH_HOME/profiles/<name>/cordis.patch.yml`（见下）。这是合成 base。
+2. **dsh web Settings 页** —— Advisor section（enabled 开关、只列出系统内已配置 provider 及其模型的 provider/model 选择框、可选字段）保存到 `advisor` settings namespace，覆盖插件行 config 而无需改动它。保存后新会话立即生效，无需重启（运行时 live 读取合成值）。需要当前版本的 dsh web 构建（其 web shell 能加载 `dshClient` 包并渲染 `settings.section` slot）。
+3. **`/advisor` 指令** —— 按会话且临时：翻转的是会话级 override，从不修改持久化配置（见[用法](#用法)）。
+
+两个持久化配置面共享同一个硬门禁：`enabled: true` 而 `provider`/`model` 为空时绝不发起模型调用（disabled-with-reason）。Settings 页还会在 enabled 且必填字段为空时阻止保存；宿主侧硬门禁始终是所有路径上的最后防线。
+
+插件行配置：
 
 ```yaml
 # profiles/<name>/cordis.patch.yml — the profile's user patch layer
@@ -132,7 +137,7 @@ MVP 有意放弃与 omp 的完整对等。已接受的差距（在 harness 迭�
 
 - **每个会话一个 advisor** —— 无并行 advisor roster 或 WATCHDOG 式文件发现（下一迭代）。
 - **无 advisor tools** —— 评审者只是一个独立的模型调用；它无法自行核验主张（下下迭代）。
-- **无 Web UI 面板** —— 建议仅以带标签的注入消息呈现（下下迭代）。
+- **无会话内 advisor 面板** —— 建议仅以带标签的注入消息呈现（本迭代新增的 Advisor **Settings** section 是配置面，不是会话内视图；会话内卡片为下下迭代）。
 - **无 transcript 持久化或成本统计** —— 无可恢复的 advisor 历史或成本可观测性（下下迭代）。
 - **无 delta 内容密钥混淆** —— transcript 中出现的 secrets 可能到达 advisor 模型；请通过配置可信的评审模型来缓解。
 - **不隔离不安全的 advisor 输出** —— 行为异常的 note 可能携带指令性文本；JSON frame + 校验 + advisory-only 框架（`[advisor:…]`、"weigh, don't blindly obey"）是仅有的缓解手段，且 note 会原样送达主 transcript（路线图）。
@@ -141,13 +146,13 @@ MVP 有意放弃与 omp 的完整对等。已接受的差距（在 harness 迭�
 
 ## 开发
 
-组合包在安装时自行构建：`package.json` 声明了 `"prepare": "pnpm build"`（与 `prepack` 运行的构建相同），因此任何克隆都立即可构建。私有的 `@deepseek-ai/dsh-*` 运行时依赖在开发时从已提交的 `peer-stubs/` 类型垫片解析 —— 五个直接消费的包声明为 `file:./peer-stubs/<name>` devDependencies（`dsh-{llm,session,commands,timeout}` 为最小运行时 stand-in，`dsh-agent` 为纯类型），每个垫片的 `package.json` 记录了它所镜像的 dsh-private commit。无需本地 dsh 检出或额外设置 —— 任何克隆里一次普通的 `pnpm install` 即自洽。开发时的 `cordis` 从 npm registry 解析（`^4.0.0-rc.7`），而非链接的本地检出；请让它与 dsh 宿主内置的 cordis 基线保持一致 —— 宿主版本变化时，devDep 与 lockfile 一起升级。
+组合包在安装时自行构建：`package.json` 声明了 `"prepare": "pnpm build"`（与 `prepack` 运行的构建相同），因此任何克隆都立即可构建。私有的 `@deepseek-ai/dsh-*` 运行时依赖在开发时从已提交的 `peer-stubs/` 类型垫片解析 —— 十四个直接消费的包声明为 `file:./peer-stubs/<name>` devDependencies（最小运行时 stand-in 或纯类型垫片），每个垫片的 `package.json` 记录了它所镜像的 dsh-private commit。无需本地 dsh 检出或额外设置 —— 任何克隆里一次普通的 `pnpm install` 即自洽。开发时的 `cordis` 从 npm registry 解析（`^4.0.0-rc.7`），而非链接的本地检出；请让它与 dsh 宿主内置的 cordis 基线保持一致 —— 宿主版本变化时，devDep 与 lockfile 一起升级。
 
 ```sh
 pnpm install      # registry deps + file: peer-stubs, no environment setup
 pnpm test         # vitest (unit + the composed integration loop)
-pnpm typecheck    # tsc --noEmit (strict, moduleResolution: bundler)
-pnpm build        # tsc emit to lib/ (runs automatically via prepare/prepack)
+pnpm typecheck    # tsc --noEmit (node) + tsc -p tsconfig.client.json --noEmit + tsc -p tsconfig.spec.json --noEmit
+pnpm build        # tsc -p tsconfig.build.json emit to lib/ + node scripts/build-client.mjs (client bundle)
 pnpm pack         # build + produce dsh-advisor-0.0.1.tgz
 ```
 
