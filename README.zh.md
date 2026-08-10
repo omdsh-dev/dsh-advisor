@@ -14,7 +14,7 @@
 dsh plugin --profile <name> add github:dsh-external/dsh-advisor   # pin a commit with #<sha>
 ```
 
-pnpm ≥ 10 默认拦截 git 依赖的 `prepare` 脚本：如果第一次 `add` 报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，请在 profile 的 `pnpm-workspace.yaml` 中放行一次构建（`onlyBuiltDependencies`，或 pnpm ≥ 10.26 的 `allowBuilds`），然后重新执行 `add` —— 参见[从 git URL 安装](#从-git-url-安装一条命令)。
+pnpm ≥ 10 默认拦截 git 依赖的 `prepare` 脚本：如果第一次 `add` 报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，请在 profile 的 `pnpm-workspace.yaml` 中添加放行条目（`onlyBuiltDependencies`，或 pnpm ≥ 10.26 的 `allowBuilds`），然后重新执行 `add` —— 参见[从 git URL 安装](#从-git-url-安装一条命令)。
 
 **仅作建议。** advisor 从不批准或否决主 agent 的动作，也绝不会像主 agent 那样发出命令。每条送达的消息都是自我描述的 advisory 内容；一个行为异常的评审者会被端到端约束（emission guard、immuneTurns 冷却、failure policy），因此它永远不会卡住或污染主循环。
 
@@ -141,7 +141,7 @@ MVP 有意放弃与 omp 的完整对等。已接受的差距（在 harness 迭�
 
 ## 开发
 
-组合包在安装时自行构建：`package.json` 声明了 `"prepare": "pnpm build"`（与 `prepack` 运行的构建相同），因此任何克隆都立即可构建。私有的 `@deepseek-ai/dsh-*` 运行时依赖在开发时从已提交的 `peer-stubs/` 类型垫片解析 —— 五个直接消费的包声明为 `file:./peer-stubs/<name>` devDependencies（`dsh-{llm,session,commands,timeout}` 为最小运行时 stand-in，`dsh-agent` 为纯类型），每个垫片的 `package.json` 记录了它所镜像的 dsh-private commit。无需本地 dsh 检出或额外设置 —— 任何克隆里一次普通的 `pnpm install` 即自洽。
+组合包在安装时自行构建：`package.json` 声明了 `"prepare": "pnpm build"`（与 `prepack` 运行的构建相同），因此任何克隆都立即可构建。私有的 `@deepseek-ai/dsh-*` 运行时依赖在开发时从已提交的 `peer-stubs/` 类型垫片解析 —— 五个直接消费的包声明为 `file:./peer-stubs/<name>` devDependencies（`dsh-{llm,session,commands,timeout}` 为最小运行时 stand-in，`dsh-agent` 为纯类型），每个垫片的 `package.json` 记录了它所镜像的 dsh-private commit。无需本地 dsh 检出或额外设置 —— 任何克隆里一次普通的 `pnpm install` 即自洽。开发时的 `cordis` 从 npm registry 解析（`^4.0.0-rc.7`），而非链接的本地检出；请让它与 dsh 宿主内置的 cordis 基线保持一致 —— 宿主版本变化时，devDep 与 lockfile 一起升级。
 
 ```sh
 pnpm install      # registry deps + file: peer-stubs, no environment setup
@@ -150,6 +150,8 @@ pnpm typecheck    # tsc --noEmit (strict, moduleResolution: bundler)
 pnpm build        # tsc emit to lib/ (runs automatically via prepare/prepack)
 pnpm pack         # build + produce dsh-advisor-0.0.1.tgz
 ```
+
+`prepack` 与 `prepare` 都运行 `pnpm build`，因此 `pnpm pack` 会构建两次（每个生命周期一次）——这是为保持 git 安装可构建而接受的取舍。
 
 集成测试（`tests/integration.test.ts`）把插件组合进一个带 stub LLM adapter 的真实 cordis 上下文，驱动完整的 turn → delta → advisor call → inject/steer 循环。
 

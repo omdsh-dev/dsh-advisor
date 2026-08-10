@@ -106,6 +106,12 @@ declare module 'cordis' {
   }
 }
 
+/** Convert arbitrary abort reasons to one stable rejected Error (mirrors the real seam). */
+function abortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason
+  return new Error(typeof signal.reason === 'string' ? signal.reason : 'command aborted')
+}
+
 /**
  * Human-command registry (global layer only — agent-scoped shadowing is
  * outside the consumed surface).
@@ -157,7 +163,7 @@ export class CommandService extends Service {
     if (parsed === undefined) return undefined
     const command = this.definitions.get(parsed.name)
     if (command === undefined) return undefined
-    if (signal.aborted) throw new Error('command aborted')
+    if (signal.aborted) throw abortError(signal)
     this.commandSeq += 1
     const commandId = CommandId(`stub-${this.commandSeq}`)
     const invocation: CommandInvocation = Object.freeze({

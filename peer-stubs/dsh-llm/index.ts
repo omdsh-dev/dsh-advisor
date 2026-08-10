@@ -176,13 +176,40 @@ export function createUserMessage<T extends Omit<UserMessage, 'id' | 'role'>>(
   })
 }
 
-/** Deep-freeze a value (the llm seam's immutability contract). */
+/**
+ * Deep-freeze a value in place with an iterative traversal, guarding cycles,
+ * so later mutation throws without imposing a call-stack depth cap. Mirrors
+ * the real seam (`call-config.ts`), including deliberately skipping
+ * {@link AbortSignal} objects — freezing them would break the request's live
+ * cancellation channel.
+ */
 function deepFreeze<T>(value: T): T {
-  if (typeof value !== 'object' || value === null) return value
-  for (const key of Object.keys(value as Record<string, unknown>)) {
-    deepFreeze((value as Record<string, unknown>)[key])
+  const seen = new WeakSet<object>()
+  const pending: (
+    | { kind: 'visit'; node: unknown }
+    | { kind: 'property'; source: Record<string, unknown>; key: string }
+  )[] = [{ kind: 'visit', node: value }]
+  while (pending.length > 0) {
+    const task = pending.pop()
+    if (task === undefined) continue
+    if (task.kind === 'property') {
+      pending.push({ kind: 'visit', node: task.source[task.key] })
+      continue
+    }
+    const node = task.node
+    if (node === null || typeof node !== 'object') continue
+    if (node instanceof AbortSignal) continue
+    if (seen.has(node)) continue
+    seen.add(node)
+    Object.freeze(node)
+    const keys = Object.keys(node)
+    for (let index = keys.length - 1; index >= 0; index--) {
+      const key = keys[index]
+      if (key === undefined) continue
+      pending.push({ kind: 'property', source: node as Record<string, unknown>, key })
+    }
   }
-  return Object.freeze(value)
+  return value
 }
 
 /** Serializable provider-boundary facts; policy decides whether they are retryable. */

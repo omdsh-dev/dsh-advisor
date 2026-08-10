@@ -13,6 +13,15 @@
  * real-composition tests: the canonical append/replace surface fold and the
  * per-event message projection rules. Pinned to dsh-private commit b8343cb
  * (2026-08-09 snapshot). Keep in sync when the dsh-private baseline moves.
+ *
+ * Known divergence (out of the consumed surface): the real seam's
+ * `planSurfaceEvent`/`applySurfaceEvent` additionally validate seq contiguity
+ * (`event.seq !== expectedSeq`), provenance (`assertProvenance`, requiring
+ * `sourceEventSeqs ⊆ shadowedSeqs`), and the tool-result-rewrite restriction
+ * (`assertToolResultRewrite`). This stub's `foldSurface` tolerates malformed
+ * logs those host-side checks would throw on — the advisor never constructs
+ * events (it only consumes host-emitted logs), so the strictness gap is not
+ * part of the consumed surface.
  */
 
 import type { Message } from '@deepseek-ai/dsh-llm'
@@ -202,7 +211,9 @@ export interface SurfaceFoldResult {
 /**
  * Replay a complete session log through the canonical surface fold: appends
  * push the event seq onto the surface tail; positional replaces shadow the
- * declared range with the replacing node.
+ * declared range with the replacing node. (Unlike the real seam, this stub
+ * does not validate seq contiguity, provenance, or the tool-result-rewrite
+ * restriction — see the header's divergence note.)
  */
 export function foldSurface(events: readonly SessionEvent[]): SurfaceFoldResult {
   const nodes: number[] = []

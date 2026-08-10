@@ -7,13 +7,10 @@
     "types": ["node"],
     "strict": true,
     "noEmit": true,
-    // skipLibCheck is required (T3 verified; removal re-attempted at T8):
-    // importing @deepseek-ai/dsh-llm types pulls dsh-llm's retry-policy.d.ts,
-    // whose `import z from 'schemastery'` resolves to the dsh checkout's
-    // VENDORED schemastery (declares the global `Schemastery` namespace),
-    // colliding (TS6200) with the registry schemastery our src/config.ts schema
-    // imports. Removing it breaks the build; the dsh repo itself builds with
-    // skipLibCheck. src/ and tests/ remain fully strict-checked.
+    // skipLibCheck is kept enabled as a defensive guard: it avoids TS6200-style
+    // declaration collisions from the dependency graph and keeps the typecheck
+    // focused on src/ and tests/, which remain fully strict-checked. Removal is
+    // deferred to the settings plan's full regression (its T1 may re-attempt it).
     "skipLibCheck": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,

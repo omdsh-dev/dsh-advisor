@@ -20,7 +20,7 @@ dsh plugin --profile <name> add github:dsh-external/dsh-advisor   # pin a commit
 ```
 
 pnpm ≥ 10 blocks a git dependency's `prepare` script by default: if the first
-`add` fails with `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`, allow the build once
+`add` fails with `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`, add the allowlist entry
 in the profile's `pnpm-workspace.yaml` (`onlyBuiltDependencies`, or
 `allowBuilds` on pnpm ≥ 10.26) and re-run the `add` — see
 [From a git URL](#from-a-git-url-one-command).
@@ -237,7 +237,10 @@ devDependencies (minimal runtime stand-ins for
 `dsh-{llm,session,commands,timeout}`, type-only for `dsh-agent`), and each
 shim's `package.json` records the dsh-private commit it mirrors. No local dsh
 checkout or extra setup is needed — a plain `pnpm install` in any clone is
-self-contained.
+self-contained. Dev-time `cordis` resolves from the npm registry
+(`^4.0.0-rc.7`) rather than a linked checkout; keep it tracking the dsh host's
+bundled cordis baseline — bump the devDep and lockfile together when the host
+moves.
 
 ```sh
 pnpm install      # registry deps + file: peer-stubs, no environment setup
@@ -246,6 +249,10 @@ pnpm typecheck    # tsc --noEmit (strict, moduleResolution: bundler)
 pnpm build        # tsc emit to lib/ (runs automatically via prepare/prepack)
 pnpm pack         # build + produce dsh-advisor-0.0.1.tgz
 ```
+
+`prepack` and `prepare` both run `pnpm build`, so `pnpm pack` runs the build
+twice (once per lifecycle) — the documented tradeoff that keeps git-install
+builds working.
 
 The integration test (`tests/integration.test.ts`) composes the plugin into a
 real cordis context with a stub LLM adapter and drives the full
