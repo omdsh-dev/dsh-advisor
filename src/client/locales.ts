@@ -1,8 +1,7 @@
 /**
  * Copy dictionaries for the Advisor settings section (namespace
  * `settings.advisor`). The English dictionary is the key-set source of truth
- * for the pair; the Chinese dictionary mirrors it exactly. Task 3 extends the
- * key set with the full form copy (enabled/provider/model/apply/errors…).
+ * for the pair; the Chinese dictionary mirrors it exactly.
  */
 
 /** English strings (the key-set source of truth for this pair). */
@@ -12,7 +11,24 @@ export const en = {
   intro: 'Configure the advisor reviewer model that observes the primary transcript and injects severity-ranked advice.',
   loadFailed: 'Loading advisor settings failed',
   retry: 'Retry',
-  skeleton: 'The advisor settings form is coming soon.',
+  enabled: 'Enable the advisor',
+  provider: 'Provider',
+  providerPlaceholder: 'Select a provider',
+  providerRequired: 'Provider is required when the advisor is enabled.',
+  model: 'Model',
+  modelPlaceholder: 'Select a model',
+  modelRequired: 'Model is required when the advisor is enabled.',
+  noProviders: 'No configured providers. Configure one on the Models page first.',
+  noModels: 'This provider has no available models. Configure models for it on the Models page.',
+  systemPrompt: 'System prompt',
+  immuneTurns: 'Immune turns',
+  maxDeltaMessages: 'Max delta messages',
+  apply: 'Apply',
+  applying: 'Applying…',
+  cancel: 'Cancel',
+  saved: 'Advisor settings saved. New sessions pick them up immediately.',
+  conflict: 'The settings changed elsewhere. Review the values and apply again.',
+  readOnly: 'Settings are read-only in this environment.',
 }
 
 /** The settings.advisor namespace key union. */
@@ -25,5 +41,22 @@ export const zh: typeof en = {
   intro: '配置顾问审阅模型：它观察主会话记录，并注入按严重程度排序的建议。',
   loadFailed: '加载顾问设置失败',
   retry: '重试',
-  skeleton: '顾问设置表单即将推出。',
+  enabled: '启用顾问',
+  provider: '提供商',
+  providerPlaceholder: '选择提供商',
+  providerRequired: '启用顾问时必须选择提供商。',
+  model: '模型',
+  modelPlaceholder: '选择模型',
+  modelRequired: '启用顾问时必须选择模型。',
+  noProviders: '没有已配置的提供商。请先在 Models 页面配置。',
+  noModels: '该提供商没有可用模型。请到 Models 页面为其配置模型。',
+  systemPrompt: '系统提示词',
+  immuneTurns: '免疫轮次',
+  maxDeltaMessages: '最大增量消息数',
+  apply: '保存',
+  applying: '保存中…',
+  cancel: '取消',
+  saved: '顾问设置已保存。新会话立即生效。',
+  conflict: '设置已在别处变更。请核对当前值后重新保存。',
+  readOnly: '当前环境中的设置为只读。',
 }

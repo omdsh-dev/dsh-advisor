@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Component specs render React (JSX via the automatic runtime) under
+    // jsdom and drive @testing-library/react, so this program needs the JSX
+    // flag and the DOM libs the base node program deliberately omits. The
+    // client sources they import (src/client/*.tsx) compile under the same
+    // flags here, mirroring tsconfig.client.json's setup.
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    // Specs import client sources with explicit .ts/.tsx extensions
+    // (dsh-private convention); legal under noEmit.
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": ["tests/**/*.spec.tsx"],
+  // The base program excludes src/client; this spec program must see the
+  // client sources the specs import, so the inherited exclude is cleared
+  // (same as tsconfig.client.json).
+  "exclude": []
+}

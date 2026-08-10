@@ -19,12 +19,15 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { AdvisorSection } from './advisor-section.tsx'
 import type { AdvisorSectionInjected } from './advisor-section.tsx'
-import { AdvisorSettingsStore } from './advisor-store.ts'
+import { AdvisorSettingsStore, refreshIfLoaded } from './advisor-store.ts'
 import { en, zh, type AdvisorKey } from './locales.ts'
 
 export type { AdvisorSectionInjected, AdvisorSectionProps } from './advisor-section.tsx'
 export type { AdvisorKey } from './locales.ts'
-export type { AdvisorSettingsState, AdvisorSettingsStore } from './advisor-store.ts'
+export type {
+  AdvisorDraft, AdvisorSettingsState, AdvisorSettingsStore, ApplyFailure, ApplyState,
+  ModelOption, ModelsEmptyReason, ProviderOption,
+} from './advisor-store.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -36,15 +39,11 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** Dictionary namespace owned by this plugin. */
 const NS = 'settings.advisor'
 
-/**
- * Refetch the page snapshot only after its first load: an unopened Advisor
- * page must not fetch on background invalidations.
- * @param controller - the page store.
- */
-export function refreshIfLoaded(controller: AdvisorSettingsStore): void {
-  if (controller.store.getSnapshot().status === 'idle') return
-  void controller.load()
-}
+// `refreshIfLoaded` lives next to the store (pure controller helper): refetch
+// the page snapshot only after its first load — an unopened Advisor page must
+// not fetch on background invalidations. Re-exported here to keep the client
+// entry's value surface stable across the task-2 skeleton.
+export { refreshIfLoaded } from './advisor-store.ts'
 
 /**
  * Required services (cordis fiber inject). The target slot is declared by
