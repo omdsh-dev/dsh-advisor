@@ -23,7 +23,8 @@
 #
 # With --runtime [URL] the script skips the file probes and instead queries a
 # running dsh web server: POST {url}/api/settings.describe and assert the
-# response namespaces include `advisor` (with --absent, that they exclude it).
+# response namespaces include `advisor` (with --absent, that they exclude it —
+# only against a settings.describe success envelope; error pages/envelopes fail).
 # This proves the patch is effective in the RUNNING server — a dsh web restart
 # is required after applying the patch, and file probes alone cannot prove it.
 # URL defaults to http://127.0.0.1:3080.
@@ -43,7 +44,7 @@
 set -euo pipefail
 
 usage() {
-  sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -84,6 +85,10 @@ runtime_probe() {
   local url="$1"
   local body="" curl_status=0 exposed=0
 
+  # Normalize the URL: strip one trailing slash so {url}/api/settings.describe
+  # never becomes {url}//api/settings.describe.
+  url="${url%/}"
+
   # `|| curl_status=$?` (not `if ! ...; then $?`) — inside an `if !` branch $?
   # is the NEGATED status (0), which would mask curl failures.
   body="$(curl --silent --show-error --max-time 10 \
@@ -106,6 +111,16 @@ runtime_probe() {
     if [[ "$exposed" -eq 1 ]]; then
       [[ "$QUIET" -eq 0 ]] && printf '  [FAIL] runtime probe %-36s unexpected namespace\n' "(${url})" >&2
       echo "ERROR: runtime probe failed: ${url} exposes the advisor namespace (expected absent)." >&2
+      exit 1
+    fi
+    # Absent-guard: only declare "advisor absent" when the body is a
+    # settings.describe SUCCESS envelope ("ok":true with a namespaces result).
+    # An HTTP error page, an error envelope (ok:false), or garbage must FAIL
+    # instead of passing as "absent". The present direction needs no guard: a
+    # non-envelope response simply lacks "ns":"advisor" and already fails.
+    if ! grep -qF '"ok":true' <<< "$body" || ! grep -qF '"namespaces"' <<< "$body"; then
+      [[ "$QUIET" -eq 0 ]] && printf '  [FAIL] runtime probe %-36s unexpected response\n' "(${url})" >&2
+      echo "ERROR: runtime probe failed: unexpected response from ${url} (not a settings.describe success envelope) — cannot assert namespace absence." >&2
       exit 1
     fi
     [[ "$QUIET" -eq 0 ]] && printf '  [PASS] runtime probe %-36s advisor namespace absent\n' "(${url})"

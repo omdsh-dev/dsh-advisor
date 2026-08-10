@@ -19,7 +19,8 @@
 
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { createServer } from 'node:http'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -122,6 +123,109 @@ describe('host exposure patch artifact (C-1)', () => {
     // The distinct "server unreachable" message must name the probed URL —
     // proving the --runtime mode ran (as opposed to an option-parse error).
     expect(out.stderr, 'unreachable failure names the probed URL').toContain(url)
+  })
+
+  // One-shot localhost HTTP server answering ONLY the canonical
+  // settings.describe path (anything else → 404). This lets the tests exercise
+  // the runtime probe deterministically without touching any dsh tree.
+  //
+  // NOTE: the server must run ASYNC (and the verify script must be spawned
+  // asynchronously): spawnSync blocks the event loop, so a same-thread server
+  // can never answer the probe's curl request (it times out with 0 bytes).
+  function startDescribeServer(responseBody: string): Promise<{ url: string; close: () => void }> {
+    return new Promise((resolvePromise, reject) => {
+      const server = createServer((req, res) => {
+        if (req.url !== '/api/settings.describe') {
+          res.writeHead(404, { 'Content-Type': 'text/plain' })
+          res.end('not found')
+          return
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(responseBody)
+      })
+      server.on('error', reject)
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address()
+        if (!addr || typeof addr === 'string') {
+          server.close()
+          reject(new Error('server did not bind a TCP port'))
+          return
+        }
+        resolvePromise({ url: `http://127.0.0.1:${addr.port}`, close: () => server.close() })
+      })
+    })
+  }
+
+  function runAsync(args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> {
+    return new Promise((resolvePromise, reject) => {
+      const child = spawn(args[0], args.slice(1), { cwd: repo, env: process.env })
+      let stdout = ''
+      let stderr = ''
+      child.stdout.setEncoding('utf8')
+      child.stderr.setEncoding('utf8')
+      child.stdout.on('data', (d: string) => (stdout += d))
+      child.stderr.on('data', (d: string) => (stderr += d))
+      child.on('error', reject)
+      child.on('close', (code: number | null) => resolvePromise({ status: code, stdout, stderr }))
+    })
+  }
+
+  // Realistic settings.describe response bodies (mirroring the live dsh web
+  // envelope {"type":"server-response","rpcId":...,"result":{"ok":...,"value":
+  // {"writable":...,"hasDocument":...,"namespaces":[...]}}}).
+  const SUCCESS_NO_ADVISOR = JSON.stringify({
+    type: 'server-response',
+    rpcId: 'verify',
+    result: { ok: true, value: { writable: true, hasDocument: true, namespaces: [{ ns: 'ui-onboarding' }] } },
+  })
+  const SUCCESS_WITH_ADVISOR = JSON.stringify({
+    type: 'server-response',
+    rpcId: 'verify',
+    result: {
+      ok: true,
+      value: { writable: true, hasDocument: true, namespaces: [{ ns: 'ui-onboarding' }, { ns: 'advisor' }] },
+    },
+  })
+  const ERROR_ENVELOPE = JSON.stringify({
+    type: 'server-response',
+    rpcId: 'verify',
+    result: { ok: false, error: 'settings-not-exposed' },
+  })
+
+  it('verify-dsh-patch.sh --runtime --absent fails on a non-success response (envelope guard)', async () => {
+    // An error envelope lacks the success markers — it must FAIL as
+    // "unexpected response" instead of passing as "advisor absent".
+    const server = await startDescribeServer(ERROR_ENVELOPE)
+    try {
+      const out = await runAsync(['bash', 'scripts/verify-dsh-patch.sh', '--runtime', server.url, '--absent'])
+      expect(out.status, `envelope guard exits non-zero — stderr:\n${out.stderr}`).not.toBe(0)
+      expect(out.stderr, 'guard message names the success envelope').toContain('success envelope')
+    } finally {
+      server.close()
+    }
+  })
+
+  it('verify-dsh-patch.sh --runtime --absent passes on a success envelope without advisor (trailing slash tolerated)', async () => {
+    // Trailing slash: the script must normalize {url}/ before appending
+    // /api/settings.describe — the helper only answers the canonical path, so
+    // a double-slash URL would 404 and trip the envelope guard.
+    const server = await startDescribeServer(SUCCESS_NO_ADVISOR)
+    try {
+      const out = await runAsync(['bash', 'scripts/verify-dsh-patch.sh', '--runtime', `${server.url}/`, '--absent'])
+      expect(out.status, `absent-on-success exit 0 — stderr:\n${out.stderr}`).toBe(0)
+    } finally {
+      server.close()
+    }
+  })
+
+  it('verify-dsh-patch.sh --runtime present direction still passes on a success envelope with advisor', async () => {
+    const server = await startDescribeServer(SUCCESS_WITH_ADVISOR)
+    try {
+      const out = await runAsync(['bash', 'scripts/verify-dsh-patch.sh', '--runtime', server.url])
+      expect(out.status, `present-on-success exit 0 — stderr:\n${out.stderr}`).toBe(0)
+    } finally {
+      server.close()
+    }
   })
 
   const target = resolveTarget()

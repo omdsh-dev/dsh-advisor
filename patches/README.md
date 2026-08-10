@@ -145,10 +145,13 @@ in the tree — the file probes cannot detect a server that was not restarted.
 It POSTs `{url}/api/settings.describe` (envelope
 `{"type":"client-request","rpcId":"verify","method":"settings.describe","payload":{}}`,
 10s timeout) and asserts the response namespaces include `advisor` (with
-`--absent`, that they exclude it). The URL defaults to
-`http://127.0.0.1:3080`. The script distinguishes a server-unreachable failure
-(not running / not restarted) from a namespace-not-exposed failure, and exits
-non-zero on either.
+`--absent`, that they exclude it). With `--absent`, absence is only asserted
+against a valid `settings.describe` **success envelope** (`"ok":true` with a
+`namespaces` result) — an HTTP error page, an error envelope, or garbage fails
+instead of passing as "absent". The URL defaults to `http://127.0.0.1:3080`
+and may carry one trailing slash (normalized before concatenation). The script
+distinguishes a server-unreachable failure (not running / not restarted) from
+a namespace-not-exposed failure, and exits non-zero on either.
 
 ### Install-time autopatch
 
