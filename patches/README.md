@@ -46,9 +46,32 @@ The patch adds `'advisor'` (and mentions the advisor section in the comment):
 ```
 
 That is the entire change: a one-element allowlist addition with no behavior
-change elsewhere. After it is applied (and the host rebuilt), the web Settings
-page can read and write the `advisor` namespace, and the Advisor section's
-Apply round-trip works against the real host.
+change elsewhere. After it is applied and the running host is restarted (see
+[Runtime shape](#runtime-shape) below), the web Settings page can read and
+write the `advisor` namespace, and the Advisor section's Apply round-trip
+works against the real host.
+
+## Runtime shape
+
+The standard staged install runs the dsh CLI from a **snapshot**
+(`$DSH_HOME/source/current`) whose `dsh` launcher executes the CLI **from
+TypeScript source via tsx**, using the snapshot's own `tsconfig` paths —
+`@deepseek-ai/dsh-host-apiproxy` resolves to `packages/host/apiproxy/src`
+(not `lib/`). Consequences for this patch:
+
+- The **source probe** (`src/api-proxy.ts`) is the runtime-relevant one:
+  `git apply` alone makes the change effective — no build step is required for
+  the tsx path.
+- The **tsc/tsdown build artifacts** (`lib/types/api-proxy.js`,
+  `lib/index.js`) are for consistency only — they matter for consumers that
+  import the dsh packages outside the tsx-from-source install (e.g. `node`
+  mode).
+- **A restart of the `dsh web` process is required** for the change to load:
+  applying the patch edits files on disk; the running process keeps the old
+  source until restarted. `verify-dsh-patch.sh --runtime` detects exactly this
+  case (file probes pass, runtime probe fails).
+- After a **dsh upgrade** (a new `$DSH_HOME/source/current` staging) the patch
+  must be re-applied — see [Re-run after a dsh upgrade](#re-run-after-a-dsh-upgrade).
 
 ## Relationship to the plugin's Settings section
 
@@ -93,8 +116,9 @@ scripts/revert-dsh-patch.sh --check
 ### Verify
 
 ```sh
-scripts/verify-dsh-patch.sh           # assert the marker is present (source + build artifact)
-scripts/verify-dsh-patch.sh --absent  # assert the marker is absent (after revert)
+scripts/verify-dsh-patch.sh                  # assert the marker is present (source + build artifacts)
+scripts/verify-dsh-patch.sh --absent         # assert the marker is absent (after revert)
+scripts/verify-dsh-patch.sh --runtime [URL]  # assert the RUNNING dsh web server exposes the namespace
 ```
 
 Verify probes (existing files are checked; missing files are recorded as
@@ -104,12 +128,32 @@ SKIP):
   `'ui-onboarding', 'advisor'`
 - build: `packages/host/apiproxy/lib/types/api-proxy.js` contains
   `'ui-onboarding', 'advisor'`
+- bundle: `packages/host/apiproxy/lib/index.js` contains
+  `"ui-onboarding", "advisor"` (the tsdown bundle — the package `main`, the
+  runtime entry for consumers outside the tsx-from-source install; tsdown
+  emits double-quoted string literals, hence the bundle-form marker)
 
 > The constant is module-private, so it never reaches the `.d.ts`; the compiled
-> JS (`lib/types/api-proxy.js`, the tsc emit under `outDir: lib/types`) is the
-> build probe. After `--skip-build` the build probe still holds the stale
-> artifact, so verify only passes once the package is rebuilt — apply without
-> `--skip-build`, or rebuild manually first.
+> JS (`lib/types/api-proxy.js`, the tsc emit under `outDir: lib/types`) and the
+> tsdown bundle (`lib/index.js`) are the build probes. After `--skip-build`
+> these lib probes still hold the stale artifact, so the file verify only
+> passes once the package is rebuilt — apply without `--skip-build`, or rebuild
+> manually first (the source probe and `--runtime` are unaffected).
+
+`--runtime` proves the patch is effective in the **running** server, not just
+in the tree — the file probes cannot detect a server that was not restarted.
+It POSTs `{url}/api/settings.describe` (envelope
+`{"type":"client-request","rpcId":"verify","method":"settings.describe","payload":{}}`,
+10s timeout) and asserts the response namespaces include `advisor` (with
+`--absent`, that they exclude it). Both modes only trust a valid
+`settings.describe` **success envelope** (`"ok":true` with a `namespaces`
+result) — an HTTP error page, an error envelope, or garbage fails instead of
+being read as "absent"/"not exposed". The URL defaults to
+`http://127.0.0.1:3080` and may carry any number of trailing slashes
+(normalized before concatenation). The script distinguishes a server-unreachable
+failure (not running / not restarted) from a namespace-not-exposed failure, and
+exits non-zero on either. The probe is **read-only** (a `settings.describe`
+call) and sends **no credentials**; it bypasses proxies (`curl --noproxy`).
 
 ### Install-time autopatch
 
@@ -128,13 +172,25 @@ DSH_ADVISOR_AUTOPATCH=0 pnpm install
 
 ## Re-run after a dsh upgrade
 
-A dsh upgrade (a new `$DSH_HOME/source/current` staging) **resets** the host
-change: after upgrading, re-run `scripts/apply-dsh-patch.sh` (idempotent —
-skips when already applied) and confirm with `scripts/verify-dsh-patch.sh`. If
-the upgrade moved the context so the patch no longer applies, the script
+A dsh upgrade stages a new `$DSH_HOME/source/current` snapshot. Whether the
+patch needs re-applying depends on where the snapshot came from:
+
+- If the snapshot was staged from a **patched dsh-private tree** (this
+  project's fix flow patches the private tree too, so future snapshots inherit
+  the change), the host change is already present — `scripts/apply-dsh-patch.sh`
+  detects this and skips idempotently (its reverse-apply check passes).
+- If the snapshot is pristine (e.g. pulled from upstream), re-run
+  `scripts/apply-dsh-patch.sh` (idempotent — applies when missing) and confirm
+  the files with `scripts/verify-dsh-patch.sh`.
+
+If the upgrade moved the context so the patch no longer applies, the script
 reports the conflict; the patch may need regenerating against the new source
 lines (the change itself is a one-line allowlist entry, so regeneration is
 trivial).
+
+Either way, file probes passing does not prove the running server has the
+change: after (re-)applying, **restart `dsh web`** and prove the runtime state
+with `scripts/verify-dsh-patch.sh --runtime`.
 
 ## Security note
 

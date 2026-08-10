@@ -31,7 +31,7 @@ export const en = {
   saved: 'Advisor settings saved. New sessions pick them up immediately.',
   conflict: 'The settings changed elsewhere. Review the values and apply again.',
   readOnly: 'Settings are read-only in this environment.',
-  namespaceUnavailable: 'The advisor settings namespace is unavailable in this dsh build (not exposed by the host). Configure the advisor via the plugin config row or the /advisor command instead.',
+  namespaceUnavailable: 'The advisor settings namespace is not exposed by this dsh build. Configure the advisor via the plugin config row — `- id: advisor` whose `config:` map sets `enabled`/`provider`/`model` (e.g. `config: { enabled: true, provider: …, model: … }`) in `$DSH_HOME/profiles/<name>/cordis.patch.yml` — or apply the host exposure patch under `patches/` (scripts/apply-dsh-patch.sh) and restart dsh web. Note: `/advisor` only toggles the advisor per session; it cannot supply provider/model.',
 }
 
 /** The settings.advisor namespace key union. */
@@ -64,5 +64,5 @@ export const zh: typeof en = {
   saved: '顾问设置已保存。新会话立即生效。',
   conflict: '设置已在别处变更。请核对当前值后重新保存。',
   readOnly: '当前环境中的设置为只读。',
-  namespaceUnavailable: '当前 dsh 构建未暴露 advisor 设置命名空间。请改用插件配置行或 /advisor 指令配置顾问。',
+  namespaceUnavailable: '当前 dsh 构建未暴露 advisor 设置命名空间。请通过插件配置行配置顾问——在 `$DSH_HOME/profiles/<name>/cordis.patch.yml` 中写 `- id: advisor`，其 `config:` 映射中设置 `enabled`/`provider`/`model`（例如 `config: { enabled: true, provider: …, model: … }`）；或应用 `patches/` 下的宿主暴露补丁（scripts/apply-dsh-patch.sh）并重启 dsh web。注意：`/advisor` 仅切换当前会话的顾问开关，无法提供 provider/model。',
 }
