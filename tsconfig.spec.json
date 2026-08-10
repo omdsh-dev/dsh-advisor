@@ -15,7 +15,7 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "include": ["tests/**/*.spec.tsx"],
+  "include": ["tests/**/*.spec.tsx", "src/client/css-modules.d.ts"],
   // The base program excludes src/client; this spec program must see the
   // client sources the specs import, so the inherited exclude is cleared
   // (same as tsconfig.client.json).

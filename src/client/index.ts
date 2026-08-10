@@ -22,6 +22,10 @@ import type { AdvisorSectionInjected } from './advisor-section.tsx'
 import { AdvisorSettingsStore, refreshIfLoaded } from './advisor-store.ts'
 import { en, zh, type AdvisorKey } from './locales.ts'
 
+// Task-1 probe: exercises the CSS-modules inline pipeline (replaced by the
+// real advisor-section.module.css import in Task 2).
+import './tmp-probe.module.css'
+
 export type { AdvisorSectionInjected, AdvisorSectionProps } from './advisor-section.tsx'
 export type { AdvisorKey } from './locales.ts'
 export type {

@@ -104,4 +104,27 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     )
     expect(bundle, 'no free-global React.createElement in the bundle').not.toMatch(/React\.createElement/)
   })
+
+  it('inlines CSS Modules: style-injection wiring and hashed class-map export reach the bundle', () => {
+    // plan dsh-advisor-settings-ui-n3, task 1: the dsh-css-modules-inline
+    // plugin compiles `*.module.css` (the entry side-effect-imports
+    // src/client/tmp-probe.module.css) with lightningcss ([hash]_[local]
+    // pattern, minified) and emits a guarded `<style data-plugin>` injection
+    // stub that runs at factory execution. The loader cleans up plugin-owned
+    // tags by `style[data-plugin=<id>]` + per-module `data-plugin-css`, so
+    // the bundle MUST carry that wiring or the section renders unstyled.
+    const bundle = readFileSync(resolve(repo, 'lib/client.js'), 'utf8')
+    // Idempotent injection: one <style> per module file, guarded by a
+    // data-plugin-css presence check.
+    expect(bundle).toContain('document.createElement(\'style\')')
+    expect(bundle).toContain('data-plugin')
+    expect(bundle).toContain('document.head.appendChild')
+    // tagId wiring: dsh-advisor/<basename>.
+    expect(bundle).toContain('dsh-advisor/tmp-probe.module.css')
+    // Hashed class-map export ([hash]_[local]): the probe classes reach the
+    // bundle as hashed names, and the map keys preserve the local names.
+    expect(bundle).toMatch(/_probe-a/)
+    expect(bundle).toMatch(/_probe-b/)
+    expect(bundle).toContain('"probe-a"')
+  })
 })
