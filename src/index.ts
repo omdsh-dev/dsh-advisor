@@ -12,8 +12,12 @@
  * `turn/end` (reason.kind ∈ {completed, 'max-tokens', error}, spec §4), drive
  * a per-session bounded delta renderer, and dispose per-session state on
  * `session/disposed` / `agent/disposed` (KD-5).
- * The advisor runtime (queue → llm.stream → note extraction), emission guard,
- * delivery, and commands land in T4–T8.
+ * T4: the per-session advisor runtime — queue each rendered delta, drain
+ * asynchronously via `ctx.llm.stream` (system prompt + delta, `purpose` left
+ * unset, KD-5), extract `{note, severity}` (KD-2), and apply the failure
+ * policy (retry-light → drop, 3-drop backlog flush, quota pause, permanent
+ * halt — never park the primary). The emission guard (T5), delivery (T6), and
+ * commands (T7) land in T5–T8.
  *
  * @module dsh-advisor
  */
@@ -25,6 +29,9 @@ import { resolveAdvisorConfig } from './config'
 import type { AdvisorConfig } from './config'
 import { SessionTranscriptObserver } from './transcript'
 import type { Delta } from './transcript'
+import { AdvisorRuntime } from './advisor-runtime'
+import type { AdviceNote } from './advisor-runtime'
+import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts'
 
 export const name = 'dsh-advisor'
 
@@ -46,31 +53,68 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   })
   if (!resolved.enabled) return
 
-  // T3: per-session transcript observation. On each stepped reviewable
-  // turn/end a bounded markdown delta is rendered; the onDelta seam is where
-  // T4's advisor runtime hooks in (queue → llm.stream → note extraction) —
-  // for now the delta is only logged at debug level.
+  // T3+T4: per-session transcript observation wired into one advisor runtime
+  // per session. On each stepped reviewable turn/end a bounded markdown delta
+  // is rendered and queued on the session's runtime; the runtime drains it
+  // asynchronously through `ctx.llm.stream` and hands the extracted
+  // `AdviceNote` to `onNote` (T5 wraps this with the emission guard).
+  const runtimes = new Map<string, AdvisorRuntime>()
+  const ensureRuntime = (sessionId: string): AdvisorRuntime => {
+    let runtime = runtimes.get(sessionId)
+    if (runtime !== undefined) return runtime
+    // The explicit gate (T2) guarantees provider + model when enabled — the
+    // runtime is only ever created after the `!resolved.enabled` early return.
+    runtime = new AdvisorRuntime({
+      provider: resolved.provider!,
+      model: resolved.model!,
+      systemPrompt: resolved.systemPrompt || DEFAULT_ADVISOR_SYSTEM_PROMPT,
+      llm: ctx.llm,
+      onNote: (note: AdviceNote) => {
+        // T5 inserts the emission guard between extraction and delivery here.
+        ctx.logger('advisor').debug('advice note extracted', {
+          sessionId,
+          severity: note.severity,
+          chars: note.note.length,
+        })
+      },
+    })
+    runtimes.set(sessionId, runtime)
+    return runtime
+  }
+  const disposeRuntime = (sessionId: string): void => {
+    const runtime = runtimes.get(sessionId)
+    if (runtime === undefined) return
+    runtimes.delete(sessionId)
+    runtime.dispose()
+  }
+
   const observer = new SessionTranscriptObserver({
     maxDeltaMessages: resolved.maxDeltaMessages,
     onDelta: (sessionId: string, delta: Delta) => {
-      ctx.logger('advisor').debug('rendered transcript delta', {
-        sessionId,
-        willContinue: delta.willContinue,
-        chars: delta.markdown.length,
-      })
+      // Lazy creation fallback covers agents that existed before this plugin
+      // loaded (their `agent/created` was never observed); `agent/created`
+      // below creates eagerly for the common path.
+      ensureRuntime(sessionId).enqueue(delta)
     },
   })
 
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
     observer.handleEvent(session.id, session.events, event)
   })
-  // Per-session renderer lifecycle. Spec KD-5(c) pins `agent/disposed`;
+  // Per-session runtime lifecycle. Spec KD-5(c) pins `agent/disposed`;
   // `session/disposed` is the store-level pair (both are idempotent — a
-  // renderer is deleted at most once, whichever signal lands first).
+  // runtime is disposed at most once, whichever signal lands first). `agent/created`
+  // creates the runtime eagerly (plan T4); the observer fallback covers
+  // pre-existing agents (KD-4-style robustness).
+  ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
+    ensureRuntime(agent.id)
+  })
   ctx.on('agent/disposed', ({ agent }: { agent: Agent }) => {
     observer.disposeSession(agent.id)
+    disposeRuntime(agent.id)
   })
   ctx.on('session/disposed', (session: Session) => {
     observer.disposeSession(session.id)
+    disposeRuntime(session.id)
   })
 }
