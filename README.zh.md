@@ -2,11 +2,9 @@
 
 [English](README.md) | 中文
 
-[![License: MIT](https://img.shields.io/github/license/dsh-external/dsh-advisor)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933)](package.json)
-[![GitHub stars](https://img.shields.io/github/stars/dsh-external/dsh-advisor)](https://github.com/dsh-external/dsh-advisor)
-[![GitHub release](https://img.shields.io/github/v/release/dsh-external/dsh-advisor)](https://github.com/dsh-external/dsh-advisor/releases)
-[![GitHub pull requests](https://img.shields.io/github/issues-pr/dsh-external/dsh-advisor)](https://github.com/dsh-external/dsh-advisor/pulls)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933.svg)
+![dsh](https://img.shields.io/badge/dsh-DeepSeek%20Harness%20compatible-4B32C3.svg)
 
 一个移植 omp「advisor」子系统的独立 dsh 插件组合包：一个按会话运行的评审模型，观察主会话 transcript，用显式配置的模型（provider 与 model 均为必填）评审每个已完成的 stepped turn，并把按严重度排序的建议（nit / concern / blocker）注入回会话 —— 不污染主循环，也不递归地评审自己。
 

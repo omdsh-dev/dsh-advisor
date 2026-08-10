@@ -2,11 +2,9 @@
 
 English | [中文](README.zh.md)
 
-[![License: MIT](https://img.shields.io/github/license/dsh-external/dsh-advisor)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933)](package.json)
-[![GitHub stars](https://img.shields.io/github/stars/dsh-external/dsh-advisor)](https://github.com/dsh-external/dsh-advisor)
-[![GitHub release](https://img.shields.io/github/v/release/dsh-external/dsh-advisor)](https://github.com/dsh-external/dsh-advisor/releases)
-[![GitHub pull requests](https://img.shields.io/github/issues-pr/dsh-external/dsh-advisor)](https://github.com/dsh-external/dsh-advisor/pulls)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933.svg)
+![dsh](https://img.shields.io/badge/dsh-DeepSeek%20Harness%20compatible-4B32C3.svg)
 
 A standalone dsh plugin bundle porting the omp "advisor"
 subsystem: a per-session reviewer model that observes the primary transcript,
