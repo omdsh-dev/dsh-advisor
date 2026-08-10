@@ -45,6 +45,7 @@ import { LlmAdapter, LlmService, MessageId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent, SurfaceOp } from '@deepseek-ai/dsh-session'
+import type { CommandDefinition, CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import * as advisorPlugin from '../src/index'
 import type { AdvisorConfig } from '../src/config'
 import { ADVISOR_SETTINGS_NAMESPACE } from '../src/settings'
@@ -85,6 +86,48 @@ class StubAdapter extends LlmAdapter {
   }
 }
 
+/**
+ * Stub adapter whose next stream call hangs until released — the pending-
+ * backlog probe for the conditional-rebuild test (qc3 W-1 / qc1 W-2): with a
+ * call in flight, a following delta queues behind it, and a runtime rebuild
+ * at that point would abort the in-flight call AND drop the queued delta.
+ */
+class GatedAdapter extends LlmAdapter {
+  readonly requests: GenerateOptions[] = []
+  private gate: Promise<void> | undefined
+  private releaseGate: (() => void) | undefined
+
+  constructor(private readonly reply: readonly StreamChunk[]) {
+    super()
+  }
+
+  /** Block the next stream call until {@link release} is called. */
+  blockNext(): void {
+    this.gate = new Promise((resolve) => { this.releaseGate = resolve })
+  }
+
+  /** Release the blocked call (if any). */
+  release(): void {
+    const release = this.releaseGate
+    this.releaseGate = undefined
+    this.gate = undefined
+    release?.()
+  }
+
+  override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    this.requests.push(options)
+    const gate = this.gate
+    this.gate = undefined
+    if (gate !== undefined) await gate
+    yield * this.reply
+  }
+}
+
+/** Minimal adapter probe: every GenerateOptions the adapter received. */
+interface AdapterProbe {
+  readonly requests: GenerateOptions[]
+}
+
 // ---------------------------------------------------------------------------
 // Composed harness (settings service + the real plugin)
 // ---------------------------------------------------------------------------
@@ -109,18 +152,30 @@ function fullConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
  * registry (`ctx.plugin`) — config schema validation + apply included. Returns
  * once the `advisor` namespace is registered (the write path is only valid
  * after that).
+ * @param seedUser - optional pre-existing settings user section written BEFORE
+ *   the plugin loads (attach-time pin, qc1 S-1 / qc3 S-2): the dev stub
+ *   exposes no public pre-seed seam, so the test reaches into its sections
+ *   map (private at the TS level only).
+ * @param adapterOverride - optional custom adapter (e.g. the gated backlog
+ *   probe); defaults to a fresh {@link StubAdapter} over `replies`.
  */
 async function composeLiveHarness(
   config: Partial<AdvisorConfig>,
   replies: ReadonlyArray<readonly StreamChunk[]>,
-): Promise<{ ctx: Context; adapter: StubAdapter }> {
+  seedUser?: Record<string, unknown>,
+  adapterOverride?: LlmAdapter & AdapterProbe,
+): Promise<{ ctx: Context; adapter: LlmAdapter & AdapterProbe }> {
   const ctx = new Context()
   await ctx.plugin(MemorySettings)
   await ctx.plugin(LlmService)
-  const adapter = new StubAdapter(replies)
+  const adapter = adapterOverride ?? new StubAdapter(replies)
   ctx.llm.registerAdapter(['stub', 'other'], adapter)
   ctx.provide('sessions', {} as never)
   ctx.provide('agents', { get: () => undefined } as never)
+  if (seedUser !== undefined) {
+    const settings = ctx.settings as unknown as { sections: Map<string, Record<string, unknown>> }
+    settings.sections.set(ADVISOR_SETTINGS_NAMESPACE as string, seedUser)
+  }
   await ctx.plugin(advisorPlugin, fullConfig(config))
   await vi.waitFor(() => {
     expect(ctx.settings.describe().some((d) => d.ns === ADVISOR_SETTINGS_NAMESPACE)).toBe(true)
@@ -242,6 +297,31 @@ function feed(ctx: Context, session: Session, log: SessionEvent[], specs: readon
 
 /** Small deterministic wait so "zero calls" assertions see any would-be call. */
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 20))
+
+/** Invoke one captured `/advisor` handler with a dsh-shaped invocation. */
+function invokeAdvisor(handler: CommandDefinition['handler'], rawInput: string, session: Session): CommandResult {
+  const result = handler({
+    commandId: 'c' as never,
+    agent: { id: session.id, session } as unknown as Agent,
+    rawInput,
+    signal: new AbortController().signal,
+  } as CommandInvocation)
+  if (result instanceof Promise) throw new Error('test: /advisor handler must be synchronous')
+  return result
+}
+
+/** Compose a commands registry and return the captured real `/advisor` handler. */
+async function registerCommands(ctx: Context): Promise<CommandDefinition['handler']> {
+  const definitions: CommandDefinition[] = []
+  ctx.provide('commands', {
+    register: (definition: CommandDefinition): (() => void) => {
+      definitions.push(definition)
+      return () => {}
+    },
+  } as never)
+  await vi.waitFor(() => expect(definitions).toHaveLength(1))
+  return definitions[0]!.handler
+}
 
 // ---------------------------------------------------------------------------
 // 1. Live re-apply: immuneTurns + provider/model/systemPrompt + runtime rebuild
@@ -405,5 +485,188 @@ describe('settings live re-apply — hard gate through the live source (Importan
     feed(ctx, session, log, simpleTurn(3, 'third request', 'third reply'))
     await flush()
     expect(adapter.requests).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 4. Conditional runtime rebuild (qc3 W-1 / qc1 W-2): an immuneTurns-only edit
+//    must NOT rebuild live runtimes; a systemPrompt edit MUST.
+// ---------------------------------------------------------------------------
+
+describe('settings live re-apply — conditional runtime rebuild (qc3 W-1 / qc1 W-2)', () => {
+  it('an immuneTurns-only edit does not rebuild the runtime: the pending backlog and the emission guard survive', async () => {
+    // One note text for both calls: the emission guard dedupes the repeat —
+    // a rebuilt runtime would carry a fresh guard and deliver it again.
+    const note = '{"note":"same note","severity":"nit"}'
+    const gated = new GatedAdapter([...textReply(note)])
+    const { ctx, adapter } = await composeLiveHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [],
+      undefined,
+      gated,
+    )
+    const { agent, inject, steer } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+
+    // Turn 1: the first advisor call hangs mid-flight (gated).
+    gated.blockNext()
+    feed(ctx, session, log, simpleTurn(1, 'first request', 'first reply'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+
+    // Turn 2's delta queues behind the in-flight call (a pending backlog).
+    feed(ctx, session, log, simpleTurn(2, 'second request', 'second reply'))
+    await flush()
+
+    // An immuneTurns-only settings edit: the latch updates in place and the
+    // runtime MUST NOT be torn down (no abort of the in-flight call, no
+    // backlog drop, no emission-guard reset).
+    await ctx.settings.update(ADVISOR_SETTINGS_NAMESPACE, { immuneTurns: 7 })
+
+    // Release the in-flight call: BOTH deltas drain through the SAME runtime
+    // — a rebuild would have dropped the queued delta (requests stays 1).
+    gated.release()
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(2))
+    // The duplicate note is suppressed by the SURVIVING guard — a rebuilt
+    // runtime would accept it again (inject would be 2).
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
+    expect(steer).not.toHaveBeenCalled()
+  })
+
+  it('a systemPrompt-only edit rebuilds the runtime: the next call carries the new prompt', async () => {
+    const { ctx, adapter } = await composeLiveHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [
+        [...textReply('{"note":"before edit","severity":"nit"}')],
+        [...textReply('{"note":"after edit","severity":"nit"}')],
+      ],
+    )
+    const { agent, inject } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+
+    feed(ctx, session, log, simpleTurn(1, 'first request', 'first reply'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+    expect(adapter.requests[0]!.system).toBe(DEFAULT_ADVISOR_SYSTEM_PROMPT)
+
+    // A systemPrompt edit is runtime-affecting: the rebuild must happen, so
+    // the next call carries the NEW prompt (a stale runtime would keep '').
+    await ctx.settings.update(ADVISOR_SETTINGS_NAMESPACE, { systemPrompt: 'custom' })
+
+    feed(ctx, session, log, simpleTurn(2, 'second request', 'second reply'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(2))
+    expect(adapter.requests[1]!.system).toBe('custom')
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(2))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5. Unknown-key user layer containment (qc2 W-1): live reads never throw.
+// ---------------------------------------------------------------------------
+
+describe('settings live re-apply — unknown-key user layer containment (qc2 W-1)', () => {
+  it('an unknown key never wedges live reads: no throw, no model call, /advisor status shows disabled-with-reason', async () => {
+    const { ctx, adapter } = await composeLiveHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [[...textReply('{"note":"never delivered","severity":"nit"}')]],
+    )
+    const handler = await registerCommands(ctx)
+    const { agent } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+
+    // The settings user layer gains an unknown key — resolveAdvisorConfig
+    // throws on every read, but the safe live path must contain it.
+    await ctx.settings.update(ADVISOR_SETTINGS_NAMESPACE, { bogus: 1 })
+
+    // A stepped turn: the session/event handler must not throw, and no model
+    // call can start (gate semantics — disabled-with-reason).
+    feed(ctx, session, log, simpleTurn(1, 'request', 'reply'))
+    await flush()
+    expect(adapter.requests).toHaveLength(0)
+
+    // /advisor status reads the effective config through the safe wrapper:
+    // disabled-with-reason carrying the resolver message (not a wedge).
+    const result = invokeAdvisor(handler, 'status', session)
+    expect(result.kind).toBe('success')
+    if (result.kind === 'success') {
+      expect(result.text).toContain('Advisor: disabled')
+      expect(result.text).toContain('unknown config key "bogus"')
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 6. Attach-time re-apply + detach fallback (qc1 S-1 / qc3 S-2)
+// ---------------------------------------------------------------------------
+
+describe('settings live re-apply — attach ordering + detach fallback (qc1 S-1 / qc3 S-2)', () => {
+  it('boots with entry disabled + a pre-existing enabled user layer: the attach onChange picks up the composed switch and a new session runtime is created without any further edit', async () => {
+    const { ctx, adapter } = await composeLiveHarness(
+      { enabled: false }, // entry switch off
+      [[...textReply('{"note":"boot nit","severity":"nit"}')]],
+      // Pre-existing user layer: enabled with a provider/model pair.
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+    )
+    const { agent, inject } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+
+    // No settings edit at all: the attach-time onChange re-applied
+    // overrides.setConfigEnabled(true) (the inject child activates on a
+    // microtask, AFTER apply() registered the listener), so the first turn
+    // already runs a session runtime and calls the model.
+    feed(ctx, session, log, simpleTurn(1, 'first request', 'first reply'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+    expect(adapter.requests[0]!.provider).toBe('stub')
+    expect(adapter.requests[0]!.model).toBe('stub-model')
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
+  })
+
+  it('disposing the settings service falls back to the entry: latches re-applied to the entry values, no runtime rebuild', async () => {
+    const { ctx, adapter } = await composeLiveHarness(
+      // Entry latch 2; the user layer overrides it to 4 before the detach.
+      { enabled: true, provider: 'stub', model: 'stub-model', immuneTurns: 2 },
+      Array.from({ length: 7 }, (_, i) => [
+        ...textReply(`{"note":"interrupt ${i}","severity":"concern"}`),
+      ]),
+    )
+    const { agent, steer, inject } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+
+    await ctx.settings.update(ADVISOR_SETTINGS_NAMESPACE, { immuneTurns: 4 })
+
+    // Turn 1 steers and arms a 4-turn fence (the user-layer length).
+    feed(ctx, session, log, simpleTurn(1, 'first request', 'first reply'))
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
+
+    // Detach: the settings service goes away → installSettingsSection's
+    // disposer falls back to the entry (setSource(entry) + onChange) →
+    // latches re-applied (immuneTurns 4 → 2) with no runtime rebuild (the
+    // runtime-affecting triple and the effective switch are unchanged).
+    ctx.registry.delete(MemorySettings)
+    await flush()
+
+    // Turns 2-4 decrement the armed 4-fence → inject. Turn 5 exhausts it and
+    // steers, arming a NEW fence with the ENTRY length (2). With a stale
+    // user latch (4) the turn-5 re-steer would arm 4 and turn 7 would still
+    // be inside the fence — so the steer count after turn 7 pins the latch.
+    for (let index = 0; index < 3; index++) {
+      const turn = 2 + index
+      feed(ctx, session, log, simpleTurn(turn, `turn ${turn} request`, `turn ${turn} reply`))
+      await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1 + index))
+    }
+    feed(ctx, session, log, simpleTurn(5, 'fifth request', 'fifth reply'))
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(2))
+
+    // Turn 6 decrements the entry-length fence (2 → 1) → inject; turn 7
+    // exhausts it and steers again — the entry latch is in effect.
+    feed(ctx, session, log, simpleTurn(6, 'sixth request', 'sixth reply'))
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(4))
+    expect(steer).toHaveBeenCalledTimes(2)
+    feed(ctx, session, log, simpleTurn(7, 'seventh request', 'seventh reply'))
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(3))
+    expect(inject).toHaveBeenCalledTimes(4)
   })
 })

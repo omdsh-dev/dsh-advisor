@@ -117,6 +117,13 @@ export interface AdvisorSettingsState {
   namespaces: ReadonlyMap<string, SettingsNamespaceView>
   /** The advisor namespace view, when registered. */
   advisorView: SettingsNamespaceView | undefined
+  /**
+   * Whether the `advisor` namespace view was present in the last describe —
+   * when absent (host build does not expose the namespace), the section shows
+   * an unexposed-namespace notice instead of a writable-looking form and
+   * never offers Apply (qc2 W-2 / qc1 S-4 — the C-1 mitigation).
+   */
+  advisorPresent: boolean
   /** The form draft (seeded from the resolved config; never re-seeded by refreshes). */
   draft: AdvisorDraft
   /** Apply lifecycle feedback. */
@@ -198,6 +205,7 @@ export class AdvisorSettingsStore {
     modelsEmptyReason: new Map(),
     namespaces: new Map(),
     advisorView: undefined,
+    advisorPresent: false,
     draft: defaultDraft(),
     applyState: { kind: 'idle' },
   })
@@ -210,6 +218,13 @@ export class AdvisorSettingsStore {
 
   /** In-flight host-scoped catalog fetch; one promise shared across providers. */
   private catalogPromise: Promise<void> | undefined
+
+  /**
+   * Bumped by every successful load(): an in-flight catalog fetch started
+   * before a bump is stale (the models/changed invalidation that triggered
+   * the reload happened mid-fetch) and caches nothing (qc1 W-1 / qc3 S-1).
+   */
+  private catalogGeneration = 0
 
   /** In-flight model resolutions (one per provider). */
   private inflightModels = new Set<string>()
@@ -288,6 +303,18 @@ export class AdvisorSettingsStore {
       this.store.update((s) => { s.draft = this.seed })
       this.draftSeeded = true
     }
+    // Invalidation refresh (qc1 W-1 / qc3 S-1): a pushed settings/changed or
+    // models/changed must re-resolve model options from the fresh directory —
+    // the per-provider model caches and the host-scoped catalog are
+    // store-lifetime otherwise, and `ensureModels` early-returns once a
+    // provider has resolved. The catalog-level in-flight guard + success-only
+    // failure caching stay; the end-of-load `ensureModels(selected)` below
+    // then re-resolves the stored provider's options on every invalidation
+    // without clobbering in-progress draft edits (the draft is seeded once).
+    this.catalogGeneration += 1
+    this.catalog = undefined
+    this.catalogPromise = undefined
+    this.inflightModels.clear()
     this.store.update((s) => {
       s.status = 'ready'
       s.error = null
@@ -295,6 +322,9 @@ export class AdvisorSettingsStore {
       s.providers = options
       s.namespaces = namespaces
       s.advisorView = advisorView
+      s.advisorPresent = advisorView !== undefined
+      s.modelsByProvider = new Map()
+      s.modelsEmptyReason = new Map()
     })
     // Model options for the provider already selected by the stored config,
     // so a freshly opened form shows the options without interaction.
@@ -334,15 +364,32 @@ export class AdvisorSettingsStore {
     }
     this.inflightModels.add(provider)
     try {
-      if (this.catalog === undefined) {
-        // One shared in-flight fetch: concurrent first resolutions for
-        // different providers must not double-call llm.models.
-        if (this.catalogPromise === undefined) {
-          this.catalogPromise = this.fetchCatalog().finally(() => { this.catalogPromise = undefined })
+      // Resolve from the catalog, re-looping when a load() invalidated the
+      // catalog mid-flight (qc1 W-1 / qc3 S-1): a fetch started before the
+      // invalidation is stale and must not cache stale/empty data — the
+      // generation check below detects it and starts a fresh fetch.
+      let group: ModelProviderGroup | undefined
+      for (;;) {
+        if (this.catalog === undefined) {
+          // One shared in-flight fetch: concurrent first resolutions for
+          // different providers must not double-call llm.models.
+          if (this.catalogPromise === undefined) {
+            const fetch = this.fetchCatalog()
+            const tracked = fetch.finally(() => {
+              // Only the owner clears the slot: a load() may have replaced
+              // the promise (invalidation during a fetch), and the stale
+              // finally must not clobber the newer one.
+              if (this.catalogPromise === tracked) this.catalogPromise = undefined
+            })
+            this.catalogPromise = tracked
+          }
+          const generation = this.catalogGeneration
+          await this.catalogPromise
+          if (generation !== this.catalogGeneration) continue // stale mid-flight → refetch fresh
         }
-        await this.catalogPromise
+        group = this.catalog?.find(candidate => candidate.id === provider)
+        break
       }
-      const group = this.catalog?.find(candidate => candidate.id === provider)
       const options = group?.models ?? []
       this.store.update((s) => {
         if (options.length > 0) {
@@ -360,14 +407,18 @@ export class AdvisorSettingsStore {
   /**
    * Fetch the host-scoped model catalog. A failure (wire rejection or throw)
    * leaves the cache empty so the next resolution refetches — a transient
-   * failure is never sticky for the store lifetime.
+   * failure is never sticky for the store lifetime. A fetch started before a
+   * load() bumped `catalogGeneration` is stale (the invalidation that caused
+   * the reload happened mid-fetch) and caches nothing.
    */
   private async fetchCatalog(): Promise<void> {
+    const generation = this.catalogGeneration
     try {
       const response = await this.api.llm.models({})
+      if (generation !== this.catalogGeneration) return
       this.catalog = response.result.ok ? response.result.value.groups : undefined
     } catch {
-      this.catalog = undefined
+      if (generation === this.catalogGeneration) this.catalog = undefined
     }
   }
 
@@ -478,8 +529,11 @@ export class AdvisorSettingsStore {
       this.expectedRevision = response.result.value.revision
       this.lastUser = userOf(response.result.value)
       this.seed = draftOf(response.result.value)
-      await this.load()
+      // qc3 N-1: the saved feedback is set BEFORE the reload — a reload
+      // failure (status 'error') must not mask the landed write; the section
+      // renders the saved line alongside the error+retry view.
       this.store.update((s) => { s.applyState = { kind: 'saved' } })
+      await this.load()
     } catch (error) {
       this.store.update((s) => {
         s.applyState = {

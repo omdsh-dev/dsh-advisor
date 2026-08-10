@@ -20,8 +20,11 @@
  *
  * Build tool: esbuild (explicit devDependency — the repo is pnpm/node; this
  * is the node-port of mstar's bun `build-client-bundle.ts`). CSS is
- * deliberately out of scope for task 2 (the skeleton is CSS-free); a CSS
- * module loader + `<style data-plugin>` injection lands with task 3.
+ * deliberately deferred: the delivered section form is CSS-free by design
+ * (see `src/client/advisor-section.tsx`), so no CSS-modules loader /
+ * `<style data-plugin>` injection exists yet — that stays a documented
+ * build-script extension point for a future styling plan (plan Review Gate
+ * Summary, qc1 S-2).
  *
  * Declarations: runs `tsc -p tsconfig.client.json` (emitDeclarationOnly) into
  * `lib/client/`, then writes the flat re-export `lib/client.d.ts`

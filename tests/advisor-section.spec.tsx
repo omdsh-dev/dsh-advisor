@@ -89,7 +89,7 @@ interface Scripted {
 }
 
 function scriptedApi(options: {
-  advisor?: SettingsNamespaceView
+  advisor?: SettingsNamespaceView | null
   namespaces?: SettingsNamespaceView[]
   entries?: ConfigurableProviderView[]
   groups?: ModelProviderGroup[]
@@ -97,14 +97,17 @@ function scriptedApi(options: {
 } = {}): Scripted {
   const others = options.namespaces ?? [deepseekNs(), piAiNs()]
   const entries = options.entries ?? [DEEPSEEK, OPENAI, ZOMBIE]
-  let currentAdvisor = options.advisor ?? advisorView()
+  // `advisor: null` = the host describe does not expose the namespace (the
+  // C-1 exposure boundary) — absent from the namespaces list entirely.
+  let currentAdvisor = options.advisor === undefined ? advisorView() : options.advisor
   const describe = vi.fn(() => Promise.resolve(ok({
     writable: options.writable ?? true,
     hasDocument: false,
-    namespaces: [...others, currentAdvisor],
+    namespaces: currentAdvisor === null ? others : [...others, currentAdvisor],
   })))
   const models = vi.fn(() => Promise.resolve(ok({ groups: options.groups ?? [], failures: [] })))
   const mutate = vi.fn((payload: { ns: string; ops: SettingsPathOpView[]; expectedRevision?: number }) => {
+    if (currentAdvisor === null) throw new Error('test: mutate on an absent advisor namespace')
     const user: Record<string, unknown> = { ...(currentAdvisor.user as Record<string, unknown> | undefined) }
     for (const op of payload.ops) {
       if (op.op === 'set') user[op.path[0]] = op.value
@@ -354,6 +357,18 @@ describe('AdvisorSection', () => {
     expect(screen.getByText(en.readOnly)).toBeTruthy()
     expect((screen.getByRole('button', { name: en.apply }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByLabelText(en.enabled) as HTMLInputElement).disabled).toBe(true)
+  })
+
+  it('shows the unexposed-namespace notice and never offers Apply when the advisor view is absent', async () => {
+    // A host build that does not expose the advisor namespace (the C-1
+    // exposure boundary): the form must not present defaults + a writable
+    // Apply that the host would refuse — the notice replaces it.
+    await mountSection({ advisor: null })
+    expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: en.apply })).toBeNull()
+    expect(screen.queryByRole('button', { name: en.cancel })).toBeNull()
+    expect(screen.queryByLabelText(en.enabled)).toBeNull()
+    expect(screen.queryByLabelText(en.provider)).toBeNull()
   })
 
   it('renders the load failure with a working retry', async () => {

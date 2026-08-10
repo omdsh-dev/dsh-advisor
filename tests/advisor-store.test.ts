@@ -141,7 +141,7 @@ interface Scripted {
 }
 
 function scriptedApi(options: {
-  advisor: SettingsNamespaceView
+  advisor: SettingsNamespaceView | null
   namespaces?: SettingsNamespaceView[]
   entries?: ConfigurableProviderView[]
   groups?: ModelProviderGroup[]
@@ -149,15 +149,18 @@ function scriptedApi(options: {
 }): Scripted {
   const others = options.namespaces ?? [deepseekNs(), piAiNs()]
   const entries = options.entries ?? [DEEPSEEK, OPENAI, ZOMBIE, ORPHAN, EMPTY, EMPTYLIST]
+  // `advisor: null` = the host describe does not expose the namespace (the
+  // C-1 exposure boundary) — absent from the namespaces list entirely.
   let currentAdvisor = options.advisor
   const describe = vi.fn(() => Promise.resolve(ok({
     writable: options.writable ?? true,
     hasDocument: false,
-    namespaces: [...others, currentAdvisor],
+    namespaces: currentAdvisor === null ? others : [...others, currentAdvisor],
   })))
   const providers = vi.fn(() => Promise.resolve(ok({ providers: entries })))
   const models = vi.fn(() => Promise.resolve(ok({ groups: options.groups ?? CATALOG, failures: [] })))
   const mutate = vi.fn((payload: { ns: string; ops: SettingsPathOpView[]; expectedRevision?: number }) => {
+    if (currentAdvisor === null) throw new Error('test: mutate on an absent advisor namespace')
     const user: Record<string, unknown> = { ...(currentAdvisor.user as Record<string, unknown> | undefined) }
     for (const op of payload.ops) {
       if (op.op === 'set') user[op.path[0]] = op.value
@@ -630,5 +633,120 @@ describe('resetDraft (Cancel)', () => {
     store.resetDraft()
     expect(draftOf(store).provider).toBe('x')
     expect(draftOf(store).systemPrompt).toBe('')
+  })
+})
+
+describe('model option refresh on invalidation (qc1 W-1 / qc3 S-1)', () => {
+  it('a reload after models/changed re-resolves a previously-resolved provider with the NEW options', async () => {
+    const { api, models } = scriptedApi({ advisor: advisorView() })
+    const store = new AdvisorSettingsStore(api)
+    await store.load()
+    await store.ensureModels('openai')
+    expect(store.store.getSnapshot().modelsByProvider.get('openai')?.map(model => model.id)).toEqual(['gpt-4o'])
+    expect(models).toHaveBeenCalledTimes(1)
+
+    // The catalog changes on the host (a model added on the Models page).
+    models.mockReturnValueOnce(Promise.resolve(ok({
+      groups: [{ id: 'openai', name: 'openai', models: [{ id: 'gpt-5', name: 'GPT-5' }] }],
+      failures: [],
+    })))
+
+    // The invalidation path (refreshIfLoaded → load()) clears the per-provider
+    // caches + catalog; the next resolution must see the fresh options.
+    await store.load()
+    await store.ensureModels('openai')
+    expect(store.store.getSnapshot().modelsByProvider.get('openai')?.map(model => model.id)).toEqual(['gpt-5'])
+    expect(models).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears the per-provider caches on every load, even when the stored provider did not change', async () => {
+    const { api } = scriptedApi({ advisor: advisorView() })
+    const store = new AdvisorSettingsStore(api)
+    await store.load()
+    store.setProvider('openai')
+    await vi.waitFor(() => {
+      expect(store.store.getSnapshot().modelsByProvider.get('openai')?.map(model => model.id)).toEqual(['gpt-4o'])
+    })
+
+    // A plain reload (settings/changed) drops the resolved options; the
+    // select re-resolves on demand — nothing is store-lifetime anymore.
+    await store.load()
+    expect(store.store.getSnapshot().modelsByProvider.has('openai')).toBe(false)
+    expect(store.store.getSnapshot().modelsEmptyReason.has('openai')).toBe(false)
+  })
+
+  it('abandons a catalog fetch started before an invalidation and refetches fresh data', async () => {
+    type CatalogPayload = { groups: ModelProviderGroup[]; failures: unknown[] }
+    let deferredResolve!: (value: RpcResponse<CatalogPayload>) => void
+    const deferred = new Promise<RpcResponse<CatalogPayload>>((resolve) => { deferredResolve = resolve })
+    const { api, models } = scriptedApi({
+      advisor: advisorView(),
+      namespaces: [piAiNs()],
+      entries: [OPENAI],
+    })
+    // Fetch A hangs; fetch B (after the invalidation) sees the NEW catalog.
+    models.mockReturnValueOnce(deferred)
+    models.mockReturnValueOnce(Promise.resolve(ok({
+      groups: [{ id: 'openai', name: 'openai', models: [{ id: 'gpt-5', name: 'GPT-5' }] }],
+      failures: [],
+    })))
+    const store = new AdvisorSettingsStore(api)
+    await store.load()
+    const first = store.ensureModels('openai')
+    // The models/changed invalidation arrives while fetch A is in flight.
+    await store.load()
+    // The stale fetch resolves with the OLD group AFTER the invalidation.
+    deferredResolve(ok({
+      groups: [{ id: 'openai', name: 'openai', models: [{ id: 'gpt-4o', name: 'GPT-4o' }] }],
+      failures: [],
+    }))
+    await first
+    // The stale result was dropped; the resolution loop refetched fresh.
+    expect(store.store.getSnapshot().modelsByProvider.get('openai')?.map(model => model.id)).toEqual(['gpt-5'])
+    expect(models).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('advisor namespace presence (qc2 W-2 / qc1 S-4 — C-1 mitigation)', () => {
+  it('tracks advisorPresent false when the describe carries no advisor namespace view', async () => {
+    const { api } = scriptedApi({ advisor: null })
+    const store = new AdvisorSettingsStore(api)
+    await store.load()
+    const state = store.store.getSnapshot()
+    expect(state.advisorPresent).toBe(false)
+    expect(state.advisorView).toBeUndefined()
+    expect(state.status).toBe('ready')
+  })
+
+  it('tracks advisorPresent true when the namespace view is present', async () => {
+    const { api } = scriptedApi({ advisor: advisorView() })
+    const store = new AdvisorSettingsStore(api)
+    await store.load()
+    expect(store.store.getSnapshot().advisorPresent).toBe(true)
+  })
+})
+
+describe('post-apply reload failure (qc3 N-1)', () => {
+  it('keeps the saved feedback when the reload after a successful mutate fails', async () => {
+    const view = advisorView()
+    const { api, describe, mutate } = scriptedApi({ advisor: view })
+    // First describe (initial load) resolves; the post-apply reload fails.
+    describe.mockReturnValueOnce(Promise.resolve(ok({
+      writable: true,
+      hasDocument: false,
+      namespaces: [deepseekNs(), piAiNs(), view],
+    })))
+    describe.mockReturnValueOnce(Promise.resolve(fail('transport down')))
+    const store = new AdvisorSettingsStore(api)
+    await store.load()
+    store.setImmuneTurns(5)
+    await store.apply()
+    expect(mutate).toHaveBeenCalledTimes(1)
+    const state = store.store.getSnapshot()
+    // The write landed and the saved feedback is set BEFORE the reload — the
+    // failed reload must not mask it (the section renders it alongside the
+    // error + retry).
+    expect(state.applyState.kind).toBe('saved')
+    expect(state.status).toBe('error')
   })
 })

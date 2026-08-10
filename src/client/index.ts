@@ -74,9 +74,21 @@ export function apply(ctx: ClientContext): void {
   })
 
   // Pushed invalidations converge the open surface without polling: any
-  // settings or provider-topology change refetches once the page loaded.
+  // settings or provider-topology change refetches once the page loaded. A
+  // burst (e.g. a save elsewhere emitting `settings/changed` +
+  // `models/changed` in one tick) coalesces into a single refetch via the
+  // microtask debounce (qc3 N-2) — events in separate ticks each trigger a
+  // load, and `refreshIfLoaded` keeps an unopened page idle.
   ctx.effect(() => {
-    const refresh = (): void => { refreshIfLoaded(controller) }
+    let pending = false
+    const refresh = (): void => {
+      if (pending) return
+      pending = true
+      queueMicrotask(() => {
+        pending = false
+        refreshIfLoaded(controller)
+      })
+    }
     const disposers = [
       ctx.on('settings/changed', refresh),
       ctx.on('models/changed', refresh),

@@ -75,9 +75,39 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   const bridge = installAdvisorSettings(ctx, config)
   const sourceConfig = (): AdvisorConfig => bridge.source()
   const resolved = (): ResolvedAdvisorConfig => resolveAdvisorConfig(sourceConfig())
+  // qc2 W-1 containment: a settings user layer the resolver rejects (e.g. an
+  // unknown key survives the non-strict settings schema) must never wedge the
+  // live hot path — every read that can run inside an event handler goes
+  // through the safe wrappers, which catch resolver throws and return
+  // disabled-with-reason carrying the message, so gate semantics hold (no
+  // model call can start) and handlers stay functional. The LOAD-TIME
+  // plugin-row throw contract is unchanged: construction-time reads below
+  // (delivery/observer latches) still use the throwing `resolved()`, so a bad
+  // entry rejects the plugin row at load (config.test.ts ⑤).
+  const safeFallback = (reason: string): ResolvedAdvisorConfig => ({
+    enabled: false,
+    systemPrompt: '',
+    immuneTurns: 3,
+    maxDeltaMessages: 60,
+    disabledReason: reason,
+  })
+  const safeResolved = (): ResolvedAdvisorConfig => {
+    try {
+      return resolveAdvisorConfig(sourceConfig())
+    } catch (error) {
+      return safeFallback(error instanceof Error ? error.message : String(error))
+    }
+  }
+  const safeEffective = (sessionId: string): ResolvedAdvisorConfig => {
+    try {
+      return resolveAdvisorConfig({ ...sourceConfig(), enabled: effectiveEnabled(sessionId) })
+    } catch (error) {
+      return safeFallback(error instanceof Error ? error.message : String(error))
+    }
+  }
   ctx.logger('advisor').debug('dsh-advisor loaded', {
-    enabled: resolved().enabled,
-    disabledReason: resolved().disabledReason,
+    enabled: safeResolved().enabled,
+    disabledReason: safeResolved().disabledReason,
   })
 
   // T7: the per-session override mechanism — `/advisor on|off|toggle` write
@@ -92,8 +122,10 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // blocks every runtime (the resolver is the SSOT for the gate).
   const overrides = new AdvisorSessionOverrides(config.enabled)
   const effectiveEnabled = (sessionId: string): boolean => overrides.effective(sessionId)
-  const effectiveConfig = (sessionId: string): ResolvedAdvisorConfig =>
-    resolveAdvisorConfig({ ...sourceConfig(), enabled: effectiveEnabled(sessionId) })
+  // Live-path alias: every consumer reads the effective config through the
+  // safe wrapper (qc2 W-1 — a throwing resolver must not break the
+  // session/event handler or `/advisor status`).
+  const effectiveConfig = (sessionId: string): ResolvedAdvisorConfig => safeEffective(sessionId)
 
   // T3+T4: per-session transcript observation wired into one advisor runtime
   // per session. On each stepped reviewable turn/end a bounded markdown delta
@@ -117,6 +149,26 @@ export function apply(ctx: Context, config: AdvisorConfig) {
 
   const runtimes = new Map<string, AdvisorRuntime>()
   /**
+   * Runtime-affecting signature per session — the values that pin one
+   * {@link AdvisorRuntime}: the effective switch, the post-gate enable (S4),
+   * and the {provider, model, systemPrompt} triple. Recorded at runtime
+   * creation and compared on every settings change (qc3 W-1 / qc1 W-2): only
+   * a signature change tears the runtime down — an immuneTurns/
+   * maxDeltaMessages-only edit updates the latches in place and keeps every
+   * in-flight call and backlog.
+   */
+  const runtimeSignatures = new Map<string, string>()
+  const runtimeSignature = (sessionId: string): string => {
+    const effective = safeEffective(sessionId)
+    return [
+      effectiveEnabled(sessionId) ? 1 : 0,
+      effective.enabled ? 1 : 0,
+      effective.provider ?? '',
+      effective.model ?? '',
+      effective.systemPrompt,
+    ].join('\u0000')
+  }
+  /**
    * Create (or return) the runtime for one session, gated on the effective
    * switch: `undefined` when the session is disabled or the S4 explicit gate
    * blocks model calls (effective enabled without provider/model — spec
@@ -134,7 +186,7 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     runtime = new AdvisorRuntime({
       provider: effective.provider!,
       model: effective.model!,
-      systemPrompt: resolved().systemPrompt || DEFAULT_ADVISOR_SYSTEM_PROMPT,
+      systemPrompt: safeResolved().systemPrompt || DEFAULT_ADVISOR_SYSTEM_PROMPT,
       llm: ctx.llm,
       onNote: (note: AdviceNote) => {
         // Accepted notes only — the runtime's emission guard (T5) already
@@ -150,12 +202,14 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       },
     })
     runtimes.set(sessionId, runtime)
+    runtimeSignatures.set(sessionId, runtimeSignature(sessionId))
     return runtime
   }
   const disposeRuntime = (sessionId: string): void => {
     const runtime = runtimes.get(sessionId)
     if (runtime === undefined) return
     runtimes.delete(sessionId)
+    runtimeSignatures.delete(sessionId)
     runtime.dispose()
   }
 
@@ -214,19 +268,51 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // delivery, maxDeltaMessages on the observer, systemPrompt + provider/model
   // on each per-session runtime) are re-derived from the NEW source on every
   // committed settings change and re-applied — delivery/observer update in
-  // place, per-session runtimes rebuild through the existing dispose/ensure
-  // path (no process restart). The S4 gate is re-applied by the resolver on
-  // every read, so a settings edit can never start a gated model call (SSOT
-  // unchanged); the config-level fallback switch follows the live source so
-  // new sessions pick up a Settings-page `enabled` edit immediately.
+  // place, per-session runtimes rebuild only when their runtime-affecting
+  // signature actually changed (qc3 W-1 / qc1 W-2: an immuneTurns/
+  // maxDeltaMessages-only edit must not abort in-flight advisor calls or drop
+  // backlogs). The S4 gate is re-applied by the resolver on every read, so a
+  // settings edit can never start a gated model call (SSOT unchanged); the
+  // config-level fallback switch follows the live source so new sessions pick
+  // up a Settings-page `enabled` edit immediately. A settings user layer the
+  // resolver rejects (qc2 W-1 — unknown key) stops the advisor without
+  // wedging the re-apply path, and the last-good latches stay until the
+  // config is repaired.
   bridge.onChange(() => {
-    const next = resolved()
+    let next: ResolvedAdvisorConfig
+    try {
+      next = resolveAdvisorConfig(sourceConfig())
+    } catch (error) {
+      // The raw source is still readable for the switch even when the
+      // resolver rejects the composed value; if even that fails, keep the
+      // current config-level switch (the gate below still blocks runtimes).
+      try {
+        overrides.setConfigEnabled(sourceConfig().enabled)
+      } catch {
+        // unreadable source — the effective switch stays as-is
+      }
+      for (const sessionId of [...runtimes.keys()]) disposeRuntime(sessionId)
+      ctx.logger('advisor').warn('settings change: invalid advisor config — advisor stopped', {
+        disabledReason: error instanceof Error ? error.message : String(error),
+      })
+      return
+    }
     delivery.setImmuneTurns(next.immuneTurns)
     observer.setMaxDeltaMessages(next.maxDeltaMessages)
     overrides.setConfigEnabled(sourceConfig().enabled)
+    let rebuilt = 0
     for (const sessionId of [...runtimes.keys()]) {
+      if (runtimeSignatures.get(sessionId) === runtimeSignature(sessionId)) continue
       disposeRuntime(sessionId)
       ensureRuntime(sessionId)
+      rebuilt += 1
+    }
+    if (rebuilt > 0) {
+      ctx.logger('advisor').debug('settings change rebuilt session runtimes', {
+        rebuilt,
+        provider: next.provider,
+        model: next.model,
+      })
     }
   })
 
@@ -273,8 +359,8 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       return {
         enabled: effective.enabled,
         ...(effective.disabledReason === undefined ? {} : { disabledReason: effective.disabledReason }),
-        provider: resolved().provider,
-        model: resolved().model,
+        provider: safeResolved().provider,
+        model: safeResolved().model,
         runtimeStatus: runtime?.status() ?? 'disabled',
         pendingCount: runtime?.pendingCount ?? 0,
         lastActivityAt: runtime?.lastActivity,

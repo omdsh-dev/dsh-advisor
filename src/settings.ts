@@ -33,12 +33,15 @@ export const ADVISOR_SETTINGS_NAMESPACE = settingsNamespace('advisor')
  * base → settings user layer); consumers pass it through
  * `resolveAdvisorConfig` — the hard gate stays the SSOT. `onChange` registers
  * a callback that re-applies derived state whenever the composed value changes
- * (attach, committed change, or detach back to the entry), and returns the
- * disposer.
+ * (attach, committed change, or detach back to the entry). The contract is
+ * `(cb) => void` per the plan: the listener set is owned by the consumer's
+ * plugin closure for its lifetime, and the detach path is handled by
+ * `installSettingsSection`'s own disposer, so no per-listener disposer is
+ * returned (qc1 S-3 — a discarded disposer would invite misuse).
  */
 export interface AdvisorSettingsBridge {
   source(): AdvisorConfig
-  onChange(callback: () => void): () => void
+  onChange(callback: () => void): void
 }
 
 /**
@@ -64,11 +67,8 @@ export function installAdvisorSettings(ctx: Context, entry: AdvisorConfig): Advi
   })
   return {
     source: (): AdvisorConfig => source(),
-    onChange: (callback: () => void): (() => void) => {
+    onChange: (callback: () => void): void => {
       listeners.add(callback)
-      return () => {
-        listeners.delete(callback)
-      }
     },
   }
 }

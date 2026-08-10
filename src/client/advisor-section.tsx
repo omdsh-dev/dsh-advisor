@@ -17,6 +17,12 @@
  * reselects — the host gate rejects truly invalid configurations on write.
  * Clearing a number input leaves the field empty; the store then omits that
  * key from the apply ops (the stored value stays unchanged).
+ *
+ * When the last describe carried no `advisor` namespace view (a host build
+ * that does not expose the namespace — the C-1 exposure boundary), the form
+ * is replaced by the `namespaceUnavailable` notice and Apply is never
+ * offered, so the page never presents a writable-looking editor whose writes
+ * the host would refuse (qc2 W-2 / qc1 S-4).
  */
 
 import type { ReactNode } from 'react'
@@ -66,9 +72,12 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
 
   if (state.status === 'idle') void controller.load()
   if (state.status === 'error') {
+    // A post-apply reload failure must not mask a landed write: the saved
+    // feedback renders alongside the error + retry (qc3 N-1).
     return (
       <div>
         <h2>{t('title')}</h2>
+        {state.applyState.kind === 'saved' ? <p role="status">{t('saved')}</p> : null}
         <p>{`${t('loadFailed')}: ${state.error ?? ''}`}</p>
         <button type="button" onClick={() => { void controller.load() }}>
           {t('retry')}
@@ -77,6 +86,20 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
     )
   }
   if (state.status !== 'ready') return <h2>{t('title')}</h2>
+
+  // qc2 W-2 / qc1 S-4 (the C-1 mitigation): when the last describe carried no
+  // `advisor` namespace view (host build does not expose it), the form would
+  // present defaults + a writable-looking Apply that can only fail with a
+  // host refusal — render the explicit notice instead and never offer Apply.
+  if (!state.advisorPresent) {
+    return (
+      <div>
+        <h2>{t('title')}</h2>
+        <p>{t('intro')}</p>
+        <p role="status">{t('namespaceUnavailable')}</p>
+      </div>
+    )
+  }
 
   const { draft, providers, writable, applyState } = state
   const providerEmpty = draft.provider === undefined
