@@ -40,6 +40,7 @@ import type { ContentBlock, GenerateOptions, StreamChunk, UserMessage } from '@d
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent, SurfaceOp } from '@deepseek-ai/dsh-session'
 import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
+import { CommandId } from '@deepseek-ai/dsh-commands'
 import * as advisorPlugin from '../src/index'
 import type { AdvisorConfig } from '../src/config'
 import { ADVISOR_SOURCE_KIND } from '../src/kinds'
@@ -402,6 +403,59 @@ describe('integration — /advisor commands conditional activation (T7)', () => 
     await vi.waitFor(() => expect(definitions).toHaveLength(1))
     expect(definitions[0]!.name).toBe('advisor')
     expect(typeof definitions[0]!.handler).toBe('function')
+  })
+
+  it('the registered /advisor on handler starts the live runtime (KD-5 seed-on-enable)', async () => {
+    const { ctx, adapter } = await composeHarness(
+      // Config switch off; provider/model present so the S4 gate passes once
+      // the per-session override flips on.
+      { enabled: false, provider: 'stub', model: 'stub-model' },
+      [[...textReply('{"note":"after enabling","severity":"concern"}')]],
+    )
+    const { agent, steer } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+
+    // Register the commands registry and capture the real handler (bound to
+    // the real controller inside apply — this exercises the live wiring).
+    const definitions: CommandDefinition[] = []
+    ctx.provide('commands', {
+      register: (definition: CommandDefinition): (() => void) => {
+        definitions.push(definition)
+        return () => {}
+      },
+    } as never)
+    await vi.waitFor(() => expect(definitions).toHaveLength(1))
+
+    // Config off → a completed turn produces no model call.
+    feed(ctx, session, log, simpleTurn(1, 'history turn', 'old reply'))
+    await flush()
+    expect(adapter.requests).toEqual([])
+
+    // /advisor on with the REAL handler: flips the override, seeds the cursor
+    // to the current transcript length, and creates/resumes the runtime.
+    const result = definitions[0]!.handler({
+      commandId: CommandId('cmd-t8'),
+      agent: { id: 's1', session: { id: 's1', events: log } } as unknown as Agent,
+      rawInput: ' on',
+      signal: new AbortController().signal,
+    })
+    if (result instanceof Promise) throw new Error('test: /advisor handler must be synchronous')
+    expect(result.text).toContain('Advisor on')
+
+    // The next completed turn is reviewed — incrementally, without replaying
+    // the pre-enable history (KD-5 seed-on-enable).
+    feed(ctx, session, log, simpleTurn(2, 'new work', 'new reply'))
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
+
+    expect(adapter.requests).toHaveLength(1)
+    const delta = deltaTextOf(adapter.requests[0]!)
+    expect(delta).toContain('**user**: new work')
+    expect(delta).not.toContain('history turn')
+    expect(steer.mock.calls[0]![0]).toMatchObject({
+      role: 'user',
+      source: { kind: ADVISOR_SOURCE_KIND },
+    })
   })
 })
 
