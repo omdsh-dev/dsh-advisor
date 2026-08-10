@@ -56,8 +56,9 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // T3+T4: per-session transcript observation wired into one advisor runtime
   // per session. On each stepped reviewable turn/end a bounded markdown delta
   // is rendered and queued on the session's runtime; the runtime drains it
-  // asynchronously through `ctx.llm.stream` and hands the extracted
-  // `AdviceNote` to `onNote` (T5 wraps this with the emission guard).
+  // asynchronously through `ctx.llm.stream`, gates the extracted `AdviceNote`
+  // through the T5 emission guard (inside the runtime, between extraction and
+  // delivery), and hands accepted notes to `onNote` (T6 routes them).
   const runtimes = new Map<string, AdvisorRuntime>()
   const ensureRuntime = (sessionId: string): AdvisorRuntime => {
     let runtime = runtimes.get(sessionId)
@@ -70,7 +71,8 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       systemPrompt: resolved.systemPrompt || DEFAULT_ADVISOR_SYSTEM_PROMPT,
       llm: ctx.llm,
       onNote: (note: AdviceNote) => {
-        // T5 inserts the emission guard between extraction and delivery here.
+        // Accepted notes only — the runtime's emission guard (T5) already
+        // filtered suppressed ones; T6 routes the accepted note here.
         ctx.logger('advisor').debug('advice note extracted', {
           sessionId,
           severity: note.severity,

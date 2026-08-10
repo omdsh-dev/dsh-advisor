@@ -32,6 +32,8 @@
 import { createUserMessage, isQuotaExceededError } from '@deepseek-ai/dsh-llm'
 import { INVALID_CREDENTIAL_CODE, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 import type { FinishReason, GenerateOptions, LlmFailure, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { createEmissionGuard } from './emission-guard'
+import type { EmissionGuard } from './emission-guard'
 import type { Delta } from './transcript'
 
 // ---------------------------------------------------------------------------
@@ -84,7 +86,16 @@ export interface AdvisorRuntimeOptions {
   readonly maxQueued?: number
   /** The llm service (`ctx.llm`); injectable for tests. */
   readonly llm: AdvisorLlm
-  /** Invoked once per extracted note; the T5 emission guard wraps this. */
+  /**
+   * The T5 emission guard gating extracted notes before delivery. Defaults to
+   * a fresh {@link createEmissionGuard} (per-runtime lifetime — a new guard
+   * per session); injectable for tests.
+   */
+  readonly guard?: EmissionGuard
+  /**
+   * Invoked once per extracted note that passes the T5 emission guard
+   * (accepted = delivered to T6; suppressed notes are dropped silently).
+   */
   readonly onNote: (note: AdviceNote) => void
   readonly logger?: AdvisorRuntimeLogger
 }
@@ -249,6 +260,7 @@ export class AdvisorRuntime {
   private readonly retryBackoffMs: number
   private readonly maxQueued: number
   private readonly llm: AdvisorLlm
+  private readonly guard: EmissionGuard
   private readonly onNote: (note: AdviceNote) => void
   private readonly logger: AdvisorRuntimeLogger
   private readonly controller = new AbortController()
@@ -268,6 +280,7 @@ export class AdvisorRuntime {
     this.retryBackoffMs = options.retryBackoffMs ?? DEFAULT_RETRY_BACKOFF_MS
     this.maxQueued = options.maxQueued ?? DEFAULT_MAX_QUEUED
     this.llm = options.llm
+    this.guard = options.guard ?? createEmissionGuard()
     this.onNote = options.onNote
     this.logger = options.logger ?? console
   }
@@ -391,6 +404,10 @@ export class AdvisorRuntime {
 
   /** Process one delta: attempt + single retry (transient), classify terminal failures. */
   private async processDelta(delta: Delta): Promise<ProcessResult> {
+    // One advisor model cycle per delta: the emission guard's one-note-per-
+    // update latch resets here, so each processed delta may deliver one note
+    // again (spec §6; the reset point is the drain's per-delta boundary).
+    this.guard.beginUpdate()
     for (let attempt = 0; attempt <= MAX_TRANSIENT_ATTEMPTS; attempt++) {
       if (attempt > 0) {
         if (this.disposed) return { kind: 'aborted' }
@@ -447,13 +464,24 @@ export class AdvisorRuntime {
       return { kind: 'no-note' }
     }
     try {
-      this.onNote(note)
+      // The T5 emission guard sits between extraction and delivery: only
+      // accepted notes reach the delivery callback (T6). Suppression is
+      // silent — the caller cannot tell an accepted from a suppressed note,
+      // and a guard failure must never crash the drain (T4 F1 containment).
+      if (this.guard.accept(note)) {
+        this.onNote(note)
+      } else {
+        this.logger.debug('advisor: note suppressed by emission guard', {
+          note: note.note,
+          severity: note.severity,
+        })
+      }
     } catch (error) {
-      // The delivery seam (T5 emission guard / T6 injection) must never crash
-      // the drain: log and continue. The model call itself succeeded — this is
-      // not a transport failure, so retry/drop/quota/halt semantics are
-      // untouched and the note still counts as extracted.
-      this.logger.warn('advisor: onNote delivery callback threw — contained', { error })
+      // The emission guard / delivery seam must never crash the drain: log
+      // and continue. The model call itself succeeded — this is not a
+      // transport failure, so retry/drop/quota/halt semantics are untouched
+      // and the note still counts as extracted.
+      this.logger.warn('advisor: emission guard or delivery callback threw — contained', { error })
     }
     return { kind: 'note', note }
   }
