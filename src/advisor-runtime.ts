@@ -13,6 +13,10 @@
  *   `{ provider, model, system, messages: [user delta], maxTokens: 256 }` and
  *   `purpose` left UNSET (KD-5 — an advisor call is an ordinary conversation
  *   request);
+ * - a call-level deadline on every `llm.stream` call (dsh-timeout `deadline`,
+ *   fused with the dispose signal and raced per chunk): a hung provider stream
+ *   times out instead of wedging the drain, and a timeout is a transient
+ *   failure (KD-5 retry → drop);
  * - KD-2 JSON-frame extraction: the first balanced `{…}` in the reply is
  *   parsed (tolerant of prose/fences), `note` must be non-empty (else
  *   drop+log), `severity` missing/invalid defaults to `nit`, no parse retry;
@@ -21,7 +25,9 @@
  *   permanent errors (`invalid_request_error`, model-not-found, "is not
  *   supported when") → halt the session's advisor; quota/rate-limit → pause
  *   (`quota_exhausted`), batch retained, no auto-resume timer; the in-flight
- *   call is aborted on dispose via the `signal`.
+ *   call is aborted on dispose via the `signal`. `halted` is terminal in
+ *   place — the command layer rebuilds the runtime (dispose + recreate); a
+ *   `quota_exhausted` runtime resumes via {@link AdvisorRuntime.resume}.
  *
  * The runtime never parks the primary loop: everything is fire-and-forget
  * async and a failing advisor can only drop its own backlog.
@@ -32,6 +38,7 @@
 import { createUserMessage, isQuotaExceededError } from '@deepseek-ai/dsh-llm'
 import { INVALID_CREDENTIAL_CODE, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 import type { FinishReason, GenerateOptions, LlmFailure, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { createEmissionGuard } from './emission-guard'
 import type { EmissionGuard } from './emission-guard'
 import type { Delta } from './transcript'
@@ -82,6 +89,13 @@ export interface AdvisorRuntimeOptions {
   readonly maxTokens?: number
   /** Backoff for the single transient retry (KD-5); default 1000ms. */
   readonly retryBackoffMs?: number
+  /**
+   * Call-level deadline for one `llm.stream` call (qc2 W-4 / qc3 W-1): a hung
+   * provider stream (no chunk, no end, no error) times out instead of wedging
+   * this session's drain. A timeout is classified as a transient failure —
+   * KD-5 retry(1) → drop. Default 60000ms.
+   */
+  readonly callTimeoutMs?: number
   /** Bounded backlog (spec §6); default 32 — drop-newest with a log when full. */
   readonly maxQueued?: number
   /** The llm service (`ctx.llm`); injectable for tests. */
@@ -104,6 +118,10 @@ export interface AdvisorRuntimeOptions {
 const DEFAULT_MAX_TOKENS = 256
 const DEFAULT_RETRY_BACKOFF_MS = 1_000
 const DEFAULT_MAX_QUEUED = 32
+/** Whole-call deadline for one `llm.stream` (qc2 W-4 / qc3 W-1); see `callTimeoutMs`. */
+const DEFAULT_CALL_TIMEOUT_MS = 60_000
+/** Capability-owned code stamped onto the deadline's TimeoutReason. */
+const ADVISOR_CALL_TIMEOUT = 'ADVISOR_CALL_TIMEOUT'
 /** Transient retries after the first attempt (KD-5: retry(1) → drop). */
 const MAX_TRANSIENT_ATTEMPTS = 1
 /** Consecutive dropped deltas after which the pending backlog is flushed (KD-5). */
@@ -227,6 +245,37 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+/**
+ * Race one async-iterator demand against a deadline signal: resolve with the
+ * iterator's next result, or `'aborted'` when the signal aborts first. A
+ * provider error rejects through the race (the caller classifies it). This is
+ * what makes a hung stream (no chunk, no end, no error) terminable even when
+ * the provider ignores the abort signal — the runtime never depends on the
+ * provider honoring `signal` (qc2 W-4 / qc3 W-1).
+ */
+function raceIteratorNext<T>(
+  iterator: AsyncIterator<T>,
+  signal: AbortSignal,
+): Promise<IteratorResult<T> | 'aborted'> {
+  if (signal.aborted) return Promise.resolve('aborted')
+  return new Promise<IteratorResult<T> | 'aborted'>((resolve, reject) => {
+    const onAbort = () => resolve('aborted')
+    signal.addEventListener('abort', onAbort, { once: true })
+    Promise.resolve()
+      .then(() => iterator.next())
+      .then(
+        (result) => {
+          signal.removeEventListener('abort', onAbort)
+          resolve(result)
+        },
+        (error) => {
+          signal.removeEventListener('abort', onAbort)
+          reject(error)
+        },
+      )
+  })
+}
+
 // ---------------------------------------------------------------------------
 // AdvisorRuntime
 // ---------------------------------------------------------------------------
@@ -258,6 +307,7 @@ export class AdvisorRuntime {
   private readonly systemPrompt: string
   private readonly maxTokens: number
   private readonly retryBackoffMs: number
+  private readonly callTimeoutMs: number
   private readonly maxQueued: number
   private readonly llm: AdvisorLlm
   private readonly guard: EmissionGuard
@@ -280,6 +330,7 @@ export class AdvisorRuntime {
     this.systemPrompt = options.systemPrompt
     this.maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS
     this.retryBackoffMs = options.retryBackoffMs ?? DEFAULT_RETRY_BACKOFF_MS
+    this.callTimeoutMs = options.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS
     this.maxQueued = options.maxQueued ?? DEFAULT_MAX_QUEUED
     this.llm = options.llm
     this.guard = options.guard ?? createEmissionGuard()
@@ -341,7 +392,12 @@ export class AdvisorRuntime {
     this.consecutiveDrops = 0
   }
 
-  /** Manual resume after a quota pause (T7 `/advisor on`); no-op when halted/disposed. */
+  /**
+   * Manual resume after a quota pause (T7 `/advisor on`); no-op when halted/
+   * disposed — a halted runtime is terminal in place and is recovered by the
+   * command layer via dispose-and-recreate (qc1/qc2/qc3 W-1/I-4), never
+   * resumed here.
+   */
   resume(): void {
     if (this.disposed || this.state === 'halted') return
     this.state = 'running'
@@ -458,9 +514,32 @@ export class AdvisorRuntime {
   private async callModel(delta: Delta): Promise<CallResult> {
     let text = ''
     let finish: FinishReason | undefined
+    // Call-level deadline (dsh-timeout): fuses the runtime's dispose signal
+    // with a whole-call timer. The fused signal is passed to the provider
+    // (AbortSignal honored) AND raced per chunk below, so a hung stream cannot
+    // wedge the drain even when the provider ignores the signal. A timeout is
+    // a transient failure — KD-5 retry(1) → drop (qc2 W-4 / qc3 W-1).
+    using deadlineHandle = deadline(this.controller.signal, this.callTimeoutMs, ADVISOR_CALL_TIMEOUT)
+    const deadlineSignal = deadlineHandle.signal
     try {
-      const stream = this.llm.stream(this.buildOptions(delta))
-      for await (const chunk of stream) {
+      const stream = this.llm.stream(this.buildOptions(delta, deadlineSignal))
+      const iterator = stream[Symbol.asyncIterator]()
+      for (;;) {
+        const next = await raceIteratorNext(iterator, deadlineSignal)
+        if (next === 'aborted') {
+          // Best-effort teardown of a provider that may still be mid-flight;
+          // never await a hung teardown (it may never settle).
+          iterator.return?.().catch(() => {})
+          if (timeoutOf(deadlineSignal, ADVISOR_CALL_TIMEOUT) !== undefined) {
+            return {
+              kind: 'failure',
+              failure: { message: `advisor call timed out after ${this.callTimeoutMs}ms`, code: 'TIMEOUT' },
+            }
+          }
+          return { kind: 'aborted' } // dispose aborted the in-flight call
+        }
+        if (next.done) break
+        const chunk = next.value
         if (chunk.type === 'text-delta') text += chunk.text
         else if (chunk.type === 'finish') finish = chunk.reason
       }
@@ -473,7 +552,15 @@ export class AdvisorRuntime {
     if (finish.kind === 'error') return { kind: 'failure', failure: finish.failure }
     if (finish.kind === 'aborted') {
       // Our own dispose aborts the in-flight call; a provider-side abort is a
-      // terminal failure like any other.
+      // terminal failure like any other. A deadline timeout surfaced as a
+      // provider abort (rather than through the per-chunk race) is still the
+      // transient timeout case — KD-5 retry once → drop.
+      if (timeoutOf(deadlineSignal, ADVISOR_CALL_TIMEOUT) !== undefined) {
+        return {
+          kind: 'failure',
+          failure: { message: `advisor call timed out after ${this.callTimeoutMs}ms`, code: 'TIMEOUT' },
+        }
+      }
       if (this.disposed || this.controller.signal.aborted) return { kind: 'aborted' }
       return { kind: 'failure', failure: finish.failure }
     }
@@ -511,7 +598,7 @@ export class AdvisorRuntime {
     return { kind: 'note', note }
   }
 
-  private buildOptions(delta: Delta): GenerateOptions {
+  private buildOptions(delta: Delta, signal: AbortSignal): GenerateOptions {
     return {
       provider: this.provider,
       model: this.model,
@@ -521,7 +608,7 @@ export class AdvisorRuntime {
         source: { kind: 'user' },
       })],
       maxTokens: this.maxTokens,
-      signal: this.controller.signal,
+      signal,
       // KD-5: `purpose` is a closed union ('compaction' | 'session-title'); an
       // advisor call is an ordinary conversation request and leaves it unset.
     }

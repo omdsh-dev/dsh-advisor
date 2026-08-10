@@ -50,7 +50,7 @@ const TEST_SYSTEM_PROMPT = 'You are an independent reviewer for a coding session
 const delta = (markdown: string): Delta => ({ markdown, willContinue: false })
 
 /** Scripted fake for the runtime's `llm` option: records calls, replays responses. */
-type FakeResponse = { readonly chunks: readonly StreamChunk[] } | { readonly throw: Error }
+type FakeResponse = { readonly chunks: readonly StreamChunk[] } | { readonly throw: Error } | { readonly hang: true }
 
 class FakeLlm {
   readonly calls: GenerateOptions[] = []
@@ -64,6 +64,14 @@ class FakeLlm {
       throw new Error(`FakeLlm: unexpected stream call #${this.calls.length} (script exhausted)`)
     }
     if ('throw' in response) throw response.throw
+    if ('hang' in response) {
+      // A black-holed provider stream: never yields, never ends, never rejects —
+      // and it ignores the abort signal. The drain must still un-wedge via the
+      // call-level deadline (qc2 W-4 / qc3 W-1).
+      return (async function* () {
+        await new Promise<void>(() => {})
+      })()
+    }
     return streamOf(response.chunks)
   }
 }
@@ -314,6 +322,44 @@ describe('AdvisorRuntime — failure policy (KD-5)', () => {
     expect(notes).toEqual([])
     expect(llm.calls).toHaveLength(6) // 3 deltas × (attempt + retry); queued deltas never dispatched
     expect(runtime.pendingCount).toBe(0)
+  })
+
+  it('times out a hung stream (no chunk, no end, no error), drops it per KD-5, and the drain continues', async () => {
+    // The first two calls hang forever (attempt + single retry); the third
+    // succeeds. The call-level deadline must classify each hang as a transient
+    // timeout → KD-5 retry(1) → drop — the drain is never wedged (qc2 W-4 /
+    // qc3 W-1), even though the provider ignores the abort signal.
+    const llm = new FakeLlm([
+      { hang: true },
+      { hang: true },
+      { chunks: textReply('{"note":"recovered","severity":"concern"}') },
+    ])
+    const { runtime, notes } = makeRuntime(llm, { callTimeoutMs: 20 })
+
+    runtime.enqueue(delta('hung update'))
+    runtime.enqueue(delta('good update'))
+    await runtime.waitForDrain()
+
+    expect(llm.calls).toHaveLength(3) // hung attempt + hung retry + the recovered delta
+    expect(notes).toEqual([{ note: 'recovered', severity: 'concern' }])
+    expect(runtime.status()).toBe('running')
+    expect(runtime.pendingCount).toBe(0)
+  })
+
+  it('a timeout is a transient failure: the single retry gets a fresh deadline and can succeed', async () => {
+    // Attempt 1 hangs → timeout; the KD-5 retry (fresh deadline) succeeds.
+    const llm = new FakeLlm([
+      { hang: true },
+      { chunks: textReply('{"note":"slow but recovered"}') },
+    ])
+    const { runtime, notes } = makeRuntime(llm, { callTimeoutMs: 20 })
+
+    runtime.enqueue(delta('slow update'))
+    await runtime.waitForDrain()
+
+    expect(llm.calls).toHaveLength(2)
+    expect(notes).toEqual([{ note: 'slow but recovered', severity: 'nit' }])
+    expect(runtime.status()).toBe('running')
   })
 
   it('pauses on quota/rate-limit with the batch retained and no auto-resume', async () => {
