@@ -1,4 +1,0 @@
-/* Task-1 probe: proves the CSS-modules inline pipeline end-to-end. Task 2
-   replaces this side-effect import with the real advisor-section.module.css. */
-.probe-a { color: red; }
-.probe-b { color: blue; }

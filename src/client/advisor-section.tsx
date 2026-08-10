@@ -7,9 +7,11 @@
  * and Apply/Cancel writing the `advisor` namespace user layer through the
  * store (`settings.mutate` path ops + `expectedRevision`).
  *
- * CSS-free on purpose: the CSS-modules loader + `<style data-plugin>` injection
- * stays deferred until styles are actually needed (the T2 build-script
- * extension point); semantic plain elements keep the bundle contract minimal.
+ * Presentation: the settings-panel design language (ModelsSection
+ * vocabulary) via `advisor-section.module.css` — the section column, the form
+ * grouped in one outlined card, 32px fields with the shared select chevron,
+ * capsule Apply/Cancel, and 12/18 hint tones. Every color resolves through a
+ * `--dsw-alias-*` token so the section adapts to the light/dark theme.
  *
  * A stored provider/model that is no longer among the current options
  * surfaces warning copy (`staleProvider`/`staleModel`) instead of blocking
@@ -29,6 +31,7 @@ import type { ReactNode } from 'react'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-web-react'
 import type { ApplyFailure, AdvisorSettingsState, AdvisorSettingsStore } from './advisor-store.ts'
 import type { en } from './locales.ts'
+import styles from './advisor-section.module.css'
 
 /** Injected dependencies of {@link AdvisorSection} (slot `inject`). */
 export interface AdvisorSectionInjected {
@@ -75,17 +78,17 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
     // A post-apply reload failure must not mask a landed write: the saved
     // feedback renders alongside the error + retry (qc3 N-1).
     return (
-      <div>
-        <h2>{t('title')}</h2>
-        {state.applyState.kind === 'saved' ? <p role="status">{t('saved')}</p> : null}
-        <p>{`${t('loadFailed')}: ${state.error ?? ''}`}</p>
-        <button type="button" onClick={() => { void controller.load() }}>
+      <div className={styles['section']}>
+        <h2 className={styles['title']}>{t('title')}</h2>
+        {state.applyState.kind === 'saved' ? <p className={styles['savedNotice']} role="status">{t('saved')}</p> : null}
+        <p className={styles['error']}>{`${t('loadFailed')}: ${state.error ?? ''}`}</p>
+        <button type="button" className={styles['secondaryButton']} onClick={() => { void controller.load() }}>
           {t('retry')}
         </button>
       </div>
     )
   }
-  if (state.status !== 'ready') return <h2>{t('title')}</h2>
+  if (state.status !== 'ready') return <h2 className={styles['title']}>{t('title')}</h2>
 
   // qc2 W-2 / qc1 S-4 (the C-1 mitigation): when the last describe carried no
   // `advisor` namespace view (host build does not expose it), the form would
@@ -93,10 +96,10 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
   // host refusal — render the explicit notice instead and never offer Apply.
   if (!state.advisorPresent) {
     return (
-      <div>
-        <h2>{t('title')}</h2>
-        <p>{t('intro')}</p>
-        <p role="status">{t('namespaceUnavailable')}</p>
+      <div className={styles['section']}>
+        <h2 className={styles['title']}>{t('title')}</h2>
+        <p className={styles['intro']}>{t('intro')}</p>
+        <p className={styles['notice']} role="status">{t('namespaceUnavailable')}</p>
       </div>
     )
   }
@@ -122,110 +125,122 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
   const errorText = applyState.kind === 'error' ? failureCopy(applyState.failure, t) : undefined
 
   return (
-    <div>
-      <h2>{t('title')}</h2>
-      <p>{t('intro')}</p>
-      {!writable ? <p>{t('readOnly')}</p> : null}
-      {applyState.kind === 'saved' ? <p role="status">{t('saved')}</p> : null}
-      <div>
-        <label htmlFor="advisor-enabled">{t('enabled')}</label>
-        <input
-          id="advisor-enabled"
-          type="checkbox"
-          checked={draft.enabled}
-          disabled={busy}
-          onChange={(event) => { controller.setEnabled(event.target.checked) }}
-        />
+    <div className={styles['section']}>
+      <h2 className={styles['title']}>{t('title')}</h2>
+      <p className={styles['intro']}>{t('intro')}</p>
+      {!writable ? <p className={styles['notice']}>{t('readOnly')}</p> : null}
+      {applyState.kind === 'saved' ? <p className={styles['savedNotice']} role="status">{t('saved')}</p> : null}
+      <div className={styles['card']}>
+        <div className={styles['checkboxRow']}>
+          <label htmlFor="advisor-enabled" className={styles['checkLabel']}>{t('enabled')}</label>
+          <input
+            id="advisor-enabled"
+            type="checkbox"
+            className={styles['checkbox']}
+            checked={draft.enabled}
+            disabled={busy}
+            onChange={(event) => { controller.setEnabled(event.target.checked) }}
+          />
+        </div>
+        {draft.enabled
+          ? (
+            <fieldset className={styles['fieldset']}>
+              <div className={styles['field']}>
+                <label htmlFor="advisor-provider" className={styles['fieldLabel']}>{t('provider')}</label>
+                <select
+                  id="advisor-provider"
+                  aria-label={t('provider')}
+                  className={`${styles['input']} ${styles['selectInput']}`}
+                  value={draft.provider ?? ''}
+                  disabled={busy}
+                  onChange={(event) => { controller.setProvider(event.target.value) }}
+                >
+                  <option value="">{t('providerPlaceholder')}</option>
+                  {providers.map(option => (
+                    <option key={option.provider} value={option.provider}>{option.displayName}</option>
+                  ))}
+                </select>
+                {providers.length === 0 ? <p className={styles['hint']}>{t('noProviders')}</p> : null}
+                {providerEmpty ? <p className={styles['warnHint']}>{t('providerRequired')}</p> : null}
+                {providerStale ? <p className={styles['hint']}>{t('staleProvider')}</p> : null}
+              </div>
+              <div className={styles['field']}>
+                <label htmlFor="advisor-model" className={styles['fieldLabel']}>{t('model')}</label>
+                <select
+                  id="advisor-model"
+                  aria-label={t('model')}
+                  className={`${styles['input']} ${styles['selectInput']}`}
+                  value={draft.model ?? ''}
+                  disabled={busy || draft.provider === undefined || selectedModels.length === 0}
+                  onChange={(event) => { controller.setModel(event.target.value) }}
+                >
+                  <option value="">{t('modelPlaceholder')}</option>
+                  {selectedModels.map(option => (
+                    <option key={option.id} value={option.id}>{option.name}</option>
+                  ))}
+                </select>
+                {modelsEmpty ? <p className={styles['hint']}>{t('noModels')}</p> : null}
+                {modelStale ? <p className={styles['hint']}>{t('staleModel')}</p> : null}
+                {!providerEmpty && modelEmpty ? <p className={styles['warnHint']}>{t('modelRequired')}</p> : null}
+              </div>
+            </fieldset>
+          )
+          : null}
+        <div className={styles['field']}>
+          <label htmlFor="advisor-system-prompt" className={styles['fieldLabel']}>{t('systemPrompt')}</label>
+          <textarea
+            id="advisor-system-prompt"
+            aria-label={t('systemPrompt')}
+            className={styles['textarea']}
+            value={draft.systemPrompt}
+            disabled={busy}
+            onChange={(event) => { controller.setSystemPrompt(event.target.value) }}
+          />
+        </div>
+        <div className={styles['numberFields']}>
+          <div className={styles['field']}>
+            <label htmlFor="advisor-immune-turns" className={styles['fieldLabel']}>{t('immuneTurns')}</label>
+            <input
+              id="advisor-immune-turns"
+              aria-label={t('immuneTurns')}
+              className={styles['input']}
+              type="number"
+              min={0}
+              step={1}
+              value={draft.immuneTurns ?? ''}
+              disabled={busy}
+              onChange={(event) => {
+                controller.setImmuneTurns(event.target.value === '' ? undefined : Number(event.target.value))
+              }}
+            />
+          </div>
+          <div className={styles['field']}>
+            <label htmlFor="advisor-max-delta-messages" className={styles['fieldLabel']}>{t('maxDeltaMessages')}</label>
+            <input
+              id="advisor-max-delta-messages"
+              aria-label={t('maxDeltaMessages')}
+              className={styles['input']}
+              type="number"
+              min={0}
+              step={1}
+              value={draft.maxDeltaMessages ?? ''}
+              disabled={busy}
+              onChange={(event) => {
+                controller.setMaxDeltaMessages(event.target.value === '' ? undefined : Number(event.target.value))
+              }}
+            />
+          </div>
+        </div>
+        {errorText === undefined ? null : <p className={styles['error']} role="alert">{errorText}</p>}
+        <div className={styles['editorActions']}>
+          <button type="button" className={styles['primaryButton']} disabled={busy || gateFailed} onClick={() => { void controller.apply() }}>
+            {saving ? t('applying') : t('apply')}
+          </button>
+          <button type="button" className={styles['secondaryButton']} disabled={saving} onClick={() => { controller.resetDraft() }}>
+            {t('cancel')}
+          </button>
+        </div>
       </div>
-      {draft.enabled
-        ? (
-          <fieldset>
-            <div>
-              <label htmlFor="advisor-provider">{t('provider')}</label>
-              <select
-                id="advisor-provider"
-                aria-label={t('provider')}
-                value={draft.provider ?? ''}
-                disabled={busy}
-                onChange={(event) => { controller.setProvider(event.target.value) }}
-              >
-                <option value="">{t('providerPlaceholder')}</option>
-                {providers.map(option => (
-                  <option key={option.provider} value={option.provider}>{option.displayName}</option>
-                ))}
-              </select>
-              {providers.length === 0 ? <p>{t('noProviders')}</p> : null}
-              {providerEmpty ? <p>{t('providerRequired')}</p> : null}
-              {providerStale ? <p>{t('staleProvider')}</p> : null}
-            </div>
-            <div>
-              <label htmlFor="advisor-model">{t('model')}</label>
-              <select
-                id="advisor-model"
-                aria-label={t('model')}
-                value={draft.model ?? ''}
-                disabled={busy || draft.provider === undefined || selectedModels.length === 0}
-                onChange={(event) => { controller.setModel(event.target.value) }}
-              >
-                <option value="">{t('modelPlaceholder')}</option>
-                {selectedModels.map(option => (
-                  <option key={option.id} value={option.id}>{option.name}</option>
-                ))}
-              </select>
-              {modelsEmpty ? <p>{t('noModels')}</p> : null}
-              {modelStale ? <p>{t('staleModel')}</p> : null}
-              {!providerEmpty && modelEmpty ? <p>{t('modelRequired')}</p> : null}
-            </div>
-          </fieldset>
-        )
-        : null}
-      <div>
-        <label htmlFor="advisor-system-prompt">{t('systemPrompt')}</label>
-        <textarea
-          id="advisor-system-prompt"
-          aria-label={t('systemPrompt')}
-          value={draft.systemPrompt}
-          disabled={busy}
-          onChange={(event) => { controller.setSystemPrompt(event.target.value) }}
-        />
-      </div>
-      <div>
-        <label htmlFor="advisor-immune-turns">{t('immuneTurns')}</label>
-        <input
-          id="advisor-immune-turns"
-          aria-label={t('immuneTurns')}
-          type="number"
-          min={0}
-          step={1}
-          value={draft.immuneTurns ?? ''}
-          disabled={busy}
-          onChange={(event) => {
-            controller.setImmuneTurns(event.target.value === '' ? undefined : Number(event.target.value))
-          }}
-        />
-      </div>
-      <div>
-        <label htmlFor="advisor-max-delta-messages">{t('maxDeltaMessages')}</label>
-        <input
-          id="advisor-max-delta-messages"
-          aria-label={t('maxDeltaMessages')}
-          type="number"
-          min={0}
-          step={1}
-          value={draft.maxDeltaMessages ?? ''}
-          disabled={busy}
-          onChange={(event) => {
-            controller.setMaxDeltaMessages(event.target.value === '' ? undefined : Number(event.target.value))
-          }}
-        />
-      </div>
-      {errorText === undefined ? null : <p role="alert">{errorText}</p>}
-      <button type="button" disabled={busy || gateFailed} onClick={() => { void controller.apply() }}>
-        {saving ? t('applying') : t('apply')}
-      </button>
-      <button type="button" disabled={saving} onClick={() => { controller.resetDraft() }}>
-        {t('cancel')}
-      </button>
     </div>
   )
 }

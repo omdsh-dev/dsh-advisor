@@ -22,14 +22,6 @@ import type { AdvisorSectionInjected } from './advisor-section.tsx'
 import { AdvisorSettingsStore, refreshIfLoaded } from './advisor-store.ts'
 import { en, zh, type AdvisorKey } from './locales.ts'
 
-// Task-1 probe: exercises the CSS-modules inline pipeline (replaced by the
-// real advisor-section.module.css import in Task 2). The default binding is
-// consumed inside apply() below — a top-level `void probeStyles` is pruned by
-// esbuild as side-effect-free (its tree-shaker proves the known object has no
-// side effects), which would drop the hashed class map from the bundle the
-// contract test asserts.
-import probeStyles from './tmp-probe.module.css'
-
 export type { AdvisorSectionInjected, AdvisorSectionProps } from './advisor-section.tsx'
 export type { AdvisorKey } from './locales.ts'
 export type {
@@ -67,11 +59,6 @@ export const inject = ['slots', 'locale', 'connection']
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
-  // Task-1 probe retention point: no-op consumption of the class map inside
-  // the retained exported apply() keeps the css module's default export —
-  // and its hashed names — in the emitted bundle. Task 2 swaps the probe
-  // import for the real advisor-section.module.css and consumes its classes.
-  void probeStyles
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'advisor: copy dictionaries')
 
   const connection = ctx.get('connection') as ConnectionHandle

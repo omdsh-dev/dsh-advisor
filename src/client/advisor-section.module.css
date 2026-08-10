@@ -1,0 +1,281 @@
+/* Advisor settings section, in the settings-panel design language: 16/24
+ * title, 14/22 intro, 12/18 captions and hints, 32px fields, capsule
+ * controls (h36 r18), and `border-l2` hairlines — the vocabulary
+ * ModelsSection and the Button/Input primitives already use.
+ *
+ * Every color resolves through a `--dsw-alias-*` token (light/dark
+ * adaptive). Bare `--border` / `--surface` / `--text-*` names, which nothing
+ * in this app defines, would render the light-mode literals written as their
+ * fallbacks and stay light under the dark theme. */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.intro {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Warn-toned section notices: read-only environment, namespace unavailable. */
+.notice {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.savedNotice {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-success-primary);
+}
+
+/* The compact form grouped as one card: outlined on the panel fill like the
+   models page's row cards, so the editing surface reads as a unit. */
+.card {
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* The enabled switch: a real checkbox, tinted with the brand accent so it
+   matches the rest of the panel while staying a native control. */
+.checkboxRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkLabel {
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.checkbox {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--dsw-alias-brand-primary);
+  cursor: pointer;
+}
+
+.checkbox:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.checkbox:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l3);
+  outline-offset: 2px;
+}
+
+/* The provider/model group is a fieldset (no legend: the enabled toggle
+   above it is the group's question). */
+.fieldset {
+  margin: 0;
+  padding: 0;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fieldLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Enum pickers hold a handful of short options; a field-width dropdown reads
+   as a text field the user is expected to fill. */
+select.input {
+  max-width: 240px;
+  cursor: pointer;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.input::placeholder {
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.input:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Select variant of .input: replaces the OS arrow (which sits flush against
+   the right edge) with the shared 12px chevron inset; the right pad reserves
+   its cell. */
+.selectInput {
+  appearance: none;
+  padding-right: 32px;
+  /* Data-URI SVGs cannot resolve CSS variables; #81858C is the caption gray
+     shared by both themes. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2381858C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 12px;
+}
+
+/* The system prompt: same field chrome as .input, but a multiline surface —
+   taller by default, vertically resizable. */
+.textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 96px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  resize: vertical;
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.textarea:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* The two short numeric fields (immune turns / max delta messages) sit side
+   by side, each keeping a full-width field of its own column. */
+.numberFields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+/* Inline guidance under a field: tertiary for stale-value / no-option hints,
+   warn for the required-when-enabled gate. */
+.hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.warnHint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* Apply/Cancel footer: the same h36 r18 capsules as the models page — the
+   primary button carries the brand fill, Cancel is the outlined sibling. */
+.editorActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.primaryButton,
+.secondaryButton {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 18px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.primaryButton {
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+
+.primaryButton:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.secondaryButton {
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+}
+
+.secondaryButton:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.primaryButton:focus-visible,
+.secondaryButton:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-alias-border-l3);
+}

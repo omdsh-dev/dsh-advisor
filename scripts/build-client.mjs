@@ -152,10 +152,9 @@ const result = await build({
         // The emitted stub is the EXACT mirror of the dsh tsdown preset's
         // dsh-css-modules-inline load() output: the guard is only the
         // `typeof document` + `data-plugin-css` presence check, and the class
-        // map rides the default export as a JSON literal. The probe entry
-        // imports that default binding and consumes it (`void probeStyles` in
-        // src/client/index.ts), so the export — and the whole stub — survives
-        // bundling unchanged.
+        // map rides the default export as a JSON literal. The advisor section
+        // imports that default binding and consumes its classes in JSX, so
+        // the export — and the whole stub — survives bundling unchanged.
         const contents = [
           `const css = ${JSON.stringify(code.toString())};`,
           `const tagId = ${JSON.stringify(`${ID}/${basename(fileId)}`)};`,
@@ -196,13 +195,13 @@ if (bundleText.includes('import.meta') || /(^|\n)\s*(import|export)\s/.test(bund
   throw new Error('client bundle contract: emitted bundle contains import.meta / ESM statements — the classic-script loader would fail to parse it')
 }
 // CSS-modules inline wiring: the bundle must carry the guarded <style
-// data-plugin> injection stub and the tagId of the probe module (the loader
-// cleans up plugin-owned tags by `style[data-plugin=<id>]` +
+// data-plugin> injection stub and the tagId of the advisor section module
+// (the loader cleans up plugin-owned tags by `style[data-plugin=<id>]` +
 // `data-plugin-css`; without this wiring the section renders unstyled).
 for (const fragment of [
   'data-plugin',
   'document.head.appendChild',
-  'dsh-advisor/tmp-probe.module.css',
+  'dsh-advisor/advisor-section.module.css',
 ]) {
   if (!bundleText.includes(fragment)) {
     throw new Error(`client bundle contract: CSS-modules inline wiring missing — "${fragment}" not in the emitted bundle`)
