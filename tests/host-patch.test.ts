@@ -62,6 +62,9 @@ function sourceIsPatched(tree: string): boolean {
   return readFileSync(source, 'utf8').includes(MARKER)
 }
 
+/** --runtime needs curl in PATH; skip the live-probe tests where it is missing. */
+const curlAvailable = spawnSync('bash', ['-c', 'command -v curl'], { encoding: 'utf8' }).status === 0
+
 describe('host exposure patch artifact (C-1)', () => {
   it('ships the patch as a git diff with the expected allowlist change', () => {
     expect(existsSync(PATCH_FILE), `${PATCH} exists under patches/`).toBe(true)
@@ -105,16 +108,17 @@ describe('host exposure patch artifact (C-1)', () => {
     expect(probes, 'bundle probe entry for the tsdown bundle (package main)').toContain(
       'packages/host/apiproxy/lib/index.js',
     )
-    // tsdown emits double-quoted string literals, so the bundle probe marker
-    // is the bundle form — the single-quoted source form never appears there.
-    // (In the bash source the marker is written with escaped quotes because
-    // the probe entry is itself a double-quoted string.)
-    expect(probes, 'bundle probe uses the double-quoted bundle marker').toContain('\\"ui-onboarding\\", \\"advisor\\"')
+    // The bundle probe is quote-agnostic: it greps the PRODUCT_SETTINGS_NAMESPACES
+    // assignment context for `advisor` (tsdown emits double-quoted literals, so
+    // the single-quoted source marker never appears there).
+    expect(probes, 'bundle probe greps the assignment context, quote-agnostic').toContain(
+      'PRODUCT_SETTINGS_NAMESPACES[^;]*advisor',
+    )
     // The source / tsc-emit probes keep the single-quoted source form.
     expect(probes, 'source/build probes keep the single-quoted marker').toContain(MARKER)
   })
 
-  it('verify-dsh-patch.sh --runtime exits non-zero against an unreachable server', () => {
+  it.skipIf(!curlAvailable)('verify-dsh-patch.sh --runtime exits non-zero against an unreachable server', () => {
     // Deterministic and sandbox-safe: nothing listens on port 1, so curl fails
     // with connection refused regardless of the local dsh tree / server state.
     const url = 'http://127.0.0.1:1'
@@ -126,22 +130,42 @@ describe('host exposure patch artifact (C-1)', () => {
   })
 
   // One-shot localhost HTTP server answering ONLY the canonical
-  // settings.describe path (anything else → 404). This lets the tests exercise
-  // the runtime probe deterministically without touching any dsh tree.
+  // settings.describe path via a POST carrying the client-request envelope
+  // (anything else → 404/400). This lets the tests exercise the runtime probe
+  // deterministically without touching any dsh tree.
   //
   // NOTE: the server must run ASYNC (and the verify script must be spawned
   // asynchronously): spawnSync blocks the event loop, so a same-thread server
   // can never answer the probe's curl request (it times out with 0 bytes).
-  function startDescribeServer(responseBody: string): Promise<{ url: string; close: () => void }> {
+  function startDescribeServer(
+    responseBody: string,
+    status = 200,
+  ): Promise<{ url: string; close: () => Promise<void> }> {
     return new Promise((resolvePromise, reject) => {
       const server = createServer((req, res) => {
-        if (req.url !== '/api/settings.describe') {
+        if (req.method !== 'POST' || req.url !== '/api/settings.describe') {
           res.writeHead(404, { 'Content-Type': 'text/plain' })
           res.end('not found')
           return
         }
-        res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(responseBody)
+        let body = ''
+        req.on('data', (chunk: Buffer) => (body += chunk.toString('utf8')))
+        req.on('end', () => {
+          // The probe must send the settings.describe client-request envelope.
+          let envelopeOk = false
+          try {
+            envelopeOk = JSON.parse(body).method === 'settings.describe'
+          } catch {
+            envelopeOk = false
+          }
+          if (!envelopeOk) {
+            res.writeHead(400, { 'Content-Type': 'text/plain' })
+            res.end('unexpected envelope')
+            return
+          }
+          res.writeHead(status, { 'Content-Type': 'application/json' })
+          res.end(responseBody)
+        })
       })
       server.on('error', reject)
       server.listen(0, '127.0.0.1', () => {
@@ -151,7 +175,14 @@ describe('host exposure patch artifact (C-1)', () => {
           reject(new Error('server did not bind a TCP port'))
           return
         }
-        resolvePromise({ url: `http://127.0.0.1:${addr.port}`, close: () => server.close() })
+        resolvePromise({
+          url: `http://127.0.0.1:${addr.port}`,
+          close: () =>
+            new Promise<void>((done) => {
+              server.closeAllConnections()
+              server.close(() => done())
+            }),
+        })
       })
     })
   }
@@ -192,40 +223,80 @@ describe('host exposure patch artifact (C-1)', () => {
     result: { ok: false, error: 'settings-not-exposed' },
   })
 
-  it('verify-dsh-patch.sh --runtime --absent fails on a non-success response (envelope guard)', async () => {
-    // An error envelope lacks the success markers — it must FAIL as
-    // "unexpected response" instead of passing as "advisor absent".
-    const server = await startDescribeServer(ERROR_ENVELOPE)
-    try {
-      const out = await runAsync(['bash', 'scripts/verify-dsh-patch.sh', '--runtime', server.url, '--absent'])
-      expect(out.status, `envelope guard exits non-zero — stderr:\n${out.stderr}`).not.toBe(0)
-      expect(out.stderr, 'guard message names the success envelope').toContain('success envelope')
-    } finally {
-      server.close()
-    }
-  })
+  it.skipIf(!curlAvailable)(
+    'verify-dsh-patch.sh --runtime --absent fails on a non-success response (envelope guard)',
+    async () => {
+      // An error envelope lacks the success markers — it must FAIL as
+      // "unexpected response" instead of passing as "advisor absent".
+      const server = await startDescribeServer(ERROR_ENVELOPE)
+      try {
+        const out = await runAsync(['bash', 'scripts/verify-dsh-patch.sh', '--runtime', server.url, '--absent'])
+        expect(out.status, `envelope guard exits non-zero — stderr:\n${out.stderr}`).not.toBe(0)
+        expect(out.stderr, 'guard message names the success envelope').toContain('success envelope')
+      } finally {
+        await server.close()
+      }
+    },
+  )
 
-  it('verify-dsh-patch.sh --runtime --absent passes on a success envelope without advisor (trailing slash tolerated)', async () => {
-    // Trailing slash: the script must normalize {url}/ before appending
-    // /api/settings.describe — the helper only answers the canonical path, so
-    // a double-slash URL would 404 and trip the envelope guard.
-    const server = await startDescribeServer(SUCCESS_NO_ADVISOR)
-    try {
-      const out = await runAsync(['bash', 'scripts/verify-dsh-patch.sh', '--runtime', `${server.url}/`, '--absent'])
-      expect(out.status, `absent-on-success exit 0 — stderr:\n${out.stderr}`).toBe(0)
-    } finally {
-      server.close()
-    }
-  })
+  it.skipIf(!curlAvailable)(
+    'verify-dsh-patch.sh --runtime --absent passes on a success envelope without advisor (trailing slashes tolerated)',
+    async () => {
+      // Trailing slashes: the script must normalize {url}/.../ before appending
+      // /api/settings.describe — the helper only answers the canonical path, so
+      // a double-slash URL would 404 and trip the envelope guard.
+      const server = await startDescribeServer(SUCCESS_NO_ADVISOR)
+      try {
+        const out = await runAsync(['bash', 'scripts/verify-dsh-patch.sh', '--runtime', `${server.url}//`, '--absent'])
+        expect(out.status, `absent-on-success exit 0 — stderr:\n${out.stderr}`).toBe(0)
+      } finally {
+        await server.close()
+      }
+    },
+  )
 
-  it('verify-dsh-patch.sh --runtime present direction still passes on a success envelope with advisor', async () => {
-    const server = await startDescribeServer(SUCCESS_WITH_ADVISOR)
-    try {
-      const out = await runAsync(['bash', 'scripts/verify-dsh-patch.sh', '--runtime', server.url])
-      expect(out.status, `present-on-success exit 0 — stderr:\n${out.stderr}`).toBe(0)
-    } finally {
-      server.close()
-    }
+  it.skipIf(!curlAvailable)(
+    'verify-dsh-patch.sh --runtime present direction still passes on a success envelope with advisor',
+    async () => {
+      const server = await startDescribeServer(SUCCESS_WITH_ADVISOR)
+      try {
+        const out = await runAsync(['bash', 'scripts/verify-dsh-patch.sh', '--runtime', server.url])
+        expect(out.status, `present-on-success exit 0 — stderr:\n${out.stderr}`).toBe(0)
+      } finally {
+        await server.close()
+      }
+    },
+  )
+
+  it.skipIf(!curlAvailable)(
+    'verify-dsh-patch.sh --runtime present direction fails on a non-envelope response with a distinct message',
+    async () => {
+      // A 404 error page is not a settings.describe success response: present
+      // mode must FAIL with the envelope message, not the "advisor not exposed"
+      // message (which would imply a reachable, unpatched server).
+      const server = await startDescribeServer('Internal Server Error', 404)
+      try {
+        const out = await runAsync(['bash', 'scripts/verify-dsh-patch.sh', '--runtime', server.url])
+        expect(out.status, `present-on-404 exits non-zero — stderr:\n${out.stderr}`).not.toBe(0)
+        expect(out.stderr, 'distinct non-success-response message').toContain('success response')
+        expect(out.stderr, 'must not be the plain not-exposed message').not.toContain(
+          'does not expose the advisor namespace',
+        )
+      } finally {
+        await server.close()
+      }
+    },
+  )
+
+  it.skipIf(!curlAvailable)('verify-dsh-patch.sh --runtime reports a distinct error when curl is missing', () => {
+    // Strip curl from PATH (bash is invoked by absolute path so it still runs);
+    // the script must fail with the curl-missing message instead of a
+    // connection error.
+    const out = run(['/bin/bash', 'scripts/verify-dsh-patch.sh', '--runtime', 'http://127.0.0.1:1'], {
+      env: { ...process.env, PATH: '/nonexistent' },
+    })
+    expect(out.status, `exit non-zero — stderr:\n${out.stderr}`).not.toBe(0)
+    expect(out.stderr, 'distinct curl-missing message').toContain('curl is not available')
   })
 
   const target = resolveTarget()

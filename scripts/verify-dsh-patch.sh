@@ -10,11 +10,11 @@
 #                                   (build artifact; tsc emits outDir lib/types — the
 #                                    constant is module-private and never reaches the
 #                                    .d.ts, so the compiled JS is the build probe)
-#                                   lib/index.js                → expect `"ui-onboarding", "advisor"`
+#                                   lib/index.js                → expect PRODUCT_SETTINGS_NAMESPACES … advisor
 #                                   (tsdown bundle — the package `main`, the runtime
 #                                    entry when dsh packages are consumed outside the
-#                                    tsx-from-source install; tsdown emits double-quoted
-#                                    string literals, hence the bundle-form marker)
+#                                    tsx-from-source install; the probe greps the
+#                                    assignment context, quote- and order-agnostic)
 #
 # By default the marker must be present (patch applied and rebuilt); --absent
 # inverts the assertion (after revert). Verdict: any existing probe that violates
@@ -23,11 +23,11 @@
 #
 # With --runtime [URL] the script skips the file probes and instead queries a
 # running dsh web server: POST {url}/api/settings.describe and assert the
-# response namespaces include `advisor` (with --absent, that they exclude it —
-# only against a settings.describe success envelope; error pages/envelopes fail).
-# This proves the patch is effective in the RUNNING server — a dsh web restart
-# is required after applying the patch, and file probes alone cannot prove it.
-# URL defaults to http://127.0.0.1:3080.
+# response namespaces include `advisor` (with --absent, that they exclude it).
+# Both modes only trust a settings.describe SUCCESS envelope; an HTTP error
+# page, error envelope, or garbage fails (server not restarted / wrong endpoint).
+# The probe is read-only, sends no credentials, and bypasses proxies
+# (--noproxy). URL defaults to http://127.0.0.1:3080.
 #
 # Target resolution (at runtime; the script itself contains no local absolute paths):
 #   $DSH_SOURCE_DIR (if set) → default ${DSH_HOME}/source/current
@@ -83,15 +83,23 @@ done
 # The probe needs no target directory, so it runs before target resolution.
 runtime_probe() {
   local url="$1"
-  local body="" curl_status=0 exposed=0
+  local body="" curl_status=0 exposed=0 envelope_ok=0
 
-  # Normalize the URL: strip one trailing slash so {url}/api/settings.describe
+  # Normalize the URL: strip ALL trailing slashes so {url}/api/settings.describe
   # never becomes {url}//api/settings.describe.
-  url="${url%/}"
+  while [[ "$url" == */ ]]; do
+    url="${url%/}"
+  done
 
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "ERROR: runtime probe failed: curl is not available in PATH (required for --runtime)." >&2
+    exit 1
+  fi
+
+  # `--noproxy '*'`: never route the probe through a proxy (localhost dsh web).
   # `|| curl_status=$?` (not `if ! ...; then $?`) — inside an `if !` branch $?
   # is the NEGATED status (0), which would mask curl failures.
-  body="$(curl --silent --show-error --max-time 10 \
+  body="$(curl --noproxy '*' --silent --show-error --max-time 10 \
       --request POST \
       --header 'Content-Type: application/json' \
       --data '{"type":"client-request","rpcId":"verify","method":"settings.describe","payload":{}}' \
@@ -103,7 +111,15 @@ runtime_probe() {
     exit 1
   fi
 
-  if grep -qF '"ns":"advisor"' <<< "$body"; then
+  # Envelope guard (space-tolerant markers): only trust the body when it is a
+  # settings.describe SUCCESS envelope — "ok":true with a namespaces result.
+  # An HTTP error page, an error envelope (ok:false), or garbage must FAIL
+  # instead of being read as "no advisor" / "advisor present".
+  if grep -qE '"ok"[[:space:]]*:[[:space:]]*true' <<< "$body" && grep -qF '"namespaces"' <<< "$body"; then
+    envelope_ok=1
+  fi
+
+  if grep -qE '"ns"[[:space:]]*:[[:space:]]*"advisor"' <<< "$body"; then
     exposed=1
   fi
 
@@ -113,12 +129,7 @@ runtime_probe() {
       echo "ERROR: runtime probe failed: ${url} exposes the advisor namespace (expected absent)." >&2
       exit 1
     fi
-    # Absent-guard: only declare "advisor absent" when the body is a
-    # settings.describe SUCCESS envelope ("ok":true with a namespaces result).
-    # An HTTP error page, an error envelope (ok:false), or garbage must FAIL
-    # instead of passing as "absent". The present direction needs no guard: a
-    # non-envelope response simply lacks "ns":"advisor" and already fails.
-    if ! grep -qF '"ok":true' <<< "$body" || ! grep -qF '"namespaces"' <<< "$body"; then
+    if [[ "$envelope_ok" -eq 0 ]]; then
       [[ "$QUIET" -eq 0 ]] && printf '  [FAIL] runtime probe %-36s unexpected response\n' "(${url})" >&2
       echo "ERROR: runtime probe failed: unexpected response from ${url} (not a settings.describe success envelope) — cannot assert namespace absence." >&2
       exit 1
@@ -128,12 +139,18 @@ runtime_probe() {
     exit 0
   fi
 
+  # present mode: require a success envelope before interpreting exposure —
+  # a non-settings.describe response gets its own distinct failure message.
+  if [[ "$envelope_ok" -eq 0 ]]; then
+    [[ "$QUIET" -eq 0 ]] && printf '  [FAIL] runtime probe %-36s unexpected response\n' "(${url})" >&2
+    echo "ERROR: runtime probe failed: ${url} returned an unexpected response (not a settings.describe success response) — cannot assert namespace exposure." >&2
+    exit 1
+  fi
   if [[ "$exposed" -eq 0 ]]; then
     [[ "$QUIET" -eq 0 ]] && printf '  [FAIL] runtime probe %-36s namespace not exposed\n' "(${url})" >&2
     echo "ERROR: runtime probe failed: ${url} does not expose the advisor namespace (settings.describe response lacks \"ns\":\"advisor\") — the patch is not effective at runtime (server not restarted, or not a dsh web endpoint)." >&2
     exit 1
   fi
-
   [[ "$QUIET" -eq 0 ]] && printf '  [PASS] runtime probe %-36s advisor namespace exposed\n' "(${url})"
   echo "== verify passed: runtime namespace 'advisor' exposed at ${url}"
   exit 0
@@ -153,15 +170,17 @@ if [[ ! -d "$TARGET" ]]; then
   exit 1
 fi
 
-# Probes: (relative path|fixed string|label)
-# NOTE: the tsdown bundle (lib/index.js) is emitted with double-quoted string
-# literals (rolldown/esbuild quote normalization), so its probe marker is the
-# bundle form `"ui-onboarding", "advisor"` rather than the single-quoted source
-# form that appears in src/ and the tsc emit (lib/types/api-proxy.js).
+# Probes: (relative path|match string|label) with an optional match-mode field:
+#   F = fixed string (grep -F, default); E = extended regex (grep -E).
+# The src / tsc-emit probes keep the literal single-quoted source marker. The
+# tsdown bundle (lib/index.js) probe is quote- and order-agnostic: it greps the
+# PRODUCT_SETTINGS_NAMESPACES assignment context (up to the statement's `;`)
+# for `advisor`, so it matches both the single-quoted source form and the
+# double-quoted bundle form (`new Set(["ui-onboarding", "advisor"])`).
 PROBES=(
   "packages/host/apiproxy/src/api-proxy.ts|'ui-onboarding', 'advisor'|host-apiproxy source (src/api-proxy.ts)"
   "packages/host/apiproxy/lib/types/api-proxy.js|'ui-onboarding', 'advisor'|host-apiproxy build (lib/types/api-proxy.js)"
-  "packages/host/apiproxy/lib/index.js|\"ui-onboarding\", \"advisor\"|host-apiproxy bundle (lib/index.js)"
+  "packages/host/apiproxy/lib/index.js|PRODUCT_SETTINGS_NAMESPACES[^;]*advisor|host-apiproxy bundle (lib/index.js)|E"
 )
 
 EXPECT_LABEL="present"
@@ -171,17 +190,26 @@ FAIL=0
 CHECKED=0
 
 for probe in "${PROBES[@]}"; do
-  IFS='|' read -r rel marker label <<< "$probe"
+  IFS='|' read -r rel marker label mode <<< "$probe"
+  mode="${mode:-F}"
   file="${TARGET}/${rel}"
   if [[ ! -f "$file" ]]; then
     [[ "$QUIET" -eq 0 ]] && printf '  [SKIP] %-52s file missing\n' "$label"
     continue
   fi
   CHECKED=1
-  if grep -qF -- "$marker" "$file"; then
-    present=1
+  if [[ "$mode" == "E" ]]; then
+    if grep -qE -- "$marker" "$file"; then
+      present=1
+    else
+      present=0
+    fi
   else
-    present=0
+    if grep -qF -- "$marker" "$file"; then
+      present=1
+    else
+      present=0
+    fi
   fi
   if [[ "$ABSENT" -eq 1 ]]; then
     # marker must be absent: presence is a failure

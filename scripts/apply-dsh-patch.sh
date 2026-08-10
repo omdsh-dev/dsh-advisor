@@ -55,7 +55,7 @@ PATCH_FILES=(
 )
 
 usage() {
-  sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
