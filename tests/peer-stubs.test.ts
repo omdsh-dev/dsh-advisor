@@ -17,7 +17,9 @@
  *   `description` present and recording the mirrored dsh-private snapshot id
  *   `b8343cb`) and declares a resolvable entry shape — runtime stand-ins carry
  *   `main` + `types`, the type-only stub carries `types` only;
- * - `package.json` declares `scripts.prepare` = `pnpm build`.
+ * - `package.json` declares `scripts.prepare` = `pnpm build && bash
+ *   scripts/autopatch-install.sh` (build + the host-patch autopatch) and
+ *   `scripts.postinstall` = the autopatch only.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -100,7 +102,8 @@ describe('peer-stubs packaging contract (git install chain)', () => {
     }
   })
 
-  it('declares a prepare script that runs the build (git-dep install chain)', () => {
-    expect(root.scripts.prepare).toBe('pnpm build')
+  it('declares prepare (build + host-patch autopatch) and postinstall (autopatch) for the git-dep install chain', () => {
+    expect(root.scripts.prepare).toBe('pnpm build && bash scripts/autopatch-install.sh')
+    expect(root.scripts.postinstall).toBe('bash scripts/autopatch-install.sh')
   })
 })

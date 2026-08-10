@@ -14,7 +14,7 @@
 dsh plugin --profile <name> add github:dsh-external/dsh-advisor   # pin a commit with #<sha>
 ```
 
-pnpm ≥ 10 默认拦截 git 依赖的 `prepare` 脚本：如果第一次 `add` 报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，请在 profile 的 `pnpm-workspace.yaml` 中添加放行条目（`onlyBuiltDependencies`，或 pnpm ≥ 10.26 的 `allowBuilds`），然后重新执行 `add` —— 参见[从 git URL 安装](#从-git-url-安装一条命令)。
+pnpm ≥ 10 默认拦截 git 依赖的 `prepare` 与 `postinstall` 脚本：如果第一次 `add` 报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，请在 profile 的 `pnpm-workspace.yaml` 中添加放行条目（`onlyBuiltDependencies`，或 pnpm ≥ 10.26 的 `allowBuilds`），然后重新执行 `add` —— 参见[从 git URL 安装](#从-git-url-安装一条命令)。
 
 **仅作建议。** advisor 从不批准或否决主 agent 的动作，也绝不会像主 agent 那样发出命令。每条送达的消息都是自我描述的 advisory 内容；一个行为异常的评审者会被端到端约束（emission guard、immuneTurns 冷却、failure policy），因此它永远不会卡住或污染主循环。
 
@@ -26,7 +26,7 @@ pnpm ≥ 10 默认拦截 git 依赖的 `prepare` 脚本：如果第一次 `add` 
 dsh plugin --profile <name> add github:dsh-external/dsh-advisor   # pin a commit with #<sha>
 ```
 
-git 安装拉取的是源码，因此 pnpm 在安装时会运行该组合包的 `prepare` 脚本（`pnpm build`）。pnpm ≥ 10 在显式放行之前拒绝运行 git 依赖的 `prepare`，所以第一次 `add` 会报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`；pnpm 会提示修复方法 —— 把它打印出的确切 package key 复制到 profile 的 `pnpm-workspace.yaml`：
+git 安装拉取的是源码，因此 pnpm 在安装时会运行该组合包的生命周期脚本：`prepare`（`pnpm build`）与 `postinstall`（`bash scripts/autopatch-install.sh` —— 宿主 patch 的安装期自动应用，见[宿主 patch（Settings 页）](#宿主-patchsettings-页)）。pnpm ≥ 10 在显式放行之前拒绝运行 git 依赖的 `prepare`，所以第一次 `add` 会报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`；pnpm 会提示修复方法 —— 把它打印出的确切 package key 复制到 profile 的 `pnpm-workspace.yaml`：
 
 ```yaml
 # $DSH_HOME/profiles/<name>/pnpm-workspace.yaml
@@ -48,11 +48,27 @@ pnpm pack
 dsh plugin --profile <name> add dsh-advisor-0.0.1.tgz
 ```
 
-tarball 附带的是构建产物（`lib/` + `cordis.patch.yml`），因此不会运行 `prepare` 脚本，也无需构建权限。第一次使用 `dsh plugin` 会初始化 profile（以 `@deepseek-ai/dsh-base` 作为其第一个组合包）；由于包声明了 `dsh.bundle`，`dsh` 会把 `dsh-advisor` 追加到 profile 的 `dsh.profile.bundles`。该组合包插入一行插件配置 —— `id: advisor`，`name: dsh-advisor`（见 `cordis.patch.yml`）。运行时依赖（`cordis`、`schemastery` 与 `@deepseek-ai/dsh-{session,agent,llm,commands,timeout}`）声明为 peerDependencies，由 dsh 安装的扁平 profile module fallback 解析 —— 无需额外安装步骤。
+tarball 附带的是构建产物（`lib/` + `cordis.patch.yml` + `patches/` 与 `scripts/` 宿主 patch 机制），因此不会运行 `prepare` 脚本，也无需构建权限。第一次使用 `dsh plugin` 会初始化 profile（以 `@deepseek-ai/dsh-base` 作为其第一个组合包）；由于包声明了 `dsh.bundle`，`dsh` 会把 `dsh-advisor` 追加到 profile 的 `dsh.profile.bundles`。该组合包插入一行插件配置 —— `id: advisor`，`name: dsh-advisor`（见 `cordis.patch.yml`）。运行时依赖（`cordis`、`schemastery` 与 `@deepseek-ai/dsh-{session,agent,llm,commands,timeout}`）声明为 peerDependencies，由 dsh 安装的扁平 profile module fallback 解析 —— 无需额外安装步骤。（tarball 安装不会运行 autopatch：当宿主尚未暴露 `advisor` 命名空间时，请用 `scripts/apply-dsh-patch.sh` 手动应用宿主 patch。）
 
 ### 从 git 安装构建
 
-git 安装（见上）拉取的是**源码而非构建产物**，因此组合包会从源码自行构建：`package.json` 声明了 `"prepare": "pnpm build"` —— 与打包 tarball 时 `prepack` 运行的构建相同 —— pnpm 会在安装完 devDependencies 后自动运行它。devDependencies 从已提交的 `peer-stubs/` 类型垫片解析（十四个直接消费的 `@deepseek-ai/dsh-*` 包为 `file:./peer-stubs/<name>`：最小运行时 stand-in 或纯类型垫片，每个记录其所镜像的 dsh-private commit），因此任何克隆里的 `pnpm install` 都是自洽的 —— 无需访问私有 registry 包，也无需本地 dsh 检出。（早期的 packaging 说明曾警告 git 安装会失败，因为组合包没有 `prepare` 脚本；该问题已解决 —— git 安装现已端到端可用。）
+git 安装（见上）拉取的是**源码而非构建产物**，因此组合包会从源码自行构建：`package.json` 声明了 `"prepare": "pnpm build && bash scripts/autopatch-install.sh"` —— 与打包 tarball 时 `prepack` 运行的构建相同，外加安装期宿主 patch 自动应用 —— pnpm 会在安装完 devDependencies 后自动运行它。devDependencies 从已提交的 `peer-stubs/` 类型垫片解析（十四个直接消费的 `@deepseek-ai/dsh-*` 包为 `file:./peer-stubs/<name>`：最小运行时 stand-in 或纯类型垫片，每个记录其所镜像的 dsh-private commit），因此任何克隆里的 `pnpm install` 都是自洽的 —— 无需访问私有 registry 包，也无需本地 dsh 检出。（早期的 packaging 说明曾警告 git 安装会失败，因为组合包没有 `prepare` 脚本；该问题已解决 —— git 安装现已端到端可用。）
+
+### 宿主 patch（Settings 页）
+
+dsh web Settings 页通过 dsh 宿主的 apiproxy 读写 settings 命名空间，而 apiproxy 只向配置客户端暴露 model-provider 命名空间以及 `permission` / `ui-onboarding`。`advisor` 命名空间在该边界之外，因此面对这样的宿主时，页面无法完成 Advisor section 的读写往返 —— store 检测到未暴露的命名空间后，会显示明确的提示而非可写表单（已交付的插件侧缓解）。
+
+组合包随附这一宿主侧缺口（C-1）的**修复机制**，镜像已验证的 `dsh-llm-fallbacks` 模式：一个把 `advisor` 加入宿主 exposure allowlist 的最小 git patch（`packages/host/apiproxy/src/api-proxy.ts` 的 `PRODUCT_SETTINGS_NAMESPACES`），外加 apply / revert / verify 脚本与安装期 autopatch —— 详见 [`patches/README.md`](patches/README.md)。当宿主尚未暴露 `advisor` 时需要它（钉住的基线 dsh-private b8343cb 未暴露）；每次 dsh 升级后需重跑（升级会重置宿主改动）。
+
+```sh
+export DSH_SOURCE_DIR="$DSH_HOME/source/current"   # 或仅设置 DSH_HOME
+scripts/apply-dsh-patch.sh --check   # 只读可应用性检查
+scripts/apply-dsh-patch.sh           # 应用并重建宿主包
+scripts/verify-dsh-patch.sh          # 断言源码与构建产物标记
+scripts/revert-dsh-patch.sh          # 回滚（例如 dsh 升级前）
+```
+
+git 安装会在安装期自动运行 autopatch（`postinstall` 与 `prepare`）；用 `DSH_ADVISOR_AUTOPATCH=0` 完全跳过。autopatch 只 warn、绝不导致安装失败；tarball 安装请按上面的命令手动应用。**安全说明：**apply/revert 脚本（以及 autopatch）会在应用/安装时运行目标树的构建代码（`tsc` / `tsdown`），位于 agent 运行所在沙箱之外 —— 只把它们指向你信任的 dsh 源码树，并把上面的 `onlyBuiltDependencies` 放行当作它本来的样子：允许该包在安装时执行其代码。
 
 ### 验证
 
@@ -146,7 +162,7 @@ MVP 有意放弃与 omp 的完整对等。已接受的差距（在 harness 迭�
 
 ## 开发
 
-组合包在安装时自行构建：`package.json` 声明了 `"prepare": "pnpm build"`（与 `prepack` 运行的构建相同），因此任何克隆都立即可构建。私有的 `@deepseek-ai/dsh-*` 运行时依赖在开发时从已提交的 `peer-stubs/` 类型垫片解析 —— 十四个直接消费的包声明为 `file:./peer-stubs/<name>` devDependencies（最小运行时 stand-in 或纯类型垫片），每个垫片的 `package.json` 记录了它所镜像的 dsh-private commit。无需本地 dsh 检出或额外设置 —— 任何克隆里一次普通的 `pnpm install` 即自洽。开发时的 `cordis` 从 npm registry 解析（`^4.0.0-rc.7`），而非链接的本地检出；请让它与 dsh 宿主内置的 cordis 基线保持一致 —— 宿主版本变化时，devDep 与 lockfile 一起升级。
+组合包在安装时自行构建：`package.json` 声明了 `"prepare": "pnpm build && bash scripts/autopatch-install.sh"`（与 `prepack` 运行的构建相同，外加安装期宿主 patch 自动应用），因此任何克隆都立即可构建。私有的 `@deepseek-ai/dsh-*` 运行时依赖在开发时从已提交的 `peer-stubs/` 类型垫片解析 —— 十四个直接消费的包声明为 `file:./peer-stubs/<name>` devDependencies（最小运行时 stand-in 或纯类型垫片），每个垫片的 `package.json` 记录了它所镜像的 dsh-private commit。无需本地 dsh 检出或额外设置 —— 任何克隆里一次普通的 `pnpm install` 即自洽。开发时的 `cordis` 从 npm registry 解析（`^4.0.0-rc.7`），而非链接的本地检出；请让它与 dsh 宿主内置的 cordis 基线保持一致 —— 宿主版本变化时，devDep 与 lockfile 一起升级。
 
 ```sh
 pnpm install      # registry deps + file: peer-stubs, no environment setup
@@ -156,7 +172,7 @@ pnpm build        # tsc -p tsconfig.build.json emit to lib/ + node scripts/build
 pnpm pack         # build + produce dsh-advisor-0.0.1.tgz
 ```
 
-`prepack` 与 `prepare` 都运行 `pnpm build`，因此 `pnpm pack` 会构建两次（每个生命周期一次）——这是为保持 git 安装可构建而接受的取舍。
+`prepack` 运行 `pnpm build`；`prepare` 运行构建外加宿主 patch 自动应用（`bash scripts/autopatch-install.sh`），因此 `pnpm pack` 会构建两次（每个生命周期一次）——这是为保持 git 安装可构建而接受的取舍。`postinstall` 只运行 autopatch（tarball 安装已带构建产物，完全跳过构建）。
 
 集成测试（`tests/integration.test.ts`）把插件组合进一个带 stub LLM adapter 的真实 cordis 上下文，驱动完整的 turn → delta → advisor call → inject/steer 循环。
 

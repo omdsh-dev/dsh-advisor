@@ -19,11 +19,11 @@ itself.
 dsh plugin --profile <name> add github:dsh-external/dsh-advisor   # pin a commit with #<sha>
 ```
 
-pnpm ≥ 10 blocks a git dependency's `prepare` script by default: if the first
-`add` fails with `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`, add the allowlist entry
-in the profile's `pnpm-workspace.yaml` (`onlyBuiltDependencies`, or
-`allowBuilds` on pnpm ≥ 10.26) and re-run the `add` — see
-[From a git URL](#from-a-git-url-one-command).
+pnpm ≥ 10 blocks a git dependency's `prepare` and `postinstall` scripts by
+default: if the first `add` fails with `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`,
+add the allowlist entry in the profile's `pnpm-workspace.yaml`
+(`onlyBuiltDependencies`, or `allowBuilds` on pnpm ≥ 10.26) and re-run the
+`add` — see [From a git URL](#from-a-git-url-one-command).
 
 **Advisory only.** The advisor never approves or rejects the primary agent's
 actions; it never issues commands as if it were the primary agent. Every
@@ -39,11 +39,14 @@ policy) so it can never stall or pollute the primary loop.
 dsh plugin --profile <name> add github:dsh-external/dsh-advisor   # pin a commit with #<sha>
 ```
 
-A git install fetches sources, so pnpm runs the bundle's `prepare` script
-(`pnpm build`) while installing. pnpm ≥ 10 refuses to run a git dependency's
-`prepare` until it is explicitly allowed, so the first `add` fails with
-`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`; pnpm points at the fix — copy the
-exact package key it printed into the profile's `pnpm-workspace.yaml`:
+A git install fetches sources, so pnpm runs the bundle's lifecycle scripts
+while installing: `prepare` (`pnpm build`) and `postinstall`
+(`bash scripts/autopatch-install.sh` — the host patch autopatch, see
+[Host patch (Settings page)](#host-patch-settings-page)). pnpm ≥ 10 refuses to
+run a git dependency's `prepare` until it is explicitly allowed, so the first
+`add` fails with `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`; pnpm points at the
+fix — copy the exact package key it printed into the profile's
+`pnpm-workspace.yaml`:
 
 ```yaml
 # $DSH_HOME/profiles/<name>/pnpm-workspace.yaml
@@ -69,8 +72,9 @@ pnpm pack
 dsh plugin --profile <name> add dsh-advisor-0.0.1.tgz
 ```
 
-A tarball ships the built artifacts (`lib/` + `cordis.patch.yml`), so no
-`prepare` script runs and no build permission is needed. The first `dsh
+A tarball ships the built artifacts (`lib/` + `cordis.patch.yml` + the
+`patches/` and `scripts/` host-patch mechanism), so no `prepare` script runs
+and no build permission is needed. The first `dsh
 plugin` use initializes the profile (with `@deepseek-ai/dsh-base` as its first
 bundle); `dsh` appends `dsh-advisor` to the profile's `dsh.profile.bundles`
 because the package declares `dsh.bundle`. The bundle inserts one plugin row —
@@ -78,14 +82,17 @@ because the package declares `dsh.bundle`. The bundle inserts one plugin row —
 dependencies (`cordis`, `schemastery`, and
 `@deepseek-ai/dsh-{session,agent,llm,commands,timeout}`) are declared as
 peerDependencies and resolved by the dsh installation's flat profile module
-fallback — no extra install step.
+fallback — no extra install step. (Tarball installs do not run the autopatch:
+apply the host patch manually with `scripts/apply-dsh-patch.sh` when the host
+does not yet expose the `advisor` namespace.)
 
 ### Building from a git install
 
 A git install (above) fetches **sources, not built artifacts**, so the bundle
-builds itself from source: `package.json` declares `"prepare": "pnpm build"` —
-the same build `prepack` runs when packing a tarball — and pnpm runs it
-automatically after installing devDependencies. The devDependencies resolve
+builds itself from source: `package.json` declares `"prepare": "pnpm build &&
+bash scripts/autopatch-install.sh"` — the same build `prepack` runs when
+packing a tarball, plus the install-time host-patch autopatch — and pnpm runs
+it automatically after installing devDependencies. The devDependencies resolve
 from the committed `peer-stubs/` type shims (`file:./peer-stubs/<name>` for
 the fourteen directly consumed `@deepseek-ai/dsh-*` packages: minimal runtime
 stand-ins or type-only shims, each recording the dsh-private commit it
@@ -93,6 +100,42 @@ mirrors), so `pnpm install` is self-contained in any clone — no access to
 private registry packages, no local dsh checkout. (An earlier packaging note
 warned that git installs would fail because the bundle shipped no `prepare`
 script; that catch is resolved — git installs now work end to end.)
+
+### Host patch (Settings page)
+
+The web Settings page reads and writes settings namespaces through the dsh
+host's apiproxy, which only exposes model-provider namespaces plus
+`permission` and `ui-onboarding` to configuration clients. The `advisor`
+namespace is outside that boundary, so against such a host the page cannot
+round-trip the Advisor section — the store detects the unexposed namespace and
+shows an explicit notice instead of a writable form (the shipped
+plugin-side mitigation).
+
+The bundle ships the **fix mechanism** for this host-side gap (C-1), mirroring
+the verified `dsh-llm-fallbacks` pattern: a minimal git patch that adds
+`advisor` to the host's exposure allowlist
+(`PRODUCT_SETTINGS_NAMESPACES` in `packages/host/apiproxy/src/api-proxy.ts`),
+plus apply / revert / verify scripts and an install-time autopatch — see
+[`patches/README.md`](patches/README.md). It is needed when the host does not
+yet expose `advisor` (the pinned baseline dsh-private b8343cb does not);
+re-run after every dsh upgrade, which resets host changes.
+
+```sh
+export DSH_SOURCE_DIR="$DSH_HOME/source/current"   # or just set DSH_HOME
+scripts/apply-dsh-patch.sh --check   # read-only applicability check
+scripts/apply-dsh-patch.sh           # apply + rebuild the host package
+scripts/verify-dsh-patch.sh          # assert source + build artifact markers
+scripts/revert-dsh-patch.sh          # roll back (e.g. before a dsh upgrade)
+```
+
+Git installs run the autopatch automatically (`postinstall` and `prepare`);
+opt out with `DSH_ADVISOR_AUTOPATCH=0`. The autopatch only warns and never
+fails the install; tarball installs apply manually as above. **Security:** the
+apply/revert scripts (and the autopatch) run the target tree's build code
+(`tsc` / `tsdown`) at apply/install time, outside any sandbox the agent runs
+under — only point them at a dsh source tree you trust, and treat the
+`onlyBuiltDependencies` allowance (above) as permission to execute this
+package's install-time code.
 
 ### Verify
 
@@ -245,7 +288,8 @@ harness iteration roadmap):
 ## Development
 
 The bundle builds itself on install: `package.json` declares
-`"prepare": "pnpm build"` (the same build `prepack` runs), so any clone is
+`"prepare": "pnpm build && bash scripts/autopatch-install.sh"` (the same build
+`prepack` runs, plus the install-time host-patch autopatch), so any clone is
 immediately buildable. The private `@deepseek-ai/dsh-*` runtime dependencies
 resolve at dev time from the committed `peer-stubs/` type shims — the fourteen
 directly consumed packages are declared as `file:./peer-stubs/<name>`
@@ -265,9 +309,11 @@ pnpm build        # tsc -p tsconfig.build.json emit to lib/ + node scripts/build
 pnpm pack         # build + produce dsh-advisor-0.0.1.tgz
 ```
 
-`prepack` and `prepare` both run `pnpm build`, so `pnpm pack` runs the build
+`prepack` runs `pnpm build`; `prepare` runs the build plus the host-patch
+autopatch (`bash scripts/autopatch-install.sh`), so `pnpm pack` runs the build
 twice (once per lifecycle) — the documented tradeoff that keeps git-install
-builds working.
+builds working. `postinstall` runs only the autopatch (already-built tarball
+installs skip the build entirely).
 
 The integration test (`tests/integration.test.ts`) composes the plugin into a
 real cordis context with a stub LLM adapter and drives the full

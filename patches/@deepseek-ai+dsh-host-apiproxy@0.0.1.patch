@@ -1,0 +1,15 @@
+diff --git a/packages/host/apiproxy/src/api-proxy.ts b/packages/host/apiproxy/src/api-proxy.ts
+index d6e3a71..e6cbf0f 100644
+--- a/packages/host/apiproxy/src/api-proxy.ts
++++ b/packages/host/apiproxy/src/api-proxy.ts
+@@ -96,8 +96,8 @@ const COLD_SUMMARY_BATCH_SIZE = 16
+ /** Conversation message event types (the pagination counting unit). */
+ const MESSAGE_TYPES = new Set(['user/message', 'assistant/message'])
+ 
+-/** Product settings intentionally exposed beside model-provider namespaces. */
+-const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding'])
++/** Product settings intentionally exposed beside model-provider namespaces (ui-onboarding, advisor). */
++const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding', 'advisor'])
+ 
+ /** Read live abort state across awaits without treating it as synchronously immutable. */
+ function isAborted(signal: AbortSignal): boolean {
