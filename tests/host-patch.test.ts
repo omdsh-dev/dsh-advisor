@@ -92,6 +92,38 @@ describe('host exposure patch artifact (C-1)', () => {
     expect(out.status, `autopatch opt-out exit 0 — stderr:\n${out.stderr}`).toBe(0)
   })
 
+  it('verify-dsh-patch.sh probes the tsdown bundle (lib/index.js) as a third file probe', () => {
+    const script = readFileSync(resolve(scriptsDir, 'verify-dsh-patch.sh'), 'utf8')
+    // Extract the PROBES=(...) array block line-wise (labels contain ")" so a
+    // regex like /PROBES=\((.*?)\)/s would truncate at the first label).
+    const lines = script.split('\n')
+    const start = lines.findIndex((l) => l.startsWith('PROBES=('))
+    const end = lines.indexOf(')', start)
+    const probes = start >= 0 && end > start ? lines.slice(start + 1, end).join('\n') : ''
+    expect(probes, 'PROBES array block present in verify-dsh-patch.sh').not.toBe('')
+    expect(probes, 'bundle probe entry for the tsdown bundle (package main)').toContain(
+      'packages/host/apiproxy/lib/index.js',
+    )
+    // tsdown emits double-quoted string literals, so the bundle probe marker
+    // is the bundle form — the single-quoted source form never appears there.
+    // (In the bash source the marker is written with escaped quotes because
+    // the probe entry is itself a double-quoted string.)
+    expect(probes, 'bundle probe uses the double-quoted bundle marker').toContain('\\"ui-onboarding\\", \\"advisor\\"')
+    // The source / tsc-emit probes keep the single-quoted source form.
+    expect(probes, 'source/build probes keep the single-quoted marker').toContain(MARKER)
+  })
+
+  it('verify-dsh-patch.sh --runtime exits non-zero against an unreachable server', () => {
+    // Deterministic and sandbox-safe: nothing listens on port 1, so curl fails
+    // with connection refused regardless of the local dsh tree / server state.
+    const url = 'http://127.0.0.1:1'
+    const out = run(['bash', 'scripts/verify-dsh-patch.sh', '--runtime', url])
+    expect(out.status, `runtime probe exits non-zero — stderr:\n${out.stderr}`).not.toBe(0)
+    // The distinct "server unreachable" message must name the probed URL —
+    // proving the --runtime mode ran (as opposed to an option-parse error).
+    expect(out.stderr, 'unreachable failure names the probed URL').toContain(url)
+  })
+
   const target = resolveTarget()
 
   describe.skipIf(!target)('against the reachable dsh source tree', () => {

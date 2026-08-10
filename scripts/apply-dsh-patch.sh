@@ -11,6 +11,13 @@
 # This script applies that change as a git patch to the dsh source tree (this
 # repo does not ship the dsh source).
 #
+# Runtime shape: in the standard staged install ($DSH_HOME/source/current) the
+# dsh launcher runs the CLI from TypeScript source via tsx (the snapshot's
+# tsconfig paths map @deepseek-ai/dsh-host-apiproxy → packages/host/apiproxy/src),
+# so `git apply` alone is effective at runtime; the build step below only keeps
+# the lib artifacts consistent for non-tsx consumers, and a restart of dsh web
+# is required for the change to load.
+#
 # Target resolution (at runtime; the script itself contains no local absolute paths):
 #   $DSH_SOURCE_DIR (if set) → default ${DSH_HOME}/source/current
 #
@@ -48,7 +55,7 @@ PATCH_FILES=(
 )
 
 usage() {
-  sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
