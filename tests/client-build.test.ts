@@ -115,8 +115,9 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     // the bundle MUST carry that wiring or the section renders unstyled.
     const bundle = readFileSync(resolve(repo, 'lib/client.js'), 'utf8')
     // Idempotent injection: one <style> per module file, guarded by a
-    // data-plugin-css presence check.
-    expect(bundle).toContain('document.createElement(\'style\')')
+    // data-plugin-css presence check. Quote-agnostic: esbuild's printer
+    // normalizes JS string quotes, so accept both.
+    expect(bundle).toMatch(/document\.createElement\(['"]style['"]\)/)
     expect(bundle).toContain('data-plugin')
     expect(bundle).toContain('document.head.appendChild')
     // tagId wiring: dsh-advisor/<basename>.

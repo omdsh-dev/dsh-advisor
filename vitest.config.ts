@@ -57,5 +57,9 @@ export default defineConfig({
     // .tsx: client component specs run under jsdom via the per-file
     // `// @vitest-environment jsdom` pragma (dsh-private convention).
     include: ['tests/**/*.{test,spec}.{ts,tsx}'],
+    // The client-build suite re-runs the full build (esbuild bundle + tsc
+    // declarations) per run — ~6s, over the 5s default; the margin protects
+    // slower machines from spurious timeouts.
+    testTimeout: 15000,
   },
 })
