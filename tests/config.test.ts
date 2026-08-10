@@ -99,6 +99,14 @@ describe('explicit model gate (S4 / spec §5.2)', () => {
     expect(resolveAdvisorConfig({ enabled: true, provider: '', model: '' }).enabled).toBe(false)
   })
 
+  it('treats whitespace-only provider/model as missing (trim before the gate, qc2 W-3 / qc3 I-3)', () => {
+    expect(resolveAdvisorConfig({ enabled: true, provider: ' ', model: 'm' }).enabled).toBe(false)
+    expect(resolveAdvisorConfig({ enabled: true, provider: 'p', model: '   ' }).enabled).toBe(false)
+    expect(resolveAdvisorConfig({ enabled: true, provider: ' \t ', model: '  ' }).enabled).toBe(false)
+    const resolved = resolveAdvisorConfig({ enabled: true, provider: ' ', model: 'm' })
+    expect(resolved.disabledReason).toBeTruthy()
+  })
+
   it('treats null provider/model as missing (normalized before the gate)', () => {
     expect(resolveAdvisorConfig({ enabled: true, provider: null, model: 'm' }).enabled).toBe(false)
     expect(resolveAdvisorConfig({ enabled: true, provider: null, model: null }).enabled).toBe(false)

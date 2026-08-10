@@ -77,7 +77,10 @@ export const Config = z.object({
 })
 
 function isNonEmptyString(value: string | undefined): value is string {
-  return typeof value === 'string' && value.length > 0
+  // Trim before checking: a whitespace-only value ("   ") is empty in effect
+  // and must trip the explicit gate (spec §5.2 "missing or empty"; qc2 W-3 /
+  // qc3 I-3 — a strict superset of dsh's own `length === 0` check).
+  return typeof value === 'string' && value.trim().length > 0
 }
 
 /**
