@@ -40,8 +40,8 @@ dsh plugin --profile <name> add github:dsh-external/dsh-advisor   # pin a commit
 A git install fetches sources, so pnpm runs the bundle's `prepare` script
 (`pnpm build`) while installing. pnpm ≥ 10 refuses to run a git dependency's
 `prepare` until it is explicitly allowed, so the first `add` fails with
-`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`; `dsh` points at the fix — copy the
-exact package key pnpm printed into the profile's `pnpm-workspace.yaml`:
+`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`; pnpm points at the fix — copy the
+exact package key it printed into the profile's `pnpm-workspace.yaml`:
 
 ```yaml
 # $DSH_HOME/profiles/<name>/pnpm-workspace.yaml
