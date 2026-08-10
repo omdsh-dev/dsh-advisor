@@ -96,8 +96,8 @@ Plugin-row config:
 - id: advisor
   config:
     enabled: true              # master switch (default false)
-    provider: deepseek         # REQUIRED when enabled
-    model: deepseek-chat       # REQUIRED when enabled
+    provider: deepseek-official  # REQUIRED when enabled
+    model: deepseek-v4-flash     # REQUIRED when enabled
     systemPrompt: ""           # optional; "" = built-in reviewer prompt
     immuneTurns: 3             # int ≥ 0, default 3 — cooldown after a delivered interrupt
     maxDeltaMessages: 60       # int ≥ 0, default 60 — delta window; 0 = unbounded
