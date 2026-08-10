@@ -10,6 +10,13 @@
  * CSS-free on purpose: the CSS-modules loader + `<style data-plugin>` injection
  * stays deferred until styles are actually needed (the T2 build-script
  * extension point); semantic plain elements keep the bundle contract minimal.
+ *
+ * A stored provider/model that is no longer among the current options
+ * surfaces warning copy (`staleProvider`/`staleModel`) instead of blocking
+ * Apply: the user keeps the stored value (it still applies as stored) or
+ * reselects — the host gate rejects truly invalid configurations on write.
+ * Clearing a number input leaves the field empty; the store then omits that
+ * key from the apply ops (the stored value stays unchanged).
  */
 
 import type { ReactNode } from 'react'
@@ -82,6 +89,13 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
     ? []
     : state.modelsByProvider.get(draft.provider) ?? []
   const modelsEmpty = draft.provider !== undefined && state.modelsEmptyReason.has(draft.provider)
+  // Stored values that are no longer among the current options: warn instead
+  // of silently dropping them; Apply stays enabled (keep or reselect).
+  const providerStale = draft.provider !== undefined
+    && !providers.some(option => option.provider === draft.provider)
+  const modelStale = !providerStale && draft.model !== undefined
+    && selectedModels.length > 0
+    && !selectedModels.some(option => option.id === draft.model)
   const errorText = applyState.kind === 'error' ? failureCopy(applyState.failure, t) : undefined
 
   return (
@@ -119,6 +133,7 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
               </select>
               {providers.length === 0 ? <p>{t('noProviders')}</p> : null}
               {providerEmpty ? <p>{t('providerRequired')}</p> : null}
+              {providerStale ? <p>{t('staleProvider')}</p> : null}
             </div>
             <div>
               <label htmlFor="advisor-model">{t('model')}</label>
@@ -135,6 +150,7 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
                 ))}
               </select>
               {modelsEmpty ? <p>{t('noModels')}</p> : null}
+              {modelStale ? <p>{t('staleModel')}</p> : null}
               {!providerEmpty && modelEmpty ? <p>{t('modelRequired')}</p> : null}
             </div>
           </fieldset>
@@ -158,9 +174,11 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
           type="number"
           min={0}
           step={1}
-          value={draft.immuneTurns}
+          value={draft.immuneTurns ?? ''}
           disabled={busy}
-          onChange={(event) => { controller.setImmuneTurns(Number(event.target.value)) }}
+          onChange={(event) => {
+            controller.setImmuneTurns(event.target.value === '' ? undefined : Number(event.target.value))
+          }}
         />
       </div>
       <div>
@@ -171,9 +189,11 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
           type="number"
           min={0}
           step={1}
-          value={draft.maxDeltaMessages}
+          value={draft.maxDeltaMessages ?? ''}
           disabled={busy}
-          onChange={(event) => { controller.setMaxDeltaMessages(Number(event.target.value)) }}
+          onChange={(event) => {
+            controller.setMaxDeltaMessages(event.target.value === '' ? undefined : Number(event.target.value))
+          }}
         />
       </div>
       {errorText === undefined ? null : <p role="alert">{errorText}</p>}

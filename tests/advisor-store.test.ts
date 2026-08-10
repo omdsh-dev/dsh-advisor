@@ -273,6 +273,47 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
     expect(models).toHaveBeenCalledTimes(1)
   })
 
+  it('shares one in-flight catalog fetch across concurrent providers', async () => {
+    type CatalogPayload = { groups: ModelProviderGroup[]; failures: unknown[] }
+    let deferredResolve!: (value: RpcResponse<CatalogPayload>) => void
+    const deferred = new Promise<RpcResponse<CatalogPayload>>((resolve) => {
+      deferredResolve = resolve
+    })
+    const { api, models } = scriptedApi({
+      advisor: advisorView(),
+      namespaces: [piAiNs(), emptyNs()],
+      entries: [OPENAI, EMPTY],
+    })
+    models.mockReturnValueOnce(deferred)
+    const store = new AdvisorSettingsStore(api)
+    await store.load()
+    const first = store.ensureModels('openai')
+    const second = store.ensureModels('empty')
+    deferredResolve(ok({ groups: CATALOG, failures: [] }))
+    await Promise.all([first, second])
+    expect(models).toHaveBeenCalledTimes(1)
+    expect(store.store.getSnapshot().modelsByProvider.get('openai')?.map(model => model.id)).toEqual(['gpt-4o'])
+  })
+
+  it('does not cache a transient catalog failure: a later provider refetches', async () => {
+    const { api, models } = scriptedApi({
+      advisor: advisorView(),
+      namespaces: [piAiNs(), emptyNs()],
+      entries: [OPENAI, EMPTY],
+    })
+    models.mockReturnValueOnce(Promise.resolve(fail('catalog down')))
+    const store = new AdvisorSettingsStore(api)
+    await store.load()
+    // First resolution hits a failing catalog fetch: the provider gets the
+    // empty-options reason, but the failure is NOT cached at catalog level.
+    await store.ensureModels('openai')
+    expect(store.store.getSnapshot().modelsEmptyReason.get('openai')).toBe('unavailable')
+    // The next provider's resolution refetches and sees the recovered catalog.
+    await store.ensureModels('empty')
+    expect(models).toHaveBeenCalledTimes(2)
+    expect(store.store.getSnapshot().modelsEmptyReason.get('empty')).toBe('catalog-empty')
+  })
+
   it('marks empty options with a reason when neither source has models', async () => {
     const { api } = scriptedApi({
       advisor: advisorView(),
@@ -358,7 +399,10 @@ describe('apply ops + expectedRevision (mutate path ops)', () => {
     })
   })
 
-  it('unsets cleared provider/model fields while disabled (gate fields may be empty)', async () => {
+  it('overrides a stored (user-pinned) provider/model with explicit empty values when cleared', async () => {
+    // The seed pins the values through the user layer; the explicit '' override
+    // is used instead of an `unset` so the clear stays stable regardless of
+    // what the composition base pins underneath.
     const { api, mutate } = scriptedApi({
       advisor: advisorView({
         user: { enabled: true, provider: 'x', model: 'y' },
@@ -368,17 +412,109 @@ describe('apply ops + expectedRevision (mutate path ops)', () => {
     const store = new AdvisorSettingsStore(api)
     await store.load()
     // The KD-S4 gate forbids Apply while enabled with empty provider/model,
-    // so the unset path is exercised with the switch off (values are then
+    // so the clear path is exercised with the switch off (values are then
     // ignored by the host gate).
     store.setEnabled(false)
     store.setProvider('')
     await store.apply()
     const payload = mutate.mock.calls[0]?.[0] as { ops: SettingsPathOpView[] }
     expect(payload.ops).toContainEqual({ op: 'set', path: ['enabled'], value: false })
+    expect(payload.ops).toContainEqual({ op: 'set', path: ['provider'], value: '' })
+    expect(payload.ops).toContainEqual({ op: 'set', path: ['model'], value: '' })
+    expect(payload.ops.some(op => op.op === 'unset' && op.path[0] === 'provider')).toBe(false)
+    expect(payload.ops.some(op => op.op === 'set' && op.path[0] === 'provider' && op.value !== '')).toBe(false)
+  })
+
+  it('clears a double-pinned provider/model (base and user both hold it) with an explicit empty override', async () => {
+    // Both the composition base and the stored user layer pin 'x': an `unset`
+    // would only remove the user layer and restore the base pin, so clearing
+    // must store the explicit '' override (review Important-1 case B).
+    const { api, mutate } = scriptedApi({
+      advisor: advisorView({
+        base: { enabled: true, provider: 'x', model: 'y' },
+        user: { enabled: true, provider: 'x', model: 'y' },
+        value: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+        revision: 3,
+      }),
+    })
+    const store = new AdvisorSettingsStore(api)
+    await store.load()
+    store.setEnabled(false)
+    store.setProvider('')
+    await store.apply()
+    const payload = mutate.mock.calls[0]?.[0] as { ops: SettingsPathOpView[] }
+    expect(payload.ops).toContainEqual({ op: 'set', path: ['provider'], value: '' })
+    expect(payload.ops).toContainEqual({ op: 'set', path: ['model'], value: '' })
+    expect(payload.ops.some(op => op.op === 'unset' && op.path[0] === 'provider')).toBe(false)
+  })
+
+  it('keeps a base-clearing override stable across a second apply (no unset churn)', async () => {
+    // Apply 1 stores the explicit '' override; a later apply with a DIFFERENT
+    // edit must not emit an `unset` for the cleared key (which would restore
+    // the base pin and re-oscillate) nor re-emit the '' set (review
+    // Important-1 case A).
+    const { api, mutate } = scriptedApi({
+      advisor: advisorView({
+        base: { enabled: true, provider: 'x', model: 'y' },
+        value: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+        revision: 1,
+      }),
+    })
+    const store = new AdvisorSettingsStore(api)
+    await store.load()
+    store.setEnabled(false)
+    store.setProvider('')
+    await store.apply() // Apply 1: stores the provider '' / model '' overrides
+    let payload = mutate.mock.calls[0]?.[0] as { ops: SettingsPathOpView[] }
+    expect(payload.ops).toContainEqual({ op: 'set', path: ['provider'], value: '' })
+
+    // Apply 2 with a different edit (immuneTurns) carries no provider/model
+    // op: the override is already stored and must not be torn down.
+    store.setImmuneTurns(9)
+    await store.apply()
+    payload = mutate.mock.calls[1]?.[0] as { ops: SettingsPathOpView[] }
+    expect(payload.ops).toContainEqual({ op: 'set', path: ['immuneTurns'], value: 9 })
+    expect(payload.ops.some(op => op.path[0] === 'provider')).toBe(false)
+    expect(payload.ops.some(op => op.path[0] === 'model')).toBe(false)
+  })
+
+  it('unsets a stored provider/model the resolved view does not pin (defensive branch)', async () => {
+    // A user-layer value the resolved view drops (host projection) means the
+    // seed does not pin it, so clearing emits an `unset` — nothing would
+    // restore the value afterwards.
+    const { api, mutate } = scriptedApi({
+      advisor: advisorView({
+        user: { enabled: false, provider: 'x', model: 'y' },
+        value: { enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+        revision: 2,
+      }),
+    })
+    const store = new AdvisorSettingsStore(api)
+    await store.load()
+    store.setProvider('')
+    await store.apply()
+    const payload = mutate.mock.calls[0]?.[0] as { ops: SettingsPathOpView[] }
     expect(payload.ops).toContainEqual({ op: 'unset', path: ['provider'] })
     expect(payload.ops).toContainEqual({ op: 'unset', path: ['model'] })
     expect(payload.ops.some(op => op.op === 'set' && op.path[0] === 'provider')).toBe(false)
-    expect(payload.ops.some(op => op.op === 'set' && op.path[0] === 'model')).toBe(false)
+  })
+
+  it('omits a cleared number field from the ops (empty input = leave unchanged)', async () => {
+    const { api, mutate } = scriptedApi({
+      advisor: advisorView({
+        user: { enabled: false, immuneTurns: 5, maxDeltaMessages: 60, systemPrompt: '' },
+        revision: 1,
+      }),
+    })
+    const store = new AdvisorSettingsStore(api)
+    await store.load()
+    store.setImmuneTurns(undefined)
+    store.setSystemPrompt('edited')
+    await store.apply()
+    const payload = mutate.mock.calls[0]?.[0] as { ops: SettingsPathOpView[] }
+    expect(payload.ops).toContainEqual({ op: 'set', path: ['systemPrompt'], value: 'edited' })
+    expect(payload.ops.some(op => op.path[0] === 'immuneTurns')).toBe(false)
+    expect(payload.ops.some(op => op.path[0] === 'maxDeltaMessages')).toBe(false)
   })
 
   it('overrides a base-pinned provider/model with explicit empty values when cleared', async () => {

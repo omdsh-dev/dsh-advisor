@@ -17,9 +17,12 @@
  *   configuration; Apply writes only the changed keys as set/unset path ops
  *   against the STORED user section (the ProviderEditor pathOps pattern), with
  *   `expectedRevision` from the last describe guarding against stale writes.
- *   The base layer is part of the resolved seed: clearing a base-pinned
- *   provider/model stores an explicit `''` override, because an `unset` would
- *   merely restore the base value.
+ *   Clearing a provider/model whose value the resolved seed pins (composition
+ *   base, user layer, or both) stores an explicit `''` override — an `unset`
+ *   would merely restore the pinned value, and an already-stored `''` override
+ *   is left untouched so the clear stays stable across later applies. Clearing
+ *   a number input (immuneTurns/maxDeltaMessages) leaves the field empty and
+ *   omits the key from the ops: the stored value stays unchanged.
  */
 
 import type {
@@ -78,10 +81,10 @@ export interface AdvisorDraft {
   model?: string
   /** Optional system prompt override; '' = built-in reviewer prompt. */
   systemPrompt: string
-  /** Cooldown after a delivered interrupt; integer ≥ 0, default 3. */
-  immuneTurns: number
-  /** Delta window; integer ≥ 0, default 60, 0 = unbounded. */
-  maxDeltaMessages: number
+  /** Cooldown after a delivered interrupt; integer ≥ 0, default 3. Cleared input → undefined (left unchanged on apply). */
+  immuneTurns?: number
+  /** Delta window; integer ≥ 0, default 60, 0 = unbounded. Cleared input → undefined (left unchanged on apply). */
+  maxDeltaMessages?: number
 }
 
 /** Why an Apply failed (copy keys resolve in the section; raw text passes through). */
@@ -202,11 +205,11 @@ export class AdvisorSettingsStore {
   /** Latest load wins; an older response never overwrites a newer one. */
   private generation = 0
 
-  /** Provider directory entries by route (addresses for the model join). */
-  private entries = new Map<string, ConfigurableProviderView>()
-
-  /** Host-scoped model catalog, fetched once on first fallback need. */
+  /** Host-scoped model catalog; cached only on success (a transient failure stays uncached and is refetched). */
   private catalog: ModelProviderGroup[] | undefined
+
+  /** In-flight host-scoped catalog fetch; one promise shared across providers. */
+  private catalogPromise: Promise<void> | undefined
 
   /** In-flight model resolutions (one per provider). */
   private inflightModels = new Set<string>()
@@ -264,7 +267,6 @@ export class AdvisorSettingsStore {
 
     const namespaces = new Map(views.map(view => [view.ns, view]))
     const advisorView = namespaces.get(ADVISOR_NAMESPACE)
-    this.entries = new Map(providers.map(entry => [entry.provider, entry]))
     const options: ProviderOption[] = []
     for (const entry of providers) {
       const namespace = namespaces.get(entry.settingsNs)
@@ -306,7 +308,8 @@ export class AdvisorSettingsStore {
    * Resolve the model options for one provider (KD-S2): profile-declared
    * `models` win; otherwise the `llm.models` catalog group for that provider;
    * neither → empty options + a reason. The host-scoped catalog is fetched at
-   * most once and cached. No-op for unconfigured providers.
+   * most once (concurrent first resolutions share one in-flight fetch) and
+   * cached only on success. No-op for unconfigured providers.
    * @param provider - provider route id.
    * @returns nothing; the snapshot carries the outcome.
    */
@@ -332,14 +335,14 @@ export class AdvisorSettingsStore {
     this.inflightModels.add(provider)
     try {
       if (this.catalog === undefined) {
-        try {
-          const response = await this.api.llm.models({})
-          this.catalog = response.result.ok ? response.result.value.groups : []
-        } catch {
-          this.catalog = []
+        // One shared in-flight fetch: concurrent first resolutions for
+        // different providers must not double-call llm.models.
+        if (this.catalogPromise === undefined) {
+          this.catalogPromise = this.fetchCatalog().finally(() => { this.catalogPromise = undefined })
         }
+        await this.catalogPromise
       }
-      const group = this.catalog.find(candidate => candidate.id === provider)
+      const group = this.catalog?.find(candidate => candidate.id === provider)
       const options = group?.models ?? []
       this.store.update((s) => {
         if (options.length > 0) {
@@ -351,6 +354,20 @@ export class AdvisorSettingsStore {
       })
     } finally {
       this.inflightModels.delete(provider)
+    }
+  }
+
+  /**
+   * Fetch the host-scoped model catalog. A failure (wire rejection or throw)
+   * leaves the cache empty so the next resolution refetches — a transient
+   * failure is never sticky for the store lifetime.
+   */
+  private async fetchCatalog(): Promise<void> {
+    try {
+      const response = await this.api.llm.models({})
+      this.catalog = response.result.ok ? response.result.value.groups : undefined
+    } catch {
+      this.catalog = undefined
     }
   }
 
@@ -386,14 +403,22 @@ export class AdvisorSettingsStore {
     this.setField('systemPrompt', prompt)
   }
 
-  /** Set the immune-turns cooldown (int ≥ 0; non-numeric input keeps the current value). */
-  setImmuneTurns(value: number): void {
-    this.setField('immuneTurns', this.clampInt(value, this.store.getSnapshot().draft.immuneTurns))
+  /** Set the immune-turns cooldown (int ≥ 0; non-numeric input keeps the current value; undefined clears → omitted from ops). */
+  setImmuneTurns(value: number | undefined): void {
+    if (value === undefined) {
+      this.clearField('immuneTurns')
+      return
+    }
+    this.setField('immuneTurns', this.clampInt(value, this.store.getSnapshot().draft.immuneTurns ?? 0))
   }
 
-  /** Set the delta-message window (int ≥ 0; non-numeric input keeps the current value). */
-  setMaxDeltaMessages(value: number): void {
-    this.setField('maxDeltaMessages', this.clampInt(value, this.store.getSnapshot().draft.maxDeltaMessages))
+  /** Set the delta-message window (int ≥ 0; non-numeric input keeps the current value; undefined clears → omitted from ops). */
+  setMaxDeltaMessages(value: number | undefined): void {
+    if (value === undefined) {
+      this.clearField('maxDeltaMessages')
+      return
+    }
+    this.setField('maxDeltaMessages', this.clampInt(value, this.store.getSnapshot().draft.maxDeltaMessages ?? 0))
   }
 
   /** Cancel: re-seed the draft from the latest resolved config and clear feedback. */
@@ -472,6 +497,9 @@ export class AdvisorSettingsStore {
     for (const key of always) {
       const stored = this.lastUser[key]
       const next = draft[key]
+      // A cleared number input (undefined) means "leave the stored value
+      // unchanged": omit the key from the ops instead of writing 0.
+      if (next === undefined) continue
       if (JSON.stringify(stored) !== JSON.stringify(next)) {
         ops.push({ op: 'set', path: [key], value: next })
       }
@@ -483,12 +511,20 @@ export class AdvisorSettingsStore {
         if (JSON.stringify(stored) !== JSON.stringify(next)) {
           ops.push({ op: 'set', path: [key], value: next })
         }
-      } else if (hasPath(this.lastUser, [key])) {
-        ops.push({ op: 'unset', path: [key] })
+      } else if (this.lastUser[key] === '') {
+        // The explicit '' override from a previous clear is already stored:
+        // leave it untouched. An `unset` here would restore the pinned value
+        // and the clear would oscillate on the next apply.
       } else if (this.seed[key] !== undefined) {
-        // The value came from the composition base: an unset would restore it,
-        // so the explicit empty-string override is the only way to clear it.
+        // The resolved seed pins the value (composition base and/or user
+        // layer): an `unset` may only remove the user layer and restore the
+        // base, so the explicit empty-string override is the reliable clear.
         ops.push({ op: 'set', path: [key], value: '' })
+      } else if (hasPath(this.lastUser, [key])) {
+        // Nothing resolves the key, yet the user layer holds a value the
+        // resolved view does not pin (e.g. dropped by the host projection):
+        // an `unset` removes it for good.
+        ops.push({ op: 'unset', path: [key] })
       }
     }
     return ops

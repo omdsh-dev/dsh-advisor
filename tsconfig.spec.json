@@ -8,8 +8,10 @@
     // flags here, mirroring tsconfig.client.json's setup.
     "jsx": "react-jsx",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    // Specs import client sources with explicit .ts/.tsx extensions
-    // (dsh-private convention); legal under noEmit.
+    // The client sources the specs import (src/client) reference siblings with
+    // explicit .ts/.tsx extensions (bundler resolution — dsh-private
+    // convention); allowImportingTsExtensions legalizes those imports under
+    // this program. The specs themselves import extensionless.
     "allowImportingTsExtensions": true,
     "noEmit": true
   },

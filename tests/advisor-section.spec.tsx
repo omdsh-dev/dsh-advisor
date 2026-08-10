@@ -190,6 +190,41 @@ describe('AdvisorSection', () => {
     expect(screen.getByText(en.noProviders)).toBeTruthy()
   })
 
+  it('warns when the stored provider is no longer among the configured options', async () => {
+    // 'zombie' is stored in the user layer but its profile does not resolve,
+    // so it never enters the configured provider option list.
+    const { view, injected } = await mountSection({
+      advisor: advisorView({
+        user: { enabled: true, provider: 'zombie', model: 'y' },
+        value: { enabled: true, provider: 'zombie', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+      }),
+    })
+    expect(screen.getByText(en.staleProvider)).toBeTruthy()
+    // The warning does not block Apply: the user keeps the stored value or
+    // reselects (documented in the section header).
+    expect((screen.getByRole('button', { name: en.apply }) as HTMLButtonElement).disabled).toBe(false)
+    // Reselecting a valid provider clears the warning.
+    fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek-official' } })
+    view.rerender(<AdvisorSection {...injected} />)
+    expect(screen.queryByText(en.staleProvider)).toBeNull()
+  })
+
+  it('warns when the stored model is no longer offered by the chosen provider', async () => {
+    const { view, controller, injected } = await mountSection({
+      advisor: advisorView({
+        user: { enabled: true, provider: 'deepseek-official', model: 'ds-c' },
+        value: { enabled: true, provider: 'deepseek-official', model: 'ds-c', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+      }),
+    })
+    // load() kicks the model resolution for the stored provider; wait for it.
+    await waitFor(() => {
+      expect(controller.store.getSnapshot().modelsByProvider.get('deepseek-official')?.length).toBe(2)
+    })
+    view.rerender(<AdvisorSection {...injected} />)
+    expect(screen.getByText(en.staleModel)).toBeTruthy()
+    expect(screen.queryByText(en.staleProvider)).toBeNull()
+  })
+
   it('links the model select to the chosen provider and shows guidance when it has no models', async () => {
     const { view, controller, injected } = await mountSection()
     fireEvent.click(screen.getByLabelText(en.enabled))
@@ -298,6 +333,20 @@ describe('AdvisorSection', () => {
     view.rerender(<AdvisorSection {...injected} />)
     expect((screen.getByLabelText(en.systemPrompt) as HTMLTextAreaElement).value).toBe('')
     expect((screen.getByLabelText(en.immuneTurns) as HTMLInputElement).value).toBe('3')
+  })
+
+  it('keeps a cleared number input empty instead of forcing 0', async () => {
+    const { view, injected } = await mountSection()
+    const input = screen.getByLabelText(en.immuneTurns) as HTMLInputElement
+    expect(input.value).toBe('3')
+    fireEvent.change(input, { target: { value: '' } })
+    view.rerender(<AdvisorSection {...injected} />)
+    expect((screen.getByLabelText(en.immuneTurns) as HTMLInputElement).value).toBe('')
+    // The other number input behaves the same.
+    const delta = screen.getByLabelText(en.maxDeltaMessages) as HTMLInputElement
+    fireEvent.change(delta, { target: { value: '' } })
+    view.rerender(<AdvisorSection {...injected} />)
+    expect((screen.getByLabelText(en.maxDeltaMessages) as HTMLInputElement).value).toBe('')
   })
 
   it('shows the read-only notice and disables writes when the settings provider is read-only', async () => {
