@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    // skipLibCheck is required (T3 verified; removal re-attempted at T8):
+    // importing @deepseek-ai/dsh-llm types pulls dsh-llm's retry-policy.d.ts,
+    // whose `import z from 'schemastery'` resolves to the dsh checkout's
+    // VENDORED schemastery (declares the global `Schemastery` namespace),
+    // colliding (TS6200) with the registry schemastery our src/config.ts schema
+    // imports. Removing it breaks the build; the dsh repo itself builds with
+    // skipLibCheck. src/ and tests/ remain fully strict-checked.
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src", "tests"]
+}
