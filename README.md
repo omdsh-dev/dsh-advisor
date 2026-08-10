@@ -1,5 +1,7 @@
 # dsh-advisor
 
+English | [中文](README.zh.md)
+
 [![License: MIT](https://img.shields.io/github/license/dsh-external/dsh-advisor)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933)](package.json)
 [![GitHub stars](https://img.shields.io/github/stars/dsh-external/dsh-advisor)](https://github.com/dsh-external/dsh-advisor)

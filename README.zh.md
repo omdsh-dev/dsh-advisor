@@ -108,7 +108,7 @@ advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabl
 
 `/advisor on` 也是手动恢复路径：被 quota/rate-limit 暂停的会话 advisor（`quota_exhausted` —— KD-5 没有自动恢复定时器）会在原地恢复；被终止的 advisor（永久性模型错误，如凭据无效）会为该会话全新重建。
 
-在每个正常结束（`completed`、`max-tokens` 或 `error`）的 stepped 主 turn 之后，advisor 评审增量 transcript delta，并按严重度排序至多发出一条 note：
+在每个正常结束（`completed`、`max-tokens` 或 `error`）的 stepped 主 turn 之后，advisor 评审增量 transcript delta，并按严重度排序，至多发出一条 note：
 
 - **nit** —— 轻微的样式、清晰度或质量建议；通过 `agent.inject` 送达（非唤醒，在下一个 pre-step 边界消费）。
 - **concern** —— 在继续之前值得权衡的重大风险或明显更优的方向；通过 `agent.steer` 送达（唤醒），受 `immuneTurns` 冷却约束。
