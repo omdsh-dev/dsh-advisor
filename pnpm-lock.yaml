@@ -20,6 +20,9 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: file:./peer-stubs/dsh-session
         version: file:peer-stubs/dsh-session
+      '@deepseek-ai/dsh-settings':
+        specifier: file:./peer-stubs/dsh-settings
+        version: file:peer-stubs/dsh-settings
       '@deepseek-ai/dsh-timeout':
         specifier: file:./peer-stubs/dsh-timeout
         version: file:peer-stubs/dsh-timeout
@@ -52,6 +55,9 @@ packages:
 
   '@deepseek-ai/dsh-session@file:peer-stubs/dsh-session':
     resolution: {directory: peer-stubs/dsh-session, type: directory}
+
+  '@deepseek-ai/dsh-settings@file:peer-stubs/dsh-settings':
+    resolution: {directory: peer-stubs/dsh-settings, type: directory}
 
   '@deepseek-ai/dsh-timeout@file:peer-stubs/dsh-timeout':
     resolution: {directory: peer-stubs/dsh-timeout, type: directory}
@@ -639,6 +645,8 @@ snapshots:
   '@deepseek-ai/dsh-llm@file:peer-stubs/dsh-llm': {}
 
   '@deepseek-ai/dsh-session@file:peer-stubs/dsh-session': {}
+
+  '@deepseek-ai/dsh-settings@file:peer-stubs/dsh-settings': {}
 
   '@deepseek-ai/dsh-timeout@file:peer-stubs/dsh-timeout': {}
 

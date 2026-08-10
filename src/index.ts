@@ -23,6 +23,11 @@
  * (registered through the conditional `ctx.inject(['commands'], ...)` child)
  * drive a per-session override consulted by the runtime gate — the commands
  * start/stop per-session runtimes without touching the persisted config.
+ * Settings (plan dsh-advisor-settings-n2): the plugin-row config is the
+ * composition base of the `advisor` settings namespace (`src/settings.ts`),
+ * read live through the bridge source; committed settings edits re-apply
+ * derived state (immuneTurns / maxDeltaMessages / per-session runtimes)
+ * without a restart.
  *
  * @module dsh-advisor
  */
@@ -36,6 +41,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-commands'
 import { resolveAdvisorConfig } from './config'
 import type { AdvisorConfig, ResolvedAdvisorConfig } from './config'
+import { installAdvisorSettings } from './settings'
 import { SessionTranscriptObserver } from './transcript'
 import type { Delta } from './transcript'
 import { AdvisorRuntime } from './advisor-runtime'
@@ -55,13 +61,23 @@ export { Config } from './config'
 export type { AdvisorConfig, ResolvedAdvisorConfig } from './config'
 
 export function apply(ctx: Context, config: AdvisorConfig) {
-  // T2: load + validate config (explicit provider/model gate — no model call
-  // without both). Unknown keys / malformed config throw here, rejecting the
+  // T2: the explicit provider/model gate — no model call without both
+  // (spec §5.2). Unknown keys / malformed config throw here, rejecting the
   // plugin row at load; the gate resolves to disabled-with-reason instead.
-  const resolved = resolveAdvisorConfig(config)
+  //
+  // T1-settings (plan dsh-advisor-settings-n2): the plugin-row config is the
+  // composition BASE of the `advisor` settings namespace. The runtime reads
+  // the LIVE composed value through the bridge source (schema defaults →
+  // base → settings user layer); with no settings service the source is
+  // exactly `config` — behavior identical to today. The hard gate is applied
+  // to every read: `resolveAdvisorConfig` stays the SSOT for the
+  // disabled-with-reason resolution.
+  const bridge = installAdvisorSettings(ctx, config)
+  const sourceConfig = (): AdvisorConfig => bridge.source()
+  const resolved = (): ResolvedAdvisorConfig => resolveAdvisorConfig(sourceConfig())
   ctx.logger('advisor').debug('dsh-advisor loaded', {
-    enabled: resolved.enabled,
-    disabledReason: resolved.disabledReason,
+    enabled: resolved().enabled,
+    disabledReason: resolved().disabledReason,
   })
 
   // T7: the per-session override mechanism — `/advisor on|off|toggle` write
@@ -77,7 +93,7 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   const overrides = new AdvisorSessionOverrides(config.enabled)
   const effectiveEnabled = (sessionId: string): boolean => overrides.effective(sessionId)
   const effectiveConfig = (sessionId: string): ResolvedAdvisorConfig =>
-    resolveAdvisorConfig({ ...config, enabled: effectiveEnabled(sessionId) })
+    resolveAdvisorConfig({ ...sourceConfig(), enabled: effectiveEnabled(sessionId) })
 
   // T3+T4: per-session transcript observation wired into one advisor runtime
   // per session. On each stepped reviewable turn/end a bounded markdown delta
@@ -91,7 +107,7 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // steer), and the immuneTurns cooldown (spec §6). Accepted notes from the
   // runtime's onNote are routed here; missing agent → drop + log (KD-4).
   const delivery = new AdvisorDelivery({
-    immuneTurns: resolved.immuneTurns,
+    immuneTurns: resolved().immuneTurns,
     // Registry fallback (KD-4): covers agents published before this plugin
     // loaded, whose `agent/created` was never observed. The delivery module is
     // session-id-string-typed; the registry key is the branded SessionId.
@@ -118,7 +134,7 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     runtime = new AdvisorRuntime({
       provider: effective.provider!,
       model: effective.model!,
-      systemPrompt: resolved.systemPrompt || DEFAULT_ADVISOR_SYSTEM_PROMPT,
+      systemPrompt: resolved().systemPrompt || DEFAULT_ADVISOR_SYSTEM_PROMPT,
       llm: ctx.llm,
       onNote: (note: AdviceNote) => {
         // Accepted notes only — the runtime's emission guard (T5) already
@@ -144,7 +160,7 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   }
 
   const observer = new SessionTranscriptObserver({
-    maxDeltaMessages: resolved.maxDeltaMessages,
+    maxDeltaMessages: resolved().maxDeltaMessages,
     onSteppedTurnEnd: (sessionId: string) => {
       // One completed stepped primary turn — decrement the immuneTurns
       // cooldown (T6, spec §6). Fires before the delta render, so the note
@@ -194,6 +210,26 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     overrides.clear(session.id)
   })
 
+  // T1-settings live re-apply: construction-time latches (immuneTurns on the
+  // delivery, maxDeltaMessages on the observer, systemPrompt + provider/model
+  // on each per-session runtime) are re-derived from the NEW source on every
+  // committed settings change and re-applied — delivery/observer update in
+  // place, per-session runtimes rebuild through the existing dispose/ensure
+  // path (no process restart). The S4 gate is re-applied by the resolver on
+  // every read, so a settings edit can never start a gated model call (SSOT
+  // unchanged); the config-level fallback switch follows the live source so
+  // new sessions pick up a Settings-page `enabled` edit immediately.
+  bridge.onChange(() => {
+    const next = resolved()
+    delivery.setImmuneTurns(next.immuneTurns)
+    observer.setMaxDeltaMessages(next.maxDeltaMessages)
+    overrides.setConfigEnabled(sourceConfig().enabled)
+    for (const sessionId of [...runtimes.keys()]) {
+      disposeRuntime(sessionId)
+      ensureRuntime(sessionId)
+    }
+  })
+
   // T7: the `/advisor` command controller — the commands' session-scoped
   // operations against the observer/runtimes above. `/advisor on` seeds the
   // observer cursor to the current transcript length (KD-5 seed-on-enable —
@@ -237,8 +273,8 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       return {
         enabled: effective.enabled,
         ...(effective.disabledReason === undefined ? {} : { disabledReason: effective.disabledReason }),
-        provider: resolved.provider,
-        model: resolved.model,
+        provider: resolved().provider,
+        model: resolved().model,
         runtimeStatus: runtime?.status() ?? 'disabled',
         pendingCount: runtime?.pendingCount ?? 0,
         lastActivityAt: runtime?.lastActivity,

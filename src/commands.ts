@@ -71,11 +71,21 @@ export function parseAdvisorCommand(rawInput: string): AdvisorCommand {
 export class AdvisorSessionOverrides {
   private readonly overrides = new Map<string, boolean>()
 
-  constructor(private readonly configEnabled: boolean) {}
+  constructor(private configEnabled: boolean) {}
 
   /** Effective switch for one session: `override ?? config.enabled`. */
   effective(sessionId: string): boolean {
     return this.overrides.get(sessionId) ?? this.configEnabled
+  }
+
+  /**
+   * Update the config-level fallback switch (live config — settings onChange,
+   * plan dsh-advisor-settings-n2 T1). Sessions with an explicit override keep
+   * it; every other session follows the new switch, so a Settings-page edit
+   * takes effect for new sessions without touching the override mechanism.
+   */
+  setConfigEnabled(enabled: boolean): void {
+    this.configEnabled = enabled
   }
 
   /** Set the override for one session. */
