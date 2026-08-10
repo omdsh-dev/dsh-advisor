@@ -1,0 +1,9 @@
+{
+  "name": "@deepseek-ai/dsh-commands",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Dev-time minimal functional stand-in for the dsh-advisor plugin repo. The real package is private (not on the npm registry) and ships from the host dsh app at runtime; this stub provides the consumed type surface (CommandDefinition / CommandInvocation / CommandResult / CommandDescriptor / ParsedCommand, CommandId) and just enough runtime for real-composition tests (name normalization, fiber-scoped registry, handler execution via parseCommand). Mirrors dsh-private commit b8343cb (2026-08-09 snapshot)."
+}
