@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Browser half: JSX via the automatic runtime (react/jsx-runtime stays a
+    // loader-table external) and the DOM libs the client code compiles against.
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    // Client sources import siblings with explicit .ts/.tsx extensions
+    // (dsh-private convention); legal under emitDeclarationOnly / noEmit.
+    "allowImportingTsExtensions": true,
+    // Used in two modes:
+    // - build (scripts/build-client.mjs): declaration-only emit into lib/client/
+    //   (the bundle is esbuild's, the .d.ts tree is tsc's);
+    // - typecheck (`tsc -p tsconfig.client.json --noEmit`): the CLI flag wins
+    //   over these two and nothing is emitted.
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "sourceMap": false,
+    "rootDir": "src/client",
+    "outDir": "lib/client"
+  },
+  "include": ["src/client"],
+  // The base program excludes src/client (node side); this client program
+  // re-includes it, so the inherited exclude must be cleared.
+  "exclude": []
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@deepseek-ai/dsh-client-connection",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts"
+    },
+    "./client": {
+      "types": "./index.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "description": "Dev-time type-only shim for the dsh-advisor plugin repo. The real package is private (not on the npm registry) and ships from the host dsh app at runtime; this stub provides the consumed wire types (IApiClient with the settings/llm domains, SettingsNamespaceView, SettingsPathOpView, ConnectionHandle, RpcRequest/RpcResponse/RpcResult minimal shapes). The client half imports these type-only; the wire value reaches the section via cordis injection (ctx.get('connection')). Mirrors dsh-private commit b8343cb (2026-08-09 snapshot)."
+}

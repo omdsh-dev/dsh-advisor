@@ -17,5 +17,9 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src", "tests"]
+  "include": ["src", "tests"],
+  // The client half (src/client) typechecks under tsconfig.client.json (jsx:
+  // react-jsx + DOM libs); this node-side program excludes it so `tsc --noEmit`
+  // never sees the .tsx sources without the JSX flag.
+  "exclude": ["src/client"]
 }
