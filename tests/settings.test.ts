@@ -21,7 +21,8 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from 'cordis'
-import { MemorySettings, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import { MemorySettings } from './support/memory-settings'
 import { ADVISOR_SETTINGS_NAMESPACE, installAdvisorSettings } from '../src/settings'
 import { Config, resolveAdvisorConfig } from '../src/config'
 import type { AdvisorConfig } from '../src/config'

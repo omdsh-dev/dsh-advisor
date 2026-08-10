@@ -1,9 +1,0 @@
-{
-  "name": "@deepseek-ai/dsh-settings",
-  "version": "0.0.1",
-  "private": true,
-  "type": "module",
-  "main": "index.ts",
-  "types": "index.ts",
-  "description": "Dev-time minimal functional stand-in for the dsh-advisor plugin repo. The real package is private (not on the npm registry) and ships from the host dsh app at runtime; this stub mirrors the consumed contract surface of the dsh-private packages/settings/settings seam (settingsNamespace branding, the installSettingsSection optional-settings consumer wiring with entry fallback, and the SettingsScope / SettingsDescriptor / SettingsSectionHooks types) plus a minimal in-memory settings service (MemorySettings) with register/describe/get/update/replace and the schema-defaults → composition-base → user-layer resolution, honest enough for real-composition tests. Mirrors dsh-private commit b8343cb (2026-08-09 snapshot)."
-}

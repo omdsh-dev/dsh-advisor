@@ -40,7 +40,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from 'cordis'
-import { MemorySettings } from '@deepseek-ai/dsh-settings'
+import { MemorySettings } from './support/memory-settings'
 import { LlmAdapter, LlmService, MessageId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -153,9 +153,10 @@ function fullConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
  * once the `advisor` namespace is registered (the write path is only valid
  * after that).
  * @param seedUser - optional pre-existing settings user section written BEFORE
- *   the plugin loads (attach-time pin, qc1 S-1 / qc3 S-2): the dev stub
- *   exposes no public pre-seed seam, so the test reaches into its sections
- *   map (private at the TS level only).
+ *   the plugin loads (attach-time pin, qc1 S-1 / qc3 S-2): `MemorySettings`
+ *   exposes a `seed()` seam (raw-document publish before registration), the
+ *   dev-time mirror of a file-backed provider whose document already contains
+ *   the section when the plugin loads.
  * @param adapterOverride - optional custom adapter (e.g. the gated backlog
  *   probe); defaults to a fresh {@link StubAdapter} over `replies`.
  */
@@ -173,8 +174,8 @@ async function composeLiveHarness(
   ctx.provide('sessions', {} as never)
   ctx.provide('agents', { get: () => undefined } as never)
   if (seedUser !== undefined) {
-    const settings = ctx.settings as unknown as { sections: Map<string, Record<string, unknown>> }
-    settings.sections.set(ADVISOR_SETTINGS_NAMESPACE as string, seedUser)
+    const settings = ctx.settings as unknown as MemorySettings
+    settings.seed(ADVISOR_SETTINGS_NAMESPACE, seedUser)
   }
   await ctx.plugin(advisorPlugin, fullConfig(config))
   await vi.waitFor(() => {

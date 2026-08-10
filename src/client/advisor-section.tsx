@@ -110,8 +110,8 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
   const busy = !writable || saving
   const selectedModels = draft.provider === undefined
     ? []
-    : state.modelsByProvider.get(draft.provider) ?? []
-  const modelsEmpty = draft.provider !== undefined && state.modelsEmptyReason.has(draft.provider)
+    : state.modelsByProvider[draft.provider] ?? []
+  const modelsEmpty = draft.provider !== undefined && Object.hasOwn(state.modelsEmptyReason, draft.provider)
   // Stored values that are no longer among the current options: warn instead
   // of silently dropping them; Apply stays enabled (keep or reselect).
   const providerStale = draft.provider !== undefined

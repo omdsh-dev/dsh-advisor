@@ -33,7 +33,10 @@ function ok<T>(value: T): RpcResponse<T> {
 
 /** One unary wire failure (default code: a plain settings rejection). */
 function fail<T>(message: string, code: 'settings-rejected' | 'settings-conflict' = 'settings-rejected'): RpcResponse<T> {
-  return { rpcId: 'r' as never, result: { ok: false, error: { code, message, details: {} } } }
+  const error = code === 'settings-conflict'
+    ? { code, message, details: { ns: 'advisor' as string, expected: 1, actual: 2 } }
+    : { code, message, details: { ns: 'advisor' as string } }
+  return { rpcId: 'r' as never, result: { ok: false, error } }
 }
 
 const DEEPSEEK: ConfigurableProviderView = {
@@ -249,7 +252,7 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
     await store.load()
     await store.ensureModels('deepseek-official')
     const { modelsByProvider } = store.store.getSnapshot()
-    expect(modelsByProvider.get('deepseek-official')?.map(model => model.id)).toEqual(['ds-a', 'ds-b'])
+    expect(modelsByProvider['deepseek-official']?.map(model => model.id)).toEqual(['ds-a', 'ds-b'])
     expect(models).not.toHaveBeenCalled()
   })
 
@@ -259,7 +262,7 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
     await store.load()
     await store.ensureModels('openai')
     const { modelsByProvider } = store.store.getSnapshot()
-    expect(modelsByProvider.get('openai')?.map(model => model.id)).toEqual(['gpt-4o'])
+    expect(modelsByProvider['openai']?.map(model => model.id)).toEqual(['gpt-4o'])
     expect(models).toHaveBeenCalledTimes(1)
   })
 
@@ -295,7 +298,7 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
     deferredResolve(ok({ groups: CATALOG, failures: [] }))
     await Promise.all([first, second])
     expect(models).toHaveBeenCalledTimes(1)
-    expect(store.store.getSnapshot().modelsByProvider.get('openai')?.map(model => model.id)).toEqual(['gpt-4o'])
+    expect(store.store.getSnapshot().modelsByProvider['openai']?.map(model => model.id)).toEqual(['gpt-4o'])
   })
 
   it('does not cache a transient catalog failure: a later provider refetches', async () => {
@@ -310,11 +313,11 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
     // First resolution hits a failing catalog fetch: the provider gets the
     // empty-options reason, but the failure is NOT cached at catalog level.
     await store.ensureModels('openai')
-    expect(store.store.getSnapshot().modelsEmptyReason.get('openai')).toBe('unavailable')
+    expect(store.store.getSnapshot().modelsEmptyReason['openai']).toBe('unavailable')
     // The next provider's resolution refetches and sees the recovered catalog.
     await store.ensureModels('empty')
     expect(models).toHaveBeenCalledTimes(2)
-    expect(store.store.getSnapshot().modelsEmptyReason.get('empty')).toBe('catalog-empty')
+    expect(store.store.getSnapshot().modelsEmptyReason['empty']).toBe('catalog-empty')
   })
 
   it('marks empty options with a reason when neither source has models', async () => {
@@ -328,12 +331,12 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
     await store.ensureModels('emptylist') // profile declares an empty models list (profile wins)
     await store.ensureModels('zombie')    // not configured — nothing offered
     const { modelsByProvider, modelsEmptyReason } = store.store.getSnapshot()
-    expect(modelsByProvider.get('empty') ?? []).toEqual([])
-    expect(modelsEmptyReason.get('empty')).toBe('catalog-empty')
-    expect(modelsByProvider.get('emptylist') ?? []).toEqual([])
-    expect(modelsEmptyReason.get('emptylist')).toBe('profile-empty')
-    expect(modelsByProvider.has('zombie')).toBe(false)
-    expect(modelsEmptyReason.has('zombie')).toBe(false)
+    expect(modelsByProvider['empty'] ?? []).toEqual([])
+    expect(modelsEmptyReason['empty']).toBe('catalog-empty')
+    expect(modelsByProvider['emptylist'] ?? []).toEqual([])
+    expect(modelsEmptyReason['emptylist']).toBe('profile-empty')
+    expect(Object.hasOwn(modelsByProvider, 'zombie')).toBe(false)
+    expect(Object.hasOwn(modelsEmptyReason, 'zombie')).toBe(false)
   })
 })
 
@@ -642,7 +645,7 @@ describe('model option refresh on invalidation (qc1 W-1 / qc3 S-1)', () => {
     const store = new AdvisorSettingsStore(api)
     await store.load()
     await store.ensureModels('openai')
-    expect(store.store.getSnapshot().modelsByProvider.get('openai')?.map(model => model.id)).toEqual(['gpt-4o'])
+    expect(store.store.getSnapshot().modelsByProvider['openai']?.map(model => model.id)).toEqual(['gpt-4o'])
     expect(models).toHaveBeenCalledTimes(1)
 
     // The catalog changes on the host (a model added on the Models page).
@@ -655,7 +658,7 @@ describe('model option refresh on invalidation (qc1 W-1 / qc3 S-1)', () => {
     // caches + catalog; the next resolution must see the fresh options.
     await store.load()
     await store.ensureModels('openai')
-    expect(store.store.getSnapshot().modelsByProvider.get('openai')?.map(model => model.id)).toEqual(['gpt-5'])
+    expect(store.store.getSnapshot().modelsByProvider['openai']?.map(model => model.id)).toEqual(['gpt-5'])
     expect(models).toHaveBeenCalledTimes(2)
   })
 
@@ -665,14 +668,14 @@ describe('model option refresh on invalidation (qc1 W-1 / qc3 S-1)', () => {
     await store.load()
     store.setProvider('openai')
     await vi.waitFor(() => {
-      expect(store.store.getSnapshot().modelsByProvider.get('openai')?.map(model => model.id)).toEqual(['gpt-4o'])
+      expect(store.store.getSnapshot().modelsByProvider['openai']?.map(model => model.id)).toEqual(['gpt-4o'])
     })
 
     // A plain reload (settings/changed) drops the resolved options; the
     // select re-resolves on demand — nothing is store-lifetime anymore.
     await store.load()
-    expect(store.store.getSnapshot().modelsByProvider.has('openai')).toBe(false)
-    expect(store.store.getSnapshot().modelsEmptyReason.has('openai')).toBe(false)
+    expect(Object.hasOwn(store.store.getSnapshot().modelsByProvider, 'openai')).toBe(false)
+    expect(Object.hasOwn(store.store.getSnapshot().modelsEmptyReason, 'openai')).toBe(false)
   })
 
   it('abandons a catalog fetch started before an invalidation and refetches fresh data', async () => {
@@ -702,7 +705,7 @@ describe('model option refresh on invalidation (qc1 W-1 / qc3 S-1)', () => {
     }))
     await first
     // The stale result was dropped; the resolution loop refetched fresh.
-    expect(store.store.getSnapshot().modelsByProvider.get('openai')?.map(model => model.id)).toEqual(['gpt-5'])
+    expect(store.store.getSnapshot().modelsByProvider['openai']?.map(model => model.id)).toEqual(['gpt-5'])
     expect(models).toHaveBeenCalledTimes(2)
   })
 })
