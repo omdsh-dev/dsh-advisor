@@ -78,6 +78,29 @@ class FakeController implements AdvisorCommandController {
   }
 }
 
+/**
+ * Fake controller that models the real S4 gate re-derivation: flipping the
+ * override on for a config that lacks provider/model keeps the session
+ * gate-blocked (enabled: false + disabledReason) in the POST-flip status —
+ * the exact qc2 W-2 / qc3 I-2 trigger, where the pre-flip status has no
+ * reason yet (the gate only fires when enabled).
+ */
+class GateTripController extends FakeController {
+  constructor() {
+    super(baseStatus({ enabled: false }))
+  }
+
+  override setEnabled(sessionId: string, enabled: boolean, sessionLength?: number): void {
+    this.setCalls.push({ sessionId, enabled, sessionLength })
+    this.status = enabled
+      ? baseStatus({
+        enabled: false,
+        disabledReason: 'enabled but provider and model are missing — configure both to enable the advisor',
+      })
+      : baseStatus({ enabled: false })
+  }
+}
+
 /** Fake command registry — captures registered definitions. */
 class FakeRegistry implements AdvisorCommandRegistry {
   readonly definitions: CommandDefinition[] = []
@@ -242,6 +265,44 @@ describe('/advisor handler — toggle / on / off flip the runtime gate', () => {
     expect(result.kind).toBe('success')
     expect(result.text).toContain('no model call can start')
     expect(result.text).toContain('configure both to enable the advisor')
+  })
+
+  it('on reply carries the S4 gate caveat when the override flip itself trips the gate (qc2 W-2 / qc3 I-2)', () => {
+    // Config off + no provider/model: the pre-flip status has NO reason (the
+    // gate only fires when enabled) — the reply must be derived from the
+    // POST-flip status, which re-derives the disabled-with-reason.
+    const controller = new GateTripController()
+    const handler = registerAndGetHandler(controller)
+    const result = invoke(handler, ' on')
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('no model call can start')
+    expect(result.text).toContain('configure both to enable the advisor')
+    expect(controller.setCalls).toHaveLength(1)
+  })
+
+  it('toggle-to-on reply carries the S4 gate caveat when the flip trips the gate', () => {
+    const controller = new GateTripController()
+    const handler = registerAndGetHandler(controller)
+    const result = invoke(handler, '')
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('no model call can start')
+    expect(controller.setCalls).toHaveLength(1)
+  })
+
+  it('on reaches setEnabled (recovery) when the runtime is halted or quota-paused (qc1/qc2/qc3 W-1/I-4)', () => {
+    // "already on" would be a dead end for these states — the 'on' handler
+    // must route them into setEnabled so the controller can resume/rebuild.
+    const halted = new FakeController(baseStatus({ enabled: true, runtimeStatus: 'halted' }))
+    const haltedHandler = registerAndGetHandler(halted)
+    const haltedResult = invoke(haltedHandler, ' on')
+    expect(haltedResult.text).not.toContain('already on')
+    expect(halted.setCalls.at(-1)).toEqual({ sessionId: 'session-1', enabled: true, sessionLength: 0 })
+
+    const quota = new FakeController(baseStatus({ enabled: true, runtimeStatus: 'quota_exhausted' }))
+    const quotaHandler = registerAndGetHandler(quota)
+    const quotaResult = invoke(quotaHandler, ' on')
+    expect(quotaResult.text).not.toContain('already on')
+    expect(quota.setCalls.at(-1)).toEqual({ sessionId: 'session-1', enabled: true, sessionLength: 0 })
   })
 })
 

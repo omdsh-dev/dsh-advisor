@@ -68,10 +68,13 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // here and the runtime gate consults `override ?? config.enabled`, so the
   // commands start/stop per-session runtimes WITHOUT touching the persisted
   // config (spec §4 mapping — omp `/advisor` semantics). Ephemeral: entries
-  // are cleared on `agent/disposed` / `session/disposed` below. The explicit
-  // S4 gate (spec §5.2) is re-applied per session through the config
-  // resolver, which is the SSOT for the disabled-with-reason text.
-  const overrides = new AdvisorSessionOverrides(resolved.enabled)
+  // are cleared on `agent/disposed` / `session/disposed` below. Seeded with
+  // the RAW config switch (not the post-gate `resolved.enabled`): a config-
+  // enabled-but-gate-blocked session (enabled without provider/model) then
+  // re-derives the disabled-with-reason through the resolver, so `/advisor
+  // status` shows the reason (spec §5.2; qc3 I-1) — the gate itself still
+  // blocks every runtime (the resolver is the SSOT for the gate).
+  const overrides = new AdvisorSessionOverrides(config.enabled)
   const effectiveEnabled = (sessionId: string): boolean => overrides.effective(sessionId)
   const effectiveConfig = (sessionId: string): ResolvedAdvisorConfig =>
     resolveAdvisorConfig({ ...config, enabled: effectiveEnabled(sessionId) })
@@ -194,21 +197,38 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // T7: the `/advisor` command controller — the commands' session-scoped
   // operations against the observer/runtimes above. `/advisor on` seeds the
   // observer cursor to the current transcript length (KD-5 seed-on-enable —
-  // no full-history replay) and creates/resumes the session runtime; `/advisor
-  // off` disposes it (abort in-flight, drop backlog). The S4 gate reason is
-  // re-derived through the config resolver, the SSOT for the disabled-with-
-  // reason text (spec §5.2).
+  // no full-history replay) and creates/resumes/recoveries the session runtime;
+  // `/advisor off` disposes it (abort in-flight, drop backlog). The S4 gate
+  // reason is re-derived through the config resolver, the SSOT for the
+  // disabled-with-reason text (spec §5.2).
   const controller: AdvisorCommandController = {
     setEnabled(sessionId: string, enabled: boolean, sessionLength?: number): void {
-      if (effectiveEnabled(sessionId) === enabled) return
-      overrides.set(sessionId, enabled)
-      if (enabled) {
-        // KD-5: seed to the current transcript length — no full replay of
-        // history that predates the enable.
-        if (sessionLength !== undefined) observer.seedTo(sessionId, sessionLength)
-        ensureRuntime(sessionId)?.resume()
-      } else {
+      // Recovery, not just a switch flip: `/advisor on` (and toggle-to-on)
+      // must restart a session advisor that is `quota_exhausted` (KD-5 —
+      // manual resume, no auto-resume timer) or `halted` (permanent model
+      // error — terminal in place, rebuilt fresh here) (qc1/qc2/qc3 W-1/I-4).
+      // The override is written only when the effective switch actually
+      // changes; enabling an already-effectively-enabled session still routes
+      // through the recovery path below instead of early-returning.
+      const already = effectiveEnabled(sessionId) === enabled
+      if (!already) overrides.set(sessionId, enabled)
+      if (!enabled) {
+        if (!already) disposeRuntime(sessionId)
+        return
+      }
+      // enabled (newly or already): KD-5 seed — no full-history replay of
+      // deltas that predate (or occurred while paused/halted under) the enable.
+      if (sessionLength !== undefined) observer.seedTo(sessionId, sessionLength)
+      const runtime = ensureRuntime(sessionId)
+      if (runtime === undefined) return // S4 explicit gate blocks model calls
+      if (runtime.status() === 'halted') {
+        // KD-5 halting is terminal in place; `/advisor on` is the manual
+        // recovery path — rebuild a fresh runtime (the S4 gate is re-applied
+        // by ensureRuntime, so this can never start a gated model call).
         disposeRuntime(sessionId)
+        ensureRuntime(sessionId)
+      } else {
+        runtime.resume() // no-op on 'running'; resumes 'quota_exhausted' (KD-5)
       }
     },
     getStatus(sessionId: string) {

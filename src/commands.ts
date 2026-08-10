@@ -173,10 +173,15 @@ export const USAGE = [
   '  /advisor status   show per-session advisor status (state, model, runtime, pending, last activity)',
 ].join('\n')
 
-/** "Enabled" outcome text — mentions the S4 gate when it blocks model calls. */
-function enableText(before: AdvisorSessionStatus): string {
-  if (before.disabledReason === undefined) return 'Advisor on for this session.'
-  return `Advisor on for this session — but no model call can start: ${before.disabledReason}`
+/**
+ * "Enabled" outcome text — mentions the S4 gate when it blocks model calls.
+ * Callers pass the status AFTER the override flip, so the caveat appears when
+ * the flip itself is what trips the gate (qc2 W-2 / qc3 I-2 — the pre-flip
+ * status cannot know the gate yet: the gate only fires when enabled).
+ */
+function enableText(status: AdvisorSessionStatus): string {
+  if (status.disabledReason === undefined) return 'Advisor on for this session.'
+  return `Advisor on for this session — but no model call can start: ${status.disabledReason}`
 }
 
 /** Build the `/advisor` handler bound to one controller. */
@@ -189,20 +194,28 @@ function createAdvisorCommandHandler(controller: AdvisorCommandController) {
         const next = !before.enabled
         // The KD-5 seed length is only meaningful when enabling.
         controller.setEnabled(sessionId, next, next ? invocation.agent.session.events.length : undefined)
-        return { kind: 'success', text: next ? enableText(before) : 'Advisor off for this session.' }
+        if (!next) return { kind: 'success', text: 'Advisor off for this session.' }
+        // Post-flip status: the reply carries the S4 gate caveat when the
+        // toggle-to-on flip trips the gate (qc2 W-2 / qc3 I-2).
+        return { kind: 'success', text: enableText(controller.getStatus(sessionId)) }
       }
       case 'on': {
         const before = controller.getStatus(sessionId)
-        if (before.enabled) {
-          return {
-            kind: 'success',
-            text: before.disabledReason === undefined
-              ? 'Advisor is already on for this session.'
-              : `Advisor is already on for this session — but no model call can start: ${before.disabledReason}`,
-          }
+        // Recovery routing (qc1/qc2/qc3 W-1/I-4): an effectively-enabled
+        // session whose runtime is halted/quota-paused must reach `setEnabled`
+        // (which resumes/rebuilds it) — a plain "already on" would be a dead
+        // end, since the only resume call site sits behind the enable path.
+        const needsRecovery = before.enabled
+          && (before.runtimeStatus === 'halted' || before.runtimeStatus === 'quota_exhausted')
+        if (before.enabled && !needsRecovery) {
+          return { kind: 'success', text: 'Advisor is already on for this session.' }
         }
         controller.setEnabled(sessionId, true, invocation.agent.session.events.length)
-        return { kind: 'success', text: enableText(before) }
+        // Reply from the POST-flip status: when the override flip trips the
+        // S4 gate (config-off + missing provider/model), the reply must say
+        // the advisor did not start and why, not a bare "Advisor on" (qc2
+        // W-2 / qc3 I-2).
+        return { kind: 'success', text: enableText(controller.getStatus(sessionId)) }
       }
       case 'off': {
         const before = controller.getStatus(sessionId)

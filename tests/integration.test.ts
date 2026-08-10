@@ -39,7 +39,7 @@ import { CallId, LlmAdapter, LlmService, MessageId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, StreamChunk, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent, SurfaceOp } from '@deepseek-ai/dsh-session'
-import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
+import type { CommandDefinition, CommandResult } from '@deepseek-ai/dsh-commands'
 import { CommandId } from '@deepseek-ai/dsh-commands'
 import * as advisorPlugin from '../src/index'
 import type { AdvisorConfig } from '../src/config'
@@ -54,6 +54,23 @@ const textReply = (text: string): readonly StreamChunk[] => [
   { type: 'text-delta', index: 0, text },
   { type: 'finish', reason: { kind: 'stop' } },
 ]
+
+/** Chunk script for a terminal provider failure (KD-5 classification input). */
+const errorReply = (failure: { message: string; code: string }): readonly StreamChunk[] => [
+  { type: 'finish', reason: { kind: 'error', failure } },
+]
+
+/** A quota/rate-limit failure → `quota_exhausted` pause (KD-5). */
+const quotaFailure = (): { message: string; code: string } => ({
+  message: 'insufficient_quota: you exceeded your current quota, please check your billing',
+  code: 'QUOTA',
+})
+
+/** A permanent failure → `halted` (KD-5): model-not-supported wording. */
+const permanentFailure = (): { message: string; code: string } => ({
+  message: "the model 'gpt-5' is not supported when using Codex with a ChatGPT account (invalid_request_error)",
+  code: 'INVALID_REQUEST',
+})
 
 /**
  * Stub `LlmAdapter`: records every `GenerateOptions` it receives and replays a
@@ -285,6 +302,35 @@ function feed(ctx: Context, session: Session, log: SessionEvent[], specs: readon
 
 /** Small deterministic wait so "zero calls" assertions see any would-be call. */
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 20))
+
+/** Invoke a real `/advisor` handler against a live session (synchronous). */
+function invokeHandler(
+  handler: CommandDefinition['handler'],
+  rawInput: string,
+  session: Session,
+): CommandResult {
+  const result = handler({
+    commandId: CommandId('cmd-qc-fix'),
+    agent: { id: session.id, session } as unknown as Agent,
+    rawInput,
+    signal: new AbortController().signal,
+  })
+  if (result instanceof Promise) throw new Error('test: /advisor handler must be synchronous')
+  return result
+}
+
+/** Compose a commands registry and return the captured real `/advisor` handler. */
+async function registerCommands(ctx: Context): Promise<CommandDefinition['handler']> {
+  const definitions: CommandDefinition[] = []
+  ctx.provide('commands', {
+    register: (definition: CommandDefinition): (() => void) => {
+      definitions.push(definition)
+      return () => {}
+    },
+  } as never)
+  await vi.waitFor(() => expect(definitions).toHaveLength(1))
+  return definitions[0]!.handler
+}
 
 // ---------------------------------------------------------------------------
 // 1. Full cycle: user → turn/end → delta → advisor call → guard → steer
@@ -532,5 +578,98 @@ describe('integration — compact / surface-replace reset the composed observer 
     expect(replay).toContain('**user**: continue')
     expect(replay).not.toContain('original prompt')
     expect(replay).not.toContain('Original reply.')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 4. QC fix wave 1 — recovery + gate-reporting wiring in the composed harness
+// ---------------------------------------------------------------------------
+
+describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix wave 1)', () => {
+  it('config-enabled-but-gate-blocked: status shows the S4 reason and /advisor on says no model call can start (qc3 I-1/I-2)', async () => {
+    const { ctx, adapter } = await composeHarness({ enabled: true }, [])
+    const { agent } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+    const handler = await registerCommands(ctx)
+
+    // `/advisor status` must show the disabled-with-reason (spec §5.2) — the
+    // gate reason previously vanished because the overrides were seeded with
+    // the POST-gate switch.
+    const status = invokeHandler(handler, ' status', session)
+    expect(status.kind).toBe('success')
+    expect(status.text).toContain('Reason:')
+    expect(status.text).toContain('configure both to enable the advisor')
+
+    // `/advisor on` reply must carry the gate caveat — not a bare "Advisor on".
+    const on = invokeHandler(handler, ' on', session)
+    expect(on.text).toContain('no model call can start')
+
+    // A full turn still starts zero model calls (hard gate holds).
+    feed(ctx, session, log, simpleTurn(1, 'do the thing', 'done'))
+    await flush()
+    expect(adapter.requests).toEqual([])
+  })
+
+  it('/advisor on resumes a quota-paused session advisor (KD-5 manual resume; qc1/qc2/qc3 W-1/I-4)', async () => {
+    const { ctx, adapter } = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [
+        [...errorReply(quotaFailure())], // turn 1 → quota_exhausted pause
+        [...textReply('{"note":"back after resume","severity":"concern"}')], // the retained batch, after resume
+      ],
+    )
+    const { agent, steer } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+    const handler = await registerCommands(ctx)
+
+    feed(ctx, session, log, simpleTurn(1, 'first', 'reply one'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+    expect(invokeHandler(handler, ' status', session).text).toContain('quota_exhausted')
+
+    // `/advisor on` must RESUME (not "already on") — the retained batch drains.
+    const on = invokeHandler(handler, ' on', session)
+    expect(on.text).not.toContain('already on')
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
+    expect(adapter.requests).toHaveLength(2)
+    expect(steer.mock.calls[0]![0]).toMatchObject({
+      role: 'user',
+      source: { kind: ADVISOR_SOURCE_KIND },
+    })
+  })
+
+  it('/advisor on rebuilds a halted session advisor after a permanent model error (qc1/qc2/qc3 W-1/I-4)', async () => {
+    const { ctx, adapter } = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [
+        [...errorReply(permanentFailure())], // turn 1 → permanent → halted
+        [...textReply('{"note":"fresh start","severity":"concern"}')], // the rebuilt runtime
+      ],
+    )
+    const { agent, steer } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+    const handler = await registerCommands(ctx)
+
+    feed(ctx, session, log, simpleTurn(1, 'first', 'reply one'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+    expect(invokeHandler(handler, ' status', session).text).toContain('halted')
+
+    // `/advisor on` must rebuild the runtime (not "already on") — deltas
+    // dropped while halted are not replayed, but the next turn is reviewed.
+    const on = invokeHandler(handler, ' on', session)
+    expect(on.text).not.toContain('already on')
+    feed(ctx, session, log, simpleTurn(2, 'second', 'reply two'))
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
+
+    expect(adapter.requests).toHaveLength(2)
+    const delta = deltaTextOf(adapter.requests[1]!)
+    expect(delta).toContain('**user**: second')
+    expect(delta).not.toContain('first')
+    expect(steer.mock.calls[0]![0]).toMatchObject({
+      role: 'user',
+      source: { kind: ADVISOR_SOURCE_KIND },
+    })
   })
 })
