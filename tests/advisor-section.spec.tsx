@@ -20,7 +20,7 @@ import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 import { AdvisorSection } from '../src/client/advisor-section'
 import type { AdvisorSectionInjected, AdvisorSectionProps } from '../src/client/advisor-section'
 import { AdvisorSettingsStore } from '../src/client/advisor-store'
-import { en } from '../src/client/locales'
+import { en, zh } from '../src/client/locales'
 
 afterEach(cleanup)
 
@@ -367,11 +367,30 @@ describe('AdvisorSection', () => {
     // exposure boundary): the form must not present defaults + a writable
     // Apply that the host would refuse — the notice replaces it.
     await mountSection({ advisor: null })
-    expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
+    const notice = screen.getByText(en.namespaceUnavailable)
+    expect(notice).toBeTruthy()
+    // Host-exposure-fix task 2: the notice must point at the working config
+    // path (the plugin config row in the profile's cordis.patch.yml) and must
+    // not suggest /advisor as a configuration channel — it is a per-session
+    // toggle only and cannot supply provider/model.
+    expect(notice.textContent).toContain('cordis.patch.yml')
+    expect(notice.textContent).toContain('/advisor')
+    expect(notice.textContent).toMatch(/only toggles the advisor per session/i)
+    expect(notice.textContent).toMatch(/cannot supply provider\/model/i)
     expect(screen.queryByRole('button', { name: en.apply })).toBeNull()
     expect(screen.queryByRole('button', { name: en.cancel })).toBeNull()
     expect(screen.queryByLabelText(en.enabled)).toBeNull()
     expect(screen.queryByLabelText(en.provider)).toBeNull()
+  })
+
+  it('mirrors the unexposed-namespace guidance in zh (plugin config row + toggle-only /advisor)', () => {
+    // The zh dictionary mirrors en; the guidance must carry the same key
+    // content: the cordis.patch.yml config row and the /advisor toggle-only
+    // clarification (it cannot supply provider/model).
+    expect(zh.namespaceUnavailable).toContain('cordis.patch.yml')
+    expect(zh.namespaceUnavailable).toContain('/advisor')
+    expect(zh.namespaceUnavailable).toMatch(/开关/)
+    expect(zh.namespaceUnavailable).toMatch(/无法提供|不能提供/)
   })
 
   it('renders the load failure with a working retry', async () => {
