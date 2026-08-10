@@ -19,7 +19,10 @@
  * halt — never park the primary). The emission guard (T5) gates extracted
  * notes before delivery; the delivery router (T6) routes accepted notes into
  * the primary agent (nit → inject, concern/blocker → steer, immuneTurns
- * cooldown, KD-4 agent map). Commands (T7) land in T7–T8.
+ * cooldown, KD-4 agent map). T7: `/advisor` toggle/on/off/status commands
+ * (registered through the conditional `ctx.inject(['commands'], ...)` child)
+ * drive a per-session override consulted by the runtime gate — the commands
+ * start/stop per-session runtimes without touching the persisted config.
  *
  * @module dsh-advisor
  */
@@ -28,14 +31,19 @@ import type { Context } from 'cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+// Type-only edge: resolves `ctx.commands` for the optional command child
+// (T7 — conditional `ctx.inject(['commands'], ...)` activation).
+import type {} from '@deepseek-ai/dsh-commands'
 import { resolveAdvisorConfig } from './config'
-import type { AdvisorConfig } from './config'
+import type { AdvisorConfig, ResolvedAdvisorConfig } from './config'
 import { SessionTranscriptObserver } from './transcript'
 import type { Delta } from './transcript'
 import { AdvisorRuntime } from './advisor-runtime'
 import type { AdviceNote } from './advisor-runtime'
 import { AdvisorDelivery } from './delivery'
 import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts'
+import { AdvisorSessionOverrides, registerAdvisorCommands } from './commands'
+import type { AdvisorCommandController } from './commands'
 
 export const name = 'dsh-advisor'
 
@@ -55,7 +63,18 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     enabled: resolved.enabled,
     disabledReason: resolved.disabledReason,
   })
-  if (!resolved.enabled) return
+
+  // T7: the per-session override mechanism — `/advisor on|off|toggle` write
+  // here and the runtime gate consults `override ?? config.enabled`, so the
+  // commands start/stop per-session runtimes WITHOUT touching the persisted
+  // config (spec §4 mapping — omp `/advisor` semantics). Ephemeral: entries
+  // are cleared on `agent/disposed` / `session/disposed` below. The explicit
+  // S4 gate (spec §5.2) is re-applied per session through the config
+  // resolver, which is the SSOT for the disabled-with-reason text.
+  const overrides = new AdvisorSessionOverrides(resolved.enabled)
+  const effectiveEnabled = (sessionId: string): boolean => overrides.effective(sessionId)
+  const effectiveConfig = (sessionId: string): ResolvedAdvisorConfig =>
+    resolveAdvisorConfig({ ...config, enabled: effectiveEnabled(sessionId) })
 
   // T3+T4: per-session transcript observation wired into one advisor runtime
   // per session. On each stepped reviewable turn/end a bounded markdown delta
@@ -78,14 +97,24 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   })
 
   const runtimes = new Map<string, AdvisorRuntime>()
-  const ensureRuntime = (sessionId: string): AdvisorRuntime => {
+  /**
+   * Create (or return) the runtime for one session, gated on the effective
+   * switch: `undefined` when the session is disabled or the S4 explicit gate
+   * blocks model calls (effective enabled without provider/model — spec
+   * §5.2). T7's `/advisor on` turns a session on without a config change by
+   * flipping the override, which this gate reads.
+   */
+  const ensureRuntime = (sessionId: string): AdvisorRuntime | undefined => {
+    if (!effectiveEnabled(sessionId)) return undefined
     let runtime = runtimes.get(sessionId)
     if (runtime !== undefined) return runtime
-    // The explicit gate (T2) guarantees provider + model when enabled — the
-    // runtime is only ever created after the `!resolved.enabled` early return.
+    const effective = effectiveConfig(sessionId)
+    // The re-resolved config guarantees provider + model when enabled — the
+    // runtime is only constructed behind the gate.
+    if (!effective.enabled) return undefined
     runtime = new AdvisorRuntime({
-      provider: resolved.provider!,
-      model: resolved.model!,
+      provider: effective.provider!,
+      model: effective.model!,
       systemPrompt: resolved.systemPrompt || DEFAULT_ADVISOR_SYSTEM_PROMPT,
       llm: ctx.llm,
       onNote: (note: AdviceNote) => {
@@ -126,8 +155,9 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     onDelta: (sessionId: string, delta: Delta) => {
       // Lazy creation fallback covers agents that existed before this plugin
       // loaded (their `agent/created` was never observed); `agent/created`
-      // below creates eagerly for the common path.
-      ensureRuntime(sessionId).enqueue(delta)
+      // below creates eagerly for the common path. The runtime gate drops the
+      // delta for sessions that are disabled or S4-gate-blocked (T7).
+      ensureRuntime(sessionId)?.enqueue(delta)
     },
   })
 
@@ -137,9 +167,9 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // Per-session runtime lifecycle. Spec KD-5(c) pins `agent/disposed`;
   // `session/disposed` is the store-level pair (both are idempotent — a
   // runtime is disposed at most once, whichever signal lands first). `agent/created`
-  // creates the runtime eagerly (plan T4) and registers the agent in the
-  // KD-4 delivery map (T6); the observer fallback covers pre-existing agents
-  // (KD-4-style robustness).
+  // creates the runtime eagerly (plan T4) when the session is enabled and
+  // registers the agent in the KD-4 delivery map (T6); the observer fallback
+  // covers pre-existing agents (KD-4-style robustness).
   ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
     ensureRuntime(agent.id)
     delivery.registerAgent(agent)
@@ -148,10 +178,54 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     observer.disposeSession(agent.id)
     disposeRuntime(agent.id)
     delivery.unregisterAgent(agent.id)
+    overrides.clear(agent.id)
   })
   ctx.on('session/disposed', (session: Session) => {
     observer.disposeSession(session.id)
     disposeRuntime(session.id)
     delivery.unregisterAgent(session.id)
+    overrides.clear(session.id)
+  })
+
+  // T7: the `/advisor` command controller — the commands' session-scoped
+  // operations against the observer/runtimes above. `/advisor on` seeds the
+  // observer cursor to the current transcript length (KD-5 seed-on-enable —
+  // no full-history replay) and creates/resumes the session runtime; `/advisor
+  // off` disposes it (abort in-flight, drop backlog). The S4 gate reason is
+  // re-derived through the config resolver, the SSOT for the disabled-with-
+  // reason text (spec §5.2).
+  const controller: AdvisorCommandController = {
+    setEnabled(sessionId: string, enabled: boolean, sessionLength?: number): void {
+      if (effectiveEnabled(sessionId) === enabled) return
+      overrides.set(sessionId, enabled)
+      if (enabled) {
+        // KD-5: seed to the current transcript length — no full replay of
+        // history that predates the enable.
+        if (sessionLength !== undefined) observer.seedTo(sessionId, sessionLength)
+        ensureRuntime(sessionId)?.resume()
+      } else {
+        disposeRuntime(sessionId)
+      }
+    },
+    getStatus(sessionId: string) {
+      const runtime = runtimes.get(sessionId)
+      const effective = effectiveConfig(sessionId)
+      return {
+        enabled: effective.enabled,
+        ...(effective.disabledReason === undefined ? {} : { disabledReason: effective.disabledReason }),
+        provider: resolved.provider,
+        model: resolved.model,
+        runtimeStatus: runtime?.status() ?? 'disabled',
+        pendingCount: runtime?.pendingCount ?? 0,
+        lastActivityAt: runtime?.lastActivity,
+      }
+    },
+  }
+
+  // T7: the command child activates ONLY when a command registry is composed
+  // (conditional child activation — `commands` must NOT join the top-level
+  // `inject` list, T1 fix). `/advisor` toggle/on/off/status (spec §2 S5).
+  ctx.inject(['commands'], (commandCtx) => {
+    registerAdvisorCommands(commandCtx.commands, controller)
   })
 }

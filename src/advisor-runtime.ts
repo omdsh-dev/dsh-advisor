@@ -271,6 +271,8 @@ export class AdvisorRuntime {
   private disposed = false
   private consecutiveDrops = 0
   private drainPromise: Promise<void> | undefined
+  /** Epoch-ms of the last note accepted by the emission guard (T7 status). */
+  private lastActivityAt: number | undefined
 
   constructor(options: AdvisorRuntimeOptions) {
     this.provider = options.provider
@@ -293,6 +295,14 @@ export class AdvisorRuntime {
   /** Number of deltas waiting to be drained (bounded by `maxQueued`). */
   get pendingCount(): number {
     return this.queue.length
+  }
+
+  /**
+   * T7 `/advisor status` surface — epoch-ms of the last note accepted by the
+   * emission guard, or `undefined` before the first accepted note.
+   */
+  get lastActivity(): number | undefined {
+    return this.lastActivityAt
   }
 
   /**
@@ -469,6 +479,10 @@ export class AdvisorRuntime {
       // silent — the caller cannot tell an accepted from a suppressed note,
       // and a guard failure must never crash the drain (T4 F1 containment).
       if (this.guard.accept(note)) {
+        // T7: timestamp the moment a note is accepted for delivery (before
+        // onNote, so a throwing delivery seam cannot lose the activity
+        // record) — surfaced by `/advisor status` as "last activity".
+        this.lastActivityAt = Date.now()
         this.onNote(note)
       } else {
         this.logger.debug('advisor: note suppressed by emission guard', {
