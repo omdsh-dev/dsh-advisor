@@ -47,6 +47,7 @@
     "@deepseek-ai/dsh-type-meta": "^0.0.1",
     "@types/node": "^26.2.0",
     "cordis": "^4.0.0-rc.7",
+    "schemastery": "^3.18.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"
   },
