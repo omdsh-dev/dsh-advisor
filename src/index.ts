@@ -149,8 +149,12 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       delivery.onSteppedTurnEnd(sessionId)
     },
     onRewrite: (sessionId: string) => {
-      // KD-5: a compaction / surface rewrite resets the immuneTurns latch.
+      // KD-5: a compaction / surface rewrite resets the immuneTurns latch
+      // (delivery) AND the emission-guard dedupe history (runtime) — session
+      // state is being rewritten, so both latches' basis no longer applies.
+      // T8: guard reset wired through the runtime (T5 ⚠️ follow-through).
       delivery.reset(sessionId)
+      runtimes.get(sessionId)?.resetGuard()
     },
     onDelta: (sessionId: string, delta: Delta) => {
       // Lazy creation fallback covers agents that existed before this plugin

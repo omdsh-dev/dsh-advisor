@@ -348,6 +348,17 @@ export class AdvisorRuntime {
     this.kickDrain()
   }
 
+  /**
+   * KD-5 reset trigger: a compaction / surface rewrite clears the emission
+   * guard's dedupe history and per-update latch — the session state is being
+   * rewritten, so the old note history no longer applies (a note already
+   * advised before the rewrite may legitimately be advised again). The wiring
+   * (`index.ts` onRewrite) calls this alongside the delivery cooldown reset.
+   */
+  resetGuard(): void {
+    this.guard.reset()
+  }
+
   /** Resolve once the current drain run settles (test/integration hook). */
   async waitForDrain(): Promise<void> {
     await this.drainPromise
