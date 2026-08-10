@@ -374,6 +374,8 @@ describe('AdvisorSection', () => {
     // not suggest /advisor as a configuration channel — it is a per-session
     // toggle only and cannot supply provider/model.
     expect(notice.textContent).toContain('cordis.patch.yml')
+    // qc2 W-1: the guidance must name the `config:` map nesting explicitly.
+    expect(notice.textContent).toContain('config:')
     expect(notice.textContent).toContain('/advisor')
     expect(notice.textContent).toMatch(/only toggles the advisor per session/i)
     expect(notice.textContent).toMatch(/cannot supply provider\/model/i)
@@ -388,6 +390,8 @@ describe('AdvisorSection', () => {
     // content: the cordis.patch.yml config row and the /advisor toggle-only
     // clarification (it cannot supply provider/model).
     expect(zh.namespaceUnavailable).toContain('cordis.patch.yml')
+    // qc2 W-1: the zh mirror must name the `config:` map nesting like en.
+    expect(zh.namespaceUnavailable).toContain('config:')
     expect(zh.namespaceUnavailable).toContain('/advisor')
     expect(zh.namespaceUnavailable).toMatch(/开关/)
     expect(zh.namespaceUnavailable).toMatch(/无法提供|不能提供/)
