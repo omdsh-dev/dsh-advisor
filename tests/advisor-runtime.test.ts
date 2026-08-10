@@ -175,6 +175,34 @@ describe('AdvisorRuntime — drain calls llm.stream once per delta with expected
 })
 
 // ---------------------------------------------------------------------------
+// Delivery seam — a throwing onNote must never crash the drain (F1)
+// ---------------------------------------------------------------------------
+
+describe('AdvisorRuntime — a throwing onNote is contained (F1)', () => {
+  it('logs, continues the drain, and never rejects the kicker promise', async () => {
+    const llm = new FakeLlm([
+      { chunks: textReply('{"note":"first"}') },
+      { chunks: textReply('{"note":"second","severity":"concern"}') },
+    ])
+    const { runtime } = makeRuntime(llm, {
+      onNote: () => {
+        throw new Error('delivery exploded')
+      },
+    })
+
+    runtime.enqueue(delta('update one'))
+    runtime.enqueue(delta('update two'))
+    // The drain kicker (drainPromise) must resolve, not reject — an unhandled
+    // rejection here would crash the process under Node ≥22/24 defaults.
+    await expect(runtime.waitForDrain()).resolves.toBeUndefined()
+
+    expect(llm.calls).toHaveLength(2) // the drain continued past both throws
+    expect(runtime.status()).toBe('running')
+    expect(runtime.pendingCount).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // JSON-frame extraction (KD-2)
 // ---------------------------------------------------------------------------
 

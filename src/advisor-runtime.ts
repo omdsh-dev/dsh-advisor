@@ -333,7 +333,13 @@ export class AdvisorRuntime {
   private kickDrain(): void {
     if (this.draining || this.disposed) return
     if (this.state === 'quota_exhausted' || this.state === 'halted') return
-    this.drainPromise = this.drain()
+    this.drainPromise = this.drain().catch((error) => {
+      // Defense in depth: the drain is fire-and-forget, so a rejection here
+      // would be an unhandled promise rejection (process crash under Node
+      // ≥22/24 defaults). A failing advisor may only drop its own backlog —
+      // per-batch errors stay contained inside callModel.
+      this.logger.warn('advisor: drain loop failed — contained', { error })
+    })
   }
 
   /** Serialized drain loop: process the queue one delta at a time. */
@@ -440,7 +446,15 @@ export class AdvisorRuntime {
       this.logger.debug('advisor: reply yielded no note — dropped (KD-2)')
       return { kind: 'no-note' }
     }
-    this.onNote(note)
+    try {
+      this.onNote(note)
+    } catch (error) {
+      // The delivery seam (T5 emission guard / T6 injection) must never crash
+      // the drain: log and continue. The model call itself succeeded — this is
+      // not a transport failure, so retry/drop/quota/halt semantics are
+      // untouched and the note still counts as extracted.
+      this.logger.warn('advisor: onNote delivery callback threw — contained', { error })
+    }
     return { kind: 'note', note }
   }
 
