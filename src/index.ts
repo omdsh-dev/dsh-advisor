@@ -16,8 +16,10 @@
  * asynchronously via `ctx.llm.stream` (system prompt + delta, `purpose` left
  * unset, KD-5), extract `{note, severity}` (KD-2), and apply the failure
  * policy (retry-light → drop, 3-drop backlog flush, quota pause, permanent
- * halt — never park the primary). The emission guard (T5), delivery (T6), and
- * commands (T7) land in T5–T8.
+ * halt — never park the primary). The emission guard (T5) gates extracted
+ * notes before delivery; the delivery router (T6) routes accepted notes into
+ * the primary agent (nit → inject, concern/blocker → steer, immuneTurns
+ * cooldown, KD-4 agent map). Commands (T7) land in T7–T8.
  *
  * @module dsh-advisor
  */
@@ -25,12 +27,14 @@
 import type { Context } from 'cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import { resolveAdvisorConfig } from './config'
 import type { AdvisorConfig } from './config'
 import { SessionTranscriptObserver } from './transcript'
 import type { Delta } from './transcript'
 import { AdvisorRuntime } from './advisor-runtime'
 import type { AdviceNote } from './advisor-runtime'
+import { AdvisorDelivery } from './delivery'
 import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts'
 
 export const name = 'dsh-advisor'
@@ -59,6 +63,20 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // asynchronously through `ctx.llm.stream`, gates the extracted `AdviceNote`
   // through the T5 emission guard (inside the runtime, between extraction and
   // delivery), and hands accepted notes to `onNote` (T6 routes them).
+  // T6: the delivery router. Owns the KD-4 per-session agent map (keyed by
+  // agent.id === session.id, maintained on agent/created / agent/disposed
+  // below), the severity → channel mapping (nit → inject; concern/blocker →
+  // steer), and the immuneTurns cooldown (spec §6). Accepted notes from the
+  // runtime's onNote are routed here; missing agent → drop + log (KD-4).
+  const delivery = new AdvisorDelivery({
+    immuneTurns: resolved.immuneTurns,
+    // Registry fallback (KD-4): covers agents published before this plugin
+    // loaded, whose `agent/created` was never observed. The delivery module is
+    // session-id-string-typed; the registry key is the branded SessionId.
+    lookupAgent: (sessionId: string) => ctx.agents.get(sessionId as SessionId),
+    logger: ctx.logger('advisor'),
+  })
+
   const runtimes = new Map<string, AdvisorRuntime>()
   const ensureRuntime = (sessionId: string): AdvisorRuntime => {
     let runtime = runtimes.get(sessionId)
@@ -72,11 +90,14 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       llm: ctx.llm,
       onNote: (note: AdviceNote) => {
         // Accepted notes only — the runtime's emission guard (T5) already
-        // filtered suppressed ones; T6 routes the accepted note here.
-        ctx.logger('advisor').debug('advice note extracted', {
+        // filtered suppressed ones. T6 routes the accepted note to the primary
+        // agent (inject/steer); delivery throws stay contained in the runtime
+        // path (T4 F1), so a failing agent can only drop its own advice.
+        const channel = delivery.route(sessionId, note)
+        ctx.logger('advisor').debug('advice note delivered', {
           sessionId,
           severity: note.severity,
-          chars: note.note.length,
+          channel,
         })
       },
     })
@@ -92,6 +113,16 @@ export function apply(ctx: Context, config: AdvisorConfig) {
 
   const observer = new SessionTranscriptObserver({
     maxDeltaMessages: resolved.maxDeltaMessages,
+    onSteppedTurnEnd: (sessionId: string) => {
+      // One completed stepped primary turn — decrement the immuneTurns
+      // cooldown (T6, spec §6). Fires before the delta render, so the note
+      // this very turn produces is routed with the decremented cooldown.
+      delivery.onSteppedTurnEnd(sessionId)
+    },
+    onRewrite: (sessionId: string) => {
+      // KD-5: a compaction / surface rewrite resets the immuneTurns latch.
+      delivery.reset(sessionId)
+    },
     onDelta: (sessionId: string, delta: Delta) => {
       // Lazy creation fallback covers agents that existed before this plugin
       // loaded (their `agent/created` was never observed); `agent/created`
@@ -106,17 +137,21 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // Per-session runtime lifecycle. Spec KD-5(c) pins `agent/disposed`;
   // `session/disposed` is the store-level pair (both are idempotent — a
   // runtime is disposed at most once, whichever signal lands first). `agent/created`
-  // creates the runtime eagerly (plan T4); the observer fallback covers
-  // pre-existing agents (KD-4-style robustness).
+  // creates the runtime eagerly (plan T4) and registers the agent in the
+  // KD-4 delivery map (T6); the observer fallback covers pre-existing agents
+  // (KD-4-style robustness).
   ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
     ensureRuntime(agent.id)
+    delivery.registerAgent(agent)
   })
   ctx.on('agent/disposed', ({ agent }: { agent: Agent }) => {
     observer.disposeSession(agent.id)
     disposeRuntime(agent.id)
+    delivery.unregisterAgent(agent.id)
   })
   ctx.on('session/disposed', (session: Session) => {
     observer.disposeSession(session.id)
     disposeRuntime(session.id)
+    delivery.unregisterAgent(session.id)
   })
 }

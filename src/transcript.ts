@@ -16,8 +16,11 @@
  * them, rendering only on stepped `turn/end` whose `reason.kind` is
  * reviewable (`completed` | `max-tokens` | `error`; spec §4 — skip
  * `aborted`/`blocked`/`interrupted`, i.e. do not critique user-cut-short
- * turns). `index.ts` binds the cordis `session/event` / `session/disposed` /
- * `agent/disposed` listeners into an instance of this class.
+ * turns). It also exposes the T6 delivery hooks: `onSteppedTurnEnd` (one
+ * completed stepped primary turn — the immuneTurns countdown) and `onRewrite`
+ * (a compact/replace event — the KD-5 latch reset). `index.ts` binds the
+ * cordis `session/event` / `session/disposed` / `agent/disposed` listeners
+ * into an instance of this class.
  *
  * @module dsh-advisor/transcript
  */
@@ -317,6 +320,19 @@ export interface SessionObserverOptions {
   readonly maxDeltaMessages: number
   /** Invoked once per stepped reviewable turn/end with the rendered delta. */
   readonly onDelta: (sessionId: string, delta: Delta) => void
+  /**
+   * Invoked once per stepped reviewable turn/end (the same gate as `onDelta`),
+   * before the delta is rendered — the delivery module (T6) counts completed
+   * primary turns here to decrement its immuneTurns cooldown (spec §6).
+   */
+  readonly onSteppedTurnEnd?: (sessionId: string) => void
+  /**
+   * Invoked when a rewrite event is observed (`compact/*` or a non-append
+   * surface op) — the delivery module (T6) clears its immuneTurns latch here
+   * (KD-5 reset triggers). Fires before the turn gate: a rewrite can arrive
+   * outside a turn/end.
+   */
+  readonly onRewrite?: (sessionId: string) => void
 }
 
 /** `turn/end` reasons the advisor reviews (spec §4 — skip cut-short turns). */
@@ -346,12 +362,20 @@ export class SessionTranscriptObserver {
    * `turn/end` with a reviewable reason.
    */
   handleEvent(sessionId: string, events: readonly SessionEvent[], event: SessionEvent): void {
+    // KD-5 reset surface: a rewrite event (compact/*, non-append surface op)
+    // clears the delivery immuneTurns latch immediately (T6) — before the turn
+    // gate, since a rewrite can arrive outside a turn/end.
+    if (isRewriteEvent(event)) this.options.onRewrite?.(sessionId)
     if (!isReviewableTurnEnd(event)) return
     // Stepped-turn gate: the arriving turn/end must be the latest closed turn
     // that entered at least one model step (dsh semantics — no-step turns from
     // rejection / empty input / cancellation are not reviewed).
     const latest = findLastMessageTurnEnd(events)
     if (latest === undefined || latest.seq !== event.seq) return
+    // One completed stepped primary turn — the delivery module (T6) counts
+    // these to decrement its immuneTurns cooldown. Fires before the render so
+    // the note produced by this very turn routes with the decremented value.
+    this.options.onSteppedTurnEnd?.(sessionId)
     let renderer = this.renderers.get(sessionId)
     if (renderer === undefined) {
       renderer = new DeltaRenderer({ maxDeltaMessages: this.options.maxDeltaMessages })
