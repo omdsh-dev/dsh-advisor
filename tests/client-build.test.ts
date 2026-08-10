@@ -20,7 +20,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -44,6 +44,15 @@ const CLIENT_EXTERNALS: readonly string[] = [
 
 /** Bundled entry id stamped into the load handoff. */
 const BUNDLE_ID = 'dsh-advisor'
+
+/** True when the client program contains `.tsx` sources (JSX must then compile to the automatic runtime). */
+function programHasTsx(dir: string): boolean {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory() && programHasTsx(resolve(dir, entry.name))) return true
+    if (entry.isFile() && entry.name.endsWith('.tsx')) return true
+  }
+  return false
+}
 
 describe('client bundle contract (scripts/build-client.mjs)', () => {
   it('builds lib/client.js from src/client/index.ts', () => {
@@ -78,5 +87,21 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     for (const forbidden of ['dsh-client-connection', 'dsh-client-locale', 'dsh-client-ui-settings']) {
       expect(bundle, `no require of @deepseek-ai/${forbidden}`).not.toContain(`require("@deepseek-ai/${forbidden}`)
     }
+  })
+
+  it('compiles .tsx with the automatic JSX runtime: requires react/jsx-runtime, no free React global', () => {
+    // T2 review Critical-1: the CLASSIC transform emits a free
+    // `React.createElement` global that the loader module table does not
+    // provide (it answers `react/jsx-runtime`, frozen in CLIENT_EXTERNALS,
+    // but never a `React` global) -> `ReferenceError: React is not defined`
+    // on first render. Whenever the program contains .tsx sources, the
+    // bundle MUST require the automatic runtime and MUST NOT reference the
+    // free-global pattern.
+    const bundle = readFileSync(resolve(repo, 'lib/client.js'), 'utf8')
+    if (!programHasTsx(resolve(repo, 'src/client'))) return // no JSX in program: nothing to assert
+    expect(bundle, 'bundle requires react/jsx-runtime (automatic JSX runtime)').toMatch(
+      /require\(\s*["']react\/jsx-runtime["']\s*\)/,
+    )
+    expect(bundle, 'no free-global React.createElement in the bundle').not.toMatch(/React\.createElement/)
   })
 })

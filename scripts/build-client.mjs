@@ -67,6 +67,12 @@ const result = await build({
   format: 'cjs',
   platform: 'browser',
   target: 'es2020',
+  // Automatic JSX runtime (T2 review Critical-1): the CLASSIC transform emits
+  // a free `React.createElement` global that the loader module table does not
+  // provide -> ReferenceError on first render. The automatic runtime emits
+  // `require("react/jsx-runtime")` instead, which IS a frozen CLIENT_EXTERNALS
+  // entry (below) and the loader answers it — same as dsh-private's bundles.
+  jsx: 'automatic',
   // Externals resolve through the loader module table (the injected require);
   // a require() the table cannot answer is a guaranteed runtime throw, so the
   // rule is the table list itself: no opinion for table entries, bundle
