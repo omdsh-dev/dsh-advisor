@@ -93,7 +93,7 @@ function isInterrupting(severity: AdviceSeverity): boolean {
  * immuneTurns cooldown. Cordis-free, so the routing logic is unit-testable.
  */
 export class AdvisorDelivery {
-  private readonly immuneTurns: number
+  private immuneTurns: number
   private readonly lookupAgent: (sessionId: string) => AdvisorDeliveryAgent | undefined
   private readonly logger: AdvisorDeliveryLogger
   /** KD-4 per-session agent map, keyed by `agent.id` (=== session.id). */
@@ -120,6 +120,16 @@ export class AdvisorDelivery {
   unregisterAgent(sessionId: string): void {
     this.agents.delete(sessionId)
     this.cooldown.delete(sessionId)
+  }
+
+  /**
+   * Update the immuneTurns cooldown length (live config — settings onChange,
+   * plan dsh-advisor-settings-n2 T1). The fence is re-armed with the new
+   * length on the next real steer; the per-session cooldown countdown itself
+   * is untouched, so the delivery semantics (spec §6) never change mid-window.
+   */
+  setImmuneTurns(value: number): void {
+    this.immuneTurns = value
   }
 
   /**

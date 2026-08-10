@@ -179,7 +179,7 @@ function renderMessage(message: Message): string {
  *   (drives the truncation marker on replay renders).
  */
 export class DeltaRenderer {
-  private readonly maxDeltaMessages: number
+  private maxDeltaMessages: number
   private cursor = 0
   private readonly surface: number[] = []
   private readonly messages = new Map<number, Message>()
@@ -188,6 +188,15 @@ export class DeltaRenderer {
 
   constructor(options?: Partial<DeltaRendererOptions>) {
     this.maxDeltaMessages = options?.maxDeltaMessages ?? DEFAULT_MAX_DELTA_MESSAGES
+  }
+
+  /**
+   * Update the bounded message window (live config — settings onChange, plan
+   * dsh-advisor-settings-n2 T1). Existing fold state is kept; the new bound
+   * applies from the next render on.
+   */
+  setMaxDeltaMessages(value: number): void {
+    this.maxDeltaMessages = value
   }
 
   /**
@@ -352,8 +361,23 @@ export class SessionTranscriptObserver {
   private readonly renderers = new Map<string, DeltaRenderer>()
   /** seedTo lengths issued before a session's renderer existed (KD-5 enable). */
   private readonly pendingSeeds = new Map<string, number>()
+  /** Bounded delta window (KD-3); forwarded to every per-session renderer. */
+  private maxDeltaMessages: number
 
-  constructor(private readonly options: SessionObserverOptions) {}
+  constructor(private readonly options: SessionObserverOptions) {
+    this.maxDeltaMessages = options.maxDeltaMessages
+  }
+
+  /**
+   * Update the bounded delta window (live config — settings onChange, plan
+   * dsh-advisor-settings-n2 T1): the observer default AND every live
+   * per-session renderer, so existing sessions pick up the new bound without
+   * losing their fold state.
+   */
+  setMaxDeltaMessages(value: number): void {
+    this.maxDeltaMessages = value
+    for (const renderer of this.renderers.values()) renderer.setMaxDeltaMessages(value)
+  }
 
   /**
    * Feed one session event (mirroring the cordis `session/event` listener:
@@ -378,7 +402,7 @@ export class SessionTranscriptObserver {
     this.options.onSteppedTurnEnd?.(sessionId)
     let renderer = this.renderers.get(sessionId)
     if (renderer === undefined) {
-      renderer = new DeltaRenderer({ maxDeltaMessages: this.options.maxDeltaMessages })
+      renderer = new DeltaRenderer({ maxDeltaMessages: this.maxDeltaMessages })
       const seed = this.pendingSeeds.get(sessionId)
       if (seed !== undefined) {
         renderer.seedTo(seed)
