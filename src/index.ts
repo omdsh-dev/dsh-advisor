@@ -17,7 +17,7 @@ import type { Context } from 'cordis'
 export const name = 'dsh-advisor'
 
 /** Services the advisor consumes; the row loads once all are available. */
-export const inject = ['session', 'agent', 'llm']
+export const inject = ['sessions', 'agents', 'llm']
 
 export function apply(ctx: Context) {
   // T2: load + validate config (explicit provider/model gate — no model call
