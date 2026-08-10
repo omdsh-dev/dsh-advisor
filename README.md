@@ -114,6 +114,11 @@ per-session override, never the persisted config. Enabling a session whose
 config lacks `provider`/`model` starts no model call — `/advisor status` (and
 the `/advisor on` reply) shows the gate reason.
 
+`/advisor on` is also the manual recovery path: a session advisor paused by a
+quota/rate-limit (`quota_exhausted` — KD-5 has no auto-resume timer) resumes in
+place, and a halted advisor (permanent model error, e.g. invalid credentials)
+is rebuilt fresh for the session.
+
 After each stepped primary turn that ends normally (`completed`, `max-tokens`,
 or `error`), the advisor reviews the incremental transcript delta and emits at
 most one note, ranked by severity:
@@ -167,6 +172,14 @@ harness iteration roadmap):
   cost observability (next-next iteration).
 - **No secret obfuscation of delta content** — secrets present in the transcript
   can reach the advisor model; mitigate by configuring a trusted reviewer model.
+- **No quarantine of unsafe advisor output** — a misbehaving note can carry
+  directive text; the JSON frame + validation + advisory-only framing
+  (`[advisor:…]`, "weigh, don't blindly obey") are the only mitigation, and the
+  note is delivered as-is into the primary transcript (roadmap).
+- **No `syncBacklog` catch-up wait** — a far-behind advisor does not wait for
+  the primary loop; its backlog is bounded and dropped (never parks the
+  primary), so advisor notes may arrive after the next primary turn started
+  (roadmap: context-maintenance batch).
 - **Bounded advisor context** — long-session full replays are truncated
   (`maxDeltaMessages`), so the advisor may lose early context after compaction;
   advisor context maintenance is roadmap (next-next iteration).
