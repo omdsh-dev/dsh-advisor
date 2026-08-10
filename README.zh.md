@@ -52,7 +52,7 @@ tarball 附带的是构建产物（`lib/` + `cordis.patch.yml` + `patches/` 与 
 
 ### 从 git 安装构建
 
-git 安装（见上）拉取的是**源码而非构建产物**，因此组合包会从源码自行构建：`package.json` 声明了 `"prepare": "pnpm build && bash scripts/autopatch-install.sh"` —— 与打包 tarball 时 `prepack` 运行的构建相同，外加安装期宿主 patch 自动应用 —— pnpm 会在安装完 devDependencies 后自动运行它。devDependencies 从已提交的 `peer-stubs/` 类型垫片解析（十四个直接消费的 `@deepseek-ai/dsh-*` 包为 `file:./peer-stubs/<name>`：最小运行时 stand-in 或纯类型垫片，每个记录其所镜像的 dsh-private commit），因此任何克隆里的 `pnpm install` 都是自洽的 —— 无需访问私有 registry 包，也无需本地 dsh 检出。（早期的 packaging 说明曾警告 git 安装会失败，因为组合包没有 `prepare` 脚本；该问题已解决 —— git 安装现已端到端可用。）
+git 安装（见上）拉取的是**源码而非构建产物**，因此组合包会从源码自行构建：`package.json` 声明了 `"prepare": "node scripts/setup-dsh-links.mjs && pnpm build && bash scripts/autopatch-install.sh"` —— 开发期链接农场、与打包 tarball 时 `prepack` 运行的构建相同，外加安装期宿主 patch 自动应用 —— pnpm 会在安装完 devDependencies 后自动运行它。私有 `@deepseek-ai/dsh-*` 包（以及内置 `cordis`/`react`/`react-dom` 身份）的开发期解析来自**本地 dsh 源码树**，经 `$DSH_SOURCE_DIR` / `$DSH_HOME`（见[开发](#开发)）—— 与宿主运行的同一棵树，因此不存在 `peer-stubs/` 副本，每位开发者解析到的都是真实包。git 安装因此要求该树（宿主 patch 自动应用本来也需要它）；具备该树后，任何克隆里的 `pnpm install` 即自洽 —— 无需访问私有 registry 包。
 
 ### 宿主 patch（Settings 页）
 
@@ -162,17 +162,20 @@ MVP 有意放弃与 omp 的完整对等。已接受的差距（在 harness 迭�
 
 ## 开发
 
-组合包在安装时自行构建：`package.json` 声明了 `"prepare": "pnpm build && bash scripts/autopatch-install.sh"`（与 `prepack` 运行的构建相同，外加安装期宿主 patch 自动应用），因此任何克隆都立即可构建。私有的 `@deepseek-ai/dsh-*` 运行时依赖在开发时从已提交的 `peer-stubs/` 类型垫片解析 —— 十四个直接消费的包声明为 `file:./peer-stubs/<name>` devDependencies（最小运行时 stand-in 或纯类型垫片），每个垫片的 `package.json` 记录了它所镜像的 dsh-private commit。无需本地 dsh 检出或额外设置 —— 任何克隆里一次普通的 `pnpm install` 即自洽。开发时的 `cordis` 从 npm registry 解析（`^4.0.0-rc.7`），而非链接的本地检出；请让它与 dsh 宿主内置的 cordis 基线保持一致 —— 宿主版本变化时，devDep 与 lockfile 一起升级。
+组合包在安装时自行构建：`package.json` 声明了 `"prepare": "node scripts/setup-dsh-links.mjs && pnpm build && bash scripts/autopatch-install.sh"`（开发期链接农场、与 `prepack` 相同的构建、外加安装期宿主 patch 自动应用），因此任何克隆在 **`DSH_HOME` 指向一个含 `source/current` 的 dsh home（或 `DSH_SOURCE_DIR` 直接指向一个 dsh 源码树 —— 与宿主 patch 脚本的解析一致）** 后立即可构建。私有的 `@deepseek-ai/dsh-*` 运行时依赖**只声明为 peerDependencies**；开发期由 `scripts/setup-dsh-links.mjs`（挂在 `prepare` 上、独立命令为 `pnpm dsh:link`、用 `pnpm dsh:link:check` 校验）把该树里的**真实包**链接进 `node_modules/@deepseek-ai/` —— 树声明的每个 `@deepseek-ai/*` 包（声明 `bin` 的工具 CLI 会被跳过：链接它们会让 pnpm 向共享树写入 bin）、无 bin 的内置 `cordis` 框架 shim、以及树自带的 `react`/`react-dom` 副本（node 解析 —— 包括外部化的 CJS 依赖 —— 必须看到同一个 react 身份，即真实 client 包所用的身份；`.npmrc` 设了 `node-linker=hoisted`（dsh profile 约定），避免 `.pnpm` 逐包目录遮蔽这些链接）。农场幂等、会清理陈旧条目，并在树缺失或 peer 无法链接时给出明确指引。`.npmrc` 还设了 `auto-install-peers=false`（dsh profile 约定）：私有 peer 绝不能从 npm registry 获取。
 
 ```sh
-pnpm install      # registry deps + file: peer-stubs, no environment setup
-pnpm test         # vitest (unit + the composed integration loop)
-pnpm typecheck    # tsc --noEmit (node) + tsc -p tsconfig.client.json --noEmit + tsc -p tsconfig.spec.json --noEmit
-pnpm build        # tsc -p tsconfig.build.json emit to lib/ + node scripts/build-client.mjs (client bundle)
-pnpm pack         # build + produce dsh-advisor-0.0.1.tgz
+export DSH_HOME=~/.dsh    # 含 source/current 的 dsh home（或直接设置 DSH_SOURCE_DIR）
+pnpm install              # registry deps + 链接农场（经 prepare），无需访问私有 registry
+pnpm test                 # vitest (unit + the composed integration loop)
+pnpm typecheck            # tsc --noEmit (node) + tsc -p tsconfig.client.json --noEmit + tsc -p tsconfig.spec.json --noEmit
+pnpm build                # tsc -p tsconfig.build.json emit to lib/ + node scripts/build-client.mjs (client bundle)
+pnpm pack                 # build + produce dsh-advisor-0.0.1.tgz
 ```
 
-`prepack` 运行 `pnpm build`；`prepare` 运行构建外加宿主 patch 自动应用（`bash scripts/autopatch-install.sh`），因此 `pnpm pack` 会构建两次（每个生命周期一次）——这是为保持 git 安装可构建而接受的取舍。`postinstall` 只运行 autopatch（tarball 安装已带构建产物，完全跳过构建）。
+`cordis` 声明为确定性的 devDependency（`^4.0.0-rc.7` —— npm registry 最高就是该版本，因此范围精确钉住 dsh 宿主内置的基线）；安装后链接农场的无 bin cordis shim 仍会把 `node_modules/cordis` 覆盖为 vendored 文件，因为真实包是对着 vendored 构建类型化/运行的，模块身份要求开发期的 `import 'cordis'` 解析到同一份文件。其余公开 devDependencies（`schemastery`、`react` 等）照常从 npm registry 解析。
+
+`prepack` 运行 `pnpm build`；`prepare` 运行链接农场、构建外加宿主 patch 自动应用（`bash scripts/autopatch-install.sh`），因此 `pnpm pack` 会构建两次（每个生命周期一次）——这是为保持 git 安装可构建而接受的取舍。`postinstall` 只运行 autopatch（tarball 安装已带构建产物，完全跳过构建）。
 
 集成测试（`tests/integration.test.ts`）把插件组合进一个带 stub LLM adapter 的真实 cordis 上下文，驱动完整的 turn → delta → advisor call → inject/steer 循环。
 

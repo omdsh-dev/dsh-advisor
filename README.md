@@ -40,7 +40,8 @@ dsh plugin --profile <name> add github:dsh-external/dsh-advisor   # pin a commit
 ```
 
 A git install fetches sources, so pnpm runs the bundle's lifecycle scripts
-while installing: `prepare` (`pnpm build`) and `postinstall`
+while installing: `prepare` (the dev-time link farm from `$DSH_SOURCE_DIR` /
+`$DSH_HOME`, then `pnpm build`) and `postinstall`
 (`bash scripts/autopatch-install.sh` — the host patch autopatch, see
 [Host patch (Settings page)](#host-patch-settings-page)). pnpm ≥ 10 refuses to
 run a git dependency's `prepare` until it is explicitly allowed, so the first
@@ -89,17 +90,19 @@ does not yet expose the `advisor` namespace.)
 ### Building from a git install
 
 A git install (above) fetches **sources, not built artifacts**, so the bundle
-builds itself from source: `package.json` declares `"prepare": "pnpm build &&
-bash scripts/autopatch-install.sh"` — the same build `prepack` runs when
-packing a tarball, plus the install-time host-patch autopatch — and pnpm runs
-it automatically after installing devDependencies. The devDependencies resolve
-from the committed `peer-stubs/` type shims (`file:./peer-stubs/<name>` for
-the fourteen directly consumed `@deepseek-ai/dsh-*` packages: minimal runtime
-stand-ins or type-only shims, each recording the dsh-private commit it
-mirrors), so `pnpm install` is self-contained in any clone — no access to
-private registry packages, no local dsh checkout. (An earlier packaging note
-warned that git installs would fail because the bundle shipped no `prepare`
-script; that catch is resolved — git installs now work end to end.)
+builds itself from source: `package.json` declares `"prepare": "node
+scripts/setup-dsh-links.mjs && pnpm build && bash
+scripts/autopatch-install.sh"` — the dev-time link farm, the same build
+`prepack` runs when packing a tarball, and the install-time host-patch
+autopatch — and pnpm runs it automatically after installing devDependencies.
+Dev-time resolution of the private `@deepseek-ai/dsh-*` packages (and the
+in-box `cordis` / `react` / `react-dom` identities) comes from the **local dsh
+source tree** via `$DSH_SOURCE_DIR` / `$DSH_HOME` (see
+[Development](#development)) — the same tree the host runs from, so no
+`peer-stubs/` copies exist and every developer resolves the real packages.
+A git install therefore requires that tree (it is needed anyway for the
+host-patch autopatch); with it, `pnpm install` is self-contained in any clone
+— no access to private registry packages.
 
 ### Host patch (Settings page)
 
@@ -287,33 +290,51 @@ harness iteration roadmap):
 
 ## Development
 
-The bundle builds itself on install: `package.json` declares
-`"prepare": "pnpm build && bash scripts/autopatch-install.sh"` (the same build
+The bundle builds itself on install: `package.json` declares `"prepare": "node
+scripts/setup-dsh-links.mjs && pnpm build && bash
+scripts/autopatch-install.sh"` (the dev-time link farm, the same build
 `prepack` runs, plus the install-time host-patch autopatch), so any clone is
-immediately buildable. The private `@deepseek-ai/dsh-*` runtime dependencies
-resolve at dev time from the committed `peer-stubs/` type shims — the fourteen
-directly consumed packages are declared as `file:./peer-stubs/<name>`
-devDependencies (minimal runtime stand-ins or type-only shims; each shim's
-`package.json` records the dsh-private commit it mirrors). No local dsh
-checkout or extra setup is needed — a plain `pnpm install` in any clone is
-self-contained. Dev-time `cordis` resolves from the npm registry
-(`^4.0.0-rc.7`) rather than a linked checkout; keep it tracking the dsh host's
-bundled cordis baseline — bump the devDep and lockfile together when the host
-moves.
+immediately buildable **once `DSH_HOME` points at a dsh home whose
+`source/current` is a dsh source tree** (or `DSH_SOURCE_DIR` points at such a
+tree directly — the same resolution the host-patch scripts use). The private
+`@deepseek-ai/dsh-*` runtime dependencies are **peerDependencies only**; at dev
+time `scripts/setup-dsh-links.mjs` (wired into `prepare`, standalone as
+`pnpm dsh:link`, verified with `pnpm dsh:link:check`) links the REAL packages
+from that tree into `node_modules/@deepseek-ai/` — every `@deepseek-ai/*`
+package the tree declares (tool CLIs with a `bin` are skipped: linking them
+would make pnpm write their bins into the shared tree), a bin-less shim for
+the in-box `cordis` framework, and the tree's own `react`/`react-dom` copies
+(node resolution — including externalized CJS deps — must see ONE react
+identity, the identity the real client packages use; `.npmrc` sets
+`node-linker=hoisted`, the dsh profile convention, so no `.pnpm` per-package
+dirs shadow those links). The farm is idempotent, prunes stale entries, and
+fails with guidance when the tree is missing or a peer cannot be linked.
+`.npmrc` also sets `auto-install-peers=false` (dsh profile convention): the
+private peers must never be fetched from the npm registry.
 
 ```sh
-pnpm install      # registry deps + file: peer-stubs, no environment setup
-pnpm test         # vitest (unit + the composed integration loop)
-pnpm typecheck    # tsc --noEmit (node) + tsc -p tsconfig.client.json --noEmit + tsc -p tsconfig.spec.json --noEmit
-pnpm build        # tsc -p tsconfig.build.json emit to lib/ + node scripts/build-client.mjs (client bundle)
-pnpm pack         # build + produce dsh-advisor-0.0.1.tgz
+export DSH_HOME=~/.dsh    # a dsh home with source/current (or set DSH_SOURCE_DIR)
+pnpm install              # registry deps + link farm (via prepare), no private-registry access
+pnpm test                 # vitest (unit + the composed integration loop)
+pnpm typecheck            # tsc --noEmit (node) + tsc -p tsconfig.client.json --noEmit + tsc -p tsconfig.spec.json --noEmit
+pnpm build                # tsc -p tsconfig.build.json emit to lib/ + node scripts/build-client.mjs (client bundle)
+pnpm pack                 # build + produce dsh-advisor-0.0.1.tgz
 ```
 
-`prepack` runs `pnpm build`; `prepare` runs the build plus the host-patch
-autopatch (`bash scripts/autopatch-install.sh`), so `pnpm pack` runs the build
-twice (once per lifecycle) — the documented tradeoff that keeps git-install
-builds working. `postinstall` runs only the autopatch (already-built tarball
-installs skip the build entirely).
+`cordis` is declared as a deterministic devDependency (`^4.0.0-rc.7` — the npm
+registry tops out at exactly that version, so the range pins the baseline the
+dsh host vendors); after install the link farm's bin-less cordis shim still
+overrides `node_modules/cordis` with the vendored files, because the real
+packages type and run against the vendored build and module identity requires
+dev-time `import 'cordis'` to resolve to the same files. The other public
+devDependencies (`schemastery`, `react`, …) resolve from the npm registry as
+usual.
+
+`prepack` runs `pnpm build`; `prepare` runs the link farm, the build, and the
+host-patch autopatch (`bash scripts/autopatch-install.sh`), so `pnpm pack`
+runs the build twice (once per lifecycle) — the documented tradeoff that keeps
+git-install builds working. `postinstall` runs only the autopatch
+(already-built tarball installs skip the build entirely).
 
 The integration test (`tests/integration.test.ts`) composes the plugin into a
 real cordis context with a stub LLM adapter and drives the full

@@ -31,7 +31,10 @@ function ok<T>(value: T): RpcResponse<T> {
 }
 
 function fail<T>(message: string, code: 'settings-rejected' | 'settings-conflict' = 'settings-rejected'): RpcResponse<T> {
-  return { rpcId: 'r' as never, result: { ok: false, error: { code, message, details: {} } } }
+  const error = code === 'settings-conflict'
+    ? { code, message, details: { ns: 'advisor' as string, expected: 1, actual: 2 } }
+    : { code, message, details: { ns: 'advisor' as string } }
+  return { rpcId: 'r' as never, result: { ok: false, error } }
 }
 
 const DEEPSEEK: ConfigurableProviderView = {
@@ -221,7 +224,7 @@ describe('AdvisorSection', () => {
     })
     // load() kicks the model resolution for the stored provider; wait for it.
     await waitFor(() => {
-      expect(controller.store.getSnapshot().modelsByProvider.get('deepseek-official')?.length).toBe(2)
+      expect(controller.store.getSnapshot().modelsByProvider['deepseek-official']?.length).toBe(2)
     })
     view.rerender(<AdvisorSection {...injected} />)
     expect(screen.getByText(en.staleModel)).toBeTruthy()
@@ -235,7 +238,7 @@ describe('AdvisorSection', () => {
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek-official' } })
     view.rerender(<AdvisorSection {...injected} />)
     await waitFor(() => {
-      expect(controller.store.getSnapshot().modelsByProvider.get('deepseek-official')?.length).toBe(2)
+      expect(controller.store.getSnapshot().modelsByProvider['deepseek-official']?.length).toBe(2)
     })
     view.rerender(<AdvisorSection {...injected} />)
     const modelSelect = screen.getByLabelText(en.model) as HTMLSelectElement
@@ -245,8 +248,8 @@ describe('AdvisorSection', () => {
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'openai' } })
     view.rerender(<AdvisorSection {...injected} />)
     await waitFor(() => {
-      expect(controller.store.getSnapshot().modelsByProvider.get('openai')).toBeUndefined()
-      expect(controller.store.getSnapshot().modelsEmptyReason.has('openai')).toBe(true)
+      expect(controller.store.getSnapshot().modelsByProvider['openai']).toBeUndefined()
+      expect(Object.hasOwn(controller.store.getSnapshot().modelsEmptyReason, 'openai')).toBe(true)
     })
     view.rerender(<AdvisorSection {...injected} />)
     expect(screen.getByText(en.noModels)).toBeTruthy()
@@ -260,7 +263,7 @@ describe('AdvisorSection', () => {
     view.rerender(<AdvisorSection {...injected} />)
     // The model select only enables once its options resolve.
     await waitFor(() => {
-      expect(controller.store.getSnapshot().modelsByProvider.get('deepseek-official')?.length).toBe(2)
+      expect(controller.store.getSnapshot().modelsByProvider['deepseek-official']?.length).toBe(2)
     })
     view.rerender(<AdvisorSection {...injected} />)
     fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'ds-b' } })
@@ -290,7 +293,7 @@ describe('AdvisorSection', () => {
     view.rerender(<AdvisorSection {...injected} />)
     // The model select only enables once its options resolve.
     await waitFor(() => {
-      expect(controller.store.getSnapshot().modelsByProvider.get('deepseek-official')?.length).toBe(2)
+      expect(controller.store.getSnapshot().modelsByProvider['deepseek-official']?.length).toBe(2)
     })
     view.rerender(<AdvisorSection {...injected} />)
     fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'ds-a' } })
@@ -310,7 +313,7 @@ describe('AdvisorSection', () => {
     view.rerender(<AdvisorSection {...injected} />)
     // The model select only enables once its options resolve.
     await waitFor(() => {
-      expect(controller.store.getSnapshot().modelsByProvider.get('deepseek-official')?.length).toBe(2)
+      expect(controller.store.getSnapshot().modelsByProvider['deepseek-official']?.length).toBe(2)
     })
     view.rerender(<AdvisorSection {...injected} />)
     fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'ds-a' } })

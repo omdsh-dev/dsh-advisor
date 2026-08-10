@@ -110,11 +110,11 @@ export interface AdvisorSettingsState {
   /** Configured provider options (KD-S2: configured providers only). */
   providers: readonly ProviderOption[]
   /** Model options per provider route, once resolved. */
-  modelsByProvider: ReadonlyMap<string, readonly ModelOption[]>
+  modelsByProvider: Readonly<Record<string, readonly ModelOption[]>>
   /** Empty-options reason per provider route (KD-S2 guidance). */
-  modelsEmptyReason: ReadonlyMap<string, ModelsEmptyReason>
+  modelsEmptyReason: Readonly<Record<string, ModelsEmptyReason>>
   /** Namespace views by ns, for the provider join. */
-  namespaces: ReadonlyMap<string, SettingsNamespaceView>
+  namespaces: Readonly<Record<string, SettingsNamespaceView>>
   /** The advisor namespace view, when registered. */
   advisorView: SettingsNamespaceView | undefined
   /**
@@ -201,9 +201,9 @@ export class AdvisorSettingsStore {
     error: null,
     writable: false,
     providers: [],
-    modelsByProvider: new Map(),
-    modelsEmptyReason: new Map(),
-    namespaces: new Map(),
+    modelsByProvider: {},
+    modelsEmptyReason: {},
+    namespaces: {},
     advisorView: undefined,
     advisorPresent: false,
     draft: defaultDraft(),
@@ -280,11 +280,13 @@ export class AdvisorSettingsStore {
     }
     if (generation !== this.generation) return
 
-    const namespaces = new Map(views.map(view => [view.ns, view]))
-    const advisorView = namespaces.get(ADVISOR_NAMESPACE)
+    const namespaces: Record<string, SettingsNamespaceView> = Object.fromEntries(
+      views.map(view => [view.ns, view]),
+    )
+    const advisorView = namespaces[ADVISOR_NAMESPACE]
     const options: ProviderOption[] = []
     for (const entry of providers) {
-      const namespace = namespaces.get(entry.settingsNs)
+      const namespace = namespaces[entry.settingsNs]
       const configured = namespace !== undefined
         && (entry.settingsPath.length === 0 || getPath(namespace.value, entry.settingsPath) !== undefined)
       if (!configured) continue
@@ -323,8 +325,8 @@ export class AdvisorSettingsStore {
       s.namespaces = namespaces
       s.advisorView = advisorView
       s.advisorPresent = advisorView !== undefined
-      s.modelsByProvider = new Map()
-      s.modelsEmptyReason = new Map()
+      s.modelsByProvider = {}
+      s.modelsEmptyReason = {}
     })
     // Model options for the provider already selected by the stored config,
     // so a freshly opened form shows the options without interaction.
@@ -346,18 +348,18 @@ export class AdvisorSettingsStore {
   async ensureModels(provider: string): Promise<void> {
     if (this.inflightModels.has(provider)) return
     const state = this.store.getSnapshot()
-    if (state.modelsByProvider.has(provider) || state.modelsEmptyReason.has(provider)) return
+    if (Object.hasOwn(state.modelsByProvider, provider) || Object.hasOwn(state.modelsEmptyReason, provider)) return
     const option = state.providers.find(candidate => candidate.provider === provider)
     if (option === undefined) return // not a configured provider — nothing to offer
-    const namespace = state.namespaces.get(option.settingsNs)
+    const namespace = state.namespaces[option.settingsNs]
     const profile = namespace !== undefined ? getPath(namespace.value, option.settingsPath) : undefined
     const declared = profileModels(profile)
     if (declared !== undefined) {
       this.store.update((s) => {
         if (declared.length > 0) {
-          s.modelsByProvider = new Map(s.modelsByProvider).set(provider, declared)
+          s.modelsByProvider = { ...s.modelsByProvider, [provider]: declared }
         } else {
-          s.modelsEmptyReason = new Map(s.modelsEmptyReason).set(provider, 'profile-empty')
+          s.modelsEmptyReason = { ...s.modelsEmptyReason, [provider]: 'profile-empty' }
         }
       })
       return
@@ -393,10 +395,10 @@ export class AdvisorSettingsStore {
       const options = group?.models ?? []
       this.store.update((s) => {
         if (options.length > 0) {
-          s.modelsByProvider = new Map(s.modelsByProvider).set(provider, options)
+          s.modelsByProvider = { ...s.modelsByProvider, [provider]: options }
         } else {
           const reason: ModelsEmptyReason = group === undefined ? 'unavailable' : 'catalog-empty'
-          s.modelsEmptyReason = new Map(s.modelsEmptyReason).set(provider, reason)
+          s.modelsEmptyReason = { ...s.modelsEmptyReason, [provider]: reason }
         }
       })
     } finally {

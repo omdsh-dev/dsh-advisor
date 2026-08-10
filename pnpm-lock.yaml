@@ -1,55 +1,13 @@
 lockfileVersion: '9.0'
 
 settings:
-  autoInstallPeers: true
+  autoInstallPeers: false
   excludeLinksFromLockfile: false
 
 importers:
 
   .:
     devDependencies:
-      '@deepseek-ai/dsh-agent':
-        specifier: file:./peer-stubs/dsh-agent
-        version: file:peer-stubs/dsh-agent
-      '@deepseek-ai/dsh-client-connection':
-        specifier: file:./peer-stubs/dsh-client-connection
-        version: file:peer-stubs/dsh-client-connection
-      '@deepseek-ai/dsh-client-locale':
-        specifier: file:./peer-stubs/dsh-client-locale
-        version: file:peer-stubs/dsh-client-locale
-      '@deepseek-ai/dsh-client-runtime':
-        specifier: file:./peer-stubs/dsh-client-runtime
-        version: file:peer-stubs/dsh-client-runtime
-      '@deepseek-ai/dsh-client-schema-form':
-        specifier: file:./peer-stubs/dsh-client-schema-form
-        version: file:peer-stubs/dsh-client-schema-form
-      '@deepseek-ai/dsh-client-ui-primitives':
-        specifier: file:./peer-stubs/dsh-client-ui-primitives
-        version: file:peer-stubs/dsh-client-ui-primitives
-      '@deepseek-ai/dsh-client-ui-settings':
-        specifier: file:./peer-stubs/dsh-client-ui-settings
-        version: file:peer-stubs/dsh-client-ui-settings
-      '@deepseek-ai/dsh-client-ui-slots':
-        specifier: file:./peer-stubs/dsh-client-ui-slots
-        version: file:peer-stubs/dsh-client-ui-slots
-      '@deepseek-ai/dsh-client-web-react':
-        specifier: file:./peer-stubs/dsh-client-web-react
-        version: file:peer-stubs/dsh-client-web-react
-      '@deepseek-ai/dsh-commands':
-        specifier: file:./peer-stubs/dsh-commands
-        version: file:peer-stubs/dsh-commands
-      '@deepseek-ai/dsh-llm':
-        specifier: file:./peer-stubs/dsh-llm
-        version: file:peer-stubs/dsh-llm
-      '@deepseek-ai/dsh-session':
-        specifier: file:./peer-stubs/dsh-session
-        version: file:peer-stubs/dsh-session
-      '@deepseek-ai/dsh-settings':
-        specifier: file:./peer-stubs/dsh-settings
-        version: file:peer-stubs/dsh-settings
-      '@deepseek-ai/dsh-timeout':
-        specifier: file:./peer-stubs/dsh-timeout
-        version: file:peer-stubs/dsh-timeout
       '@testing-library/dom':
         specifier: ^10.4.1
         version: 10.4.1
@@ -158,48 +116,6 @@ packages:
   '@csstools/css-tokenizer@4.0.0':
     resolution: {integrity: sha512-QxULHAm7cNu72w97JUNCBFODFaXpbDg+dP8b/oWFAZ2MTRppA3U00Y2L1HqaS4J6yBqxwa/Y3nMBaxVKbB/NsA==}
     engines: {node: '>=20.19.0'}
-
-  '@deepseek-ai/dsh-agent@file:peer-stubs/dsh-agent':
-    resolution: {directory: peer-stubs/dsh-agent, type: directory}
-
-  '@deepseek-ai/dsh-client-connection@file:peer-stubs/dsh-client-connection':
-    resolution: {directory: peer-stubs/dsh-client-connection, type: directory}
-
-  '@deepseek-ai/dsh-client-locale@file:peer-stubs/dsh-client-locale':
-    resolution: {directory: peer-stubs/dsh-client-locale, type: directory}
-
-  '@deepseek-ai/dsh-client-runtime@file:peer-stubs/dsh-client-runtime':
-    resolution: {directory: peer-stubs/dsh-client-runtime, type: directory}
-
-  '@deepseek-ai/dsh-client-schema-form@file:peer-stubs/dsh-client-schema-form':
-    resolution: {directory: peer-stubs/dsh-client-schema-form, type: directory}
-
-  '@deepseek-ai/dsh-client-ui-primitives@file:peer-stubs/dsh-client-ui-primitives':
-    resolution: {directory: peer-stubs/dsh-client-ui-primitives, type: directory}
-
-  '@deepseek-ai/dsh-client-ui-settings@file:peer-stubs/dsh-client-ui-settings':
-    resolution: {directory: peer-stubs/dsh-client-ui-settings, type: directory}
-
-  '@deepseek-ai/dsh-client-ui-slots@file:peer-stubs/dsh-client-ui-slots':
-    resolution: {directory: peer-stubs/dsh-client-ui-slots, type: directory}
-
-  '@deepseek-ai/dsh-client-web-react@file:peer-stubs/dsh-client-web-react':
-    resolution: {directory: peer-stubs/dsh-client-web-react, type: directory}
-
-  '@deepseek-ai/dsh-commands@file:peer-stubs/dsh-commands':
-    resolution: {directory: peer-stubs/dsh-commands, type: directory}
-
-  '@deepseek-ai/dsh-llm@file:peer-stubs/dsh-llm':
-    resolution: {directory: peer-stubs/dsh-llm, type: directory}
-
-  '@deepseek-ai/dsh-session@file:peer-stubs/dsh-session':
-    resolution: {directory: peer-stubs/dsh-session, type: directory}
-
-  '@deepseek-ai/dsh-settings@file:peer-stubs/dsh-settings':
-    resolution: {directory: peer-stubs/dsh-settings, type: directory}
-
-  '@deepseek-ai/dsh-timeout@file:peer-stubs/dsh-timeout':
-    resolution: {directory: peer-stubs/dsh-timeout, type: directory}
 
   '@esbuild/aix-ppc64@0.28.2':
     resolution: {integrity: sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ==}
@@ -1028,34 +944,6 @@ snapshots:
       css-tree: 3.2.1
 
   '@csstools/css-tokenizer@4.0.0': {}
-
-  '@deepseek-ai/dsh-agent@file:peer-stubs/dsh-agent': {}
-
-  '@deepseek-ai/dsh-client-connection@file:peer-stubs/dsh-client-connection': {}
-
-  '@deepseek-ai/dsh-client-locale@file:peer-stubs/dsh-client-locale': {}
-
-  '@deepseek-ai/dsh-client-runtime@file:peer-stubs/dsh-client-runtime': {}
-
-  '@deepseek-ai/dsh-client-schema-form@file:peer-stubs/dsh-client-schema-form': {}
-
-  '@deepseek-ai/dsh-client-ui-primitives@file:peer-stubs/dsh-client-ui-primitives': {}
-
-  '@deepseek-ai/dsh-client-ui-settings@file:peer-stubs/dsh-client-ui-settings': {}
-
-  '@deepseek-ai/dsh-client-ui-slots@file:peer-stubs/dsh-client-ui-slots': {}
-
-  '@deepseek-ai/dsh-client-web-react@file:peer-stubs/dsh-client-web-react': {}
-
-  '@deepseek-ai/dsh-commands@file:peer-stubs/dsh-commands': {}
-
-  '@deepseek-ai/dsh-llm@file:peer-stubs/dsh-llm': {}
-
-  '@deepseek-ai/dsh-session@file:peer-stubs/dsh-session': {}
-
-  '@deepseek-ai/dsh-settings@file:peer-stubs/dsh-settings': {}
-
-  '@deepseek-ai/dsh-timeout@file:peer-stubs/dsh-timeout': {}
 
   '@esbuild/aix-ppc64@0.28.2':
     optional: true

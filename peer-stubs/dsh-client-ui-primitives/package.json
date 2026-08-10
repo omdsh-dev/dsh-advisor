@@ -1,8 +1,0 @@
-{
-  "name": "@deepseek-ai/dsh-client-ui-primitives",
-  "version": "0.0.1",
-  "private": true,
-  "type": "module",
-  "types": "index.d.ts",
-  "description": "Dev-time type-only shim for the dsh-advisor plugin repo. The real package is private (not on the npm registry) and ships from the host dsh app at runtime; this stub provides the consumed type surface (Button / ButtonVariant, Modal, IconPlusOutline16) that the advisor section form (task 3) will render. Type-only for the task-2 skeleton (the skeleton renders no primitives); the runtime stand-in shape is extended when a value import appears. Mirrors dsh-private commit b8343cb (2026-08-09 snapshot)."
-}
