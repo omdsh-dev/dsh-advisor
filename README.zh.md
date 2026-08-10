@@ -8,74 +8,39 @@
 
 一个移植 omp「advisor」子系统的独立 dsh 插件组合包：一个按会话运行的评审模型，观察主会话 transcript，用显式配置的模型（provider 与 model 均为必填）评审每个已完成的 stepped turn，并把按严重度排序的建议（nit / concern / blocker）注入回会话 —— 不污染主循环，也不递归地评审自己。
 
-```sh
-dsh plugin --profile <name> add github:dsh-external/dsh-advisor   # pin a commit with #<sha>
-```
+一条命令即可安装（pnpm ≥ 10 需要一次构建放行步骤 —— 见[安装](#安装)）：
 
-pnpm ≥ 10 默认拦截 git 依赖的 `prepare` 与 `postinstall` 脚本：如果第一次 `add` 报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，请在 profile 的 `pnpm-workspace.yaml` 中添加放行条目（`onlyBuiltDependencies`，或 pnpm ≥ 10.26 的 `allowBuilds`），然后重新执行 `add` —— 参见[从 git URL 安装](#从-git-url-安装一条命令)。
+```sh
+dsh plugin --profile web add github:dsh-external/dsh-advisor   # <name> = 你的 profile 名；用 #<sha> 钉住 commit
+```
 
 **仅作建议。** advisor 从不批准或否决主 agent 的动作，也绝不会像主 agent 那样发出命令。每条送达的消息都是自我描述的 advisory 内容；一个行为异常的评审者会被端到端约束（emission guard、immuneTurns 冷却、failure policy），因此它永远不会卡住或污染主循环。
 
 ## 安装
 
-### 从 git URL 安装（一条命令）
+### 一条命令的 git 安装
 
 ```sh
-dsh plugin --profile <name> add github:dsh-external/dsh-advisor   # pin a commit with #<sha>
+dsh plugin --profile web add github:dsh-external/dsh-advisor   # <name> = 你的 profile 名；用 #<sha> 钉住 commit
 ```
 
-git 安装拉取的是源码，因此 pnpm 在安装时会运行该组合包的生命周期脚本：`prepare`（`pnpm build`）与 `postinstall`（`bash scripts/autopatch-install.sh` —— 宿主 patch 的安装期自动应用，见[宿主 patch（Settings 页）](#宿主-patchsettings-页)）。pnpm ≥ 10 在显式放行之前拒绝运行 git 依赖的 `prepare`，所以第一次 `add` 会报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`；pnpm 会提示修复方法 —— 把它打印出的确切 package key 复制到 profile 的 `pnpm-workspace.yaml`：
+git 安装拉取的是**源码而非构建产物**，因此组合包会在安装时自行构建（`prepare` 自建，随后是 `postinstall` 的宿主 patch 自动应用）。pnpm ≥ 10 默认拦截 git 依赖的 `prepare`：第一次 `add` 会报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，pnpm 会打印出确切的包 key —— 在 profile 的 `pnpm-workspace.yaml` 中放行构建（`onlyBuiltDependencies: [dsh-advisor]`，或运行 `dsh plugin --profile web approve-builds`），然后重新执行 `add`。请把这次放行当作它本来的样子：允许该包的代码在安装时于你的机器上执行；并钉住 commit（`#<sha>`），这样之后的 push 无法悄悄改变实际运行的代码。
 
-```yaml
-# $DSH_HOME/profiles/<name>/pnpm-workspace.yaml
-onlyBuiltDependencies:
-  - dsh-advisor
-# pnpm ≥ 10.26 also accepts the allowBuilds form:
-# allowBuilds:
-#   dsh-advisor: true
-```
-
-然后重新执行 `add`。请把这次放行当作它本来的样子：在安装时、在 agent 运行所在的任何沙箱之外，允许该包的代码在你的机器上执行。只放行你信任其源码的包，并钉住 commit（`github:dsh-external/dsh-advisor#<sha>`），这样之后的 push 无法悄悄改变实际运行的代码。
-
-### 从 tarball 安装
-
-打包组合包并安装到 profile：
+### 本地目录安装（推荐用于开发 / 验证）
 
 ```sh
-pnpm pack
-dsh plugin --profile <name> add dsh-advisor-0.0.1.tgz
+pnpm install                    # 构建组合包（prepare 自建）
+dsh plugin --profile web add .  # <name> = 你的 profile 名
 ```
-
-tarball 附带的是构建产物（`lib/` + `cordis.patch.yml` + `patches/` 与 `scripts/` 宿主 patch 机制），因此不会运行 `prepare` 脚本，也无需构建权限。第一次使用 `dsh plugin` 会初始化 profile（以 `@deepseek-ai/dsh-base` 作为其第一个组合包）；由于包声明了 `dsh.bundle`，`dsh` 会把 `dsh-advisor` 追加到 profile 的 `dsh.profile.bundles`。该组合包插入一行插件配置 —— `id: advisor`，`name: dsh-advisor`（见 `cordis.patch.yml`）。运行时依赖（`cordis`、`schemastery` 与 `@deepseek-ai/dsh-{session,agent,llm,commands,timeout}`）声明为 peerDependencies，由 dsh 安装的扁平 profile module fallback 解析 —— 无需额外安装步骤。（tarball 安装不会运行 autopatch：当宿主尚未暴露 `advisor` 命名空间时，请用 `scripts/apply-dsh-patch.sh` 手动应用宿主 patch。）
-
-### 从 git 安装构建
-
-git 安装（见上）拉取的是**源码而非构建产物**，因此组合包会从源码自行构建：`package.json` 声明了 `"prepare": "node scripts/setup-dsh-links.mjs && pnpm build && bash scripts/autopatch-install.sh"` —— 开发期链接农场、与打包 tarball 时 `prepack` 运行的构建相同，外加安装期宿主 patch 自动应用 —— pnpm 会在安装完 devDependencies 后自动运行它。私有 `@deepseek-ai/dsh-*` 包（以及内置 `cordis`/`react`/`react-dom` 身份）的开发期解析来自**本地 dsh 源码树**，经 `$DSH_SOURCE_DIR` / `$DSH_HOME`（见[开发](#开发)）—— 与宿主运行的同一棵树，因此不存在 `peer-stubs/` 副本，每位开发者解析到的都是真实包。git 安装因此要求该树（宿主 patch 自动应用本来也需要它）；具备该树后，任何克隆里的 `pnpm install` 即自洽 —— 无需访问私有 registry 包。
-
-### 宿主 patch（Settings 页）
-
-dsh web Settings 页通过 dsh 宿主的 apiproxy 读写 settings 命名空间，而 apiproxy 只向配置客户端暴露 model-provider 命名空间以及 `permission` / `ui-onboarding`。`advisor` 命名空间在该边界之外，因此面对这样的宿主时，页面无法完成 Advisor section 的读写往返 —— store 检测到未暴露的命名空间后，会显示明确的提示而非可写表单（已交付的插件侧缓解）。
-
-组合包随附这一宿主侧缺口（C-1）的**修复机制**，镜像已验证的 `dsh-llm-fallbacks` 模式：一个把 `advisor` 加入宿主 exposure allowlist 的最小 git patch（`packages/host/apiproxy/src/api-proxy.ts` 的 `PRODUCT_SETTINGS_NAMESPACES`），外加 apply / revert / verify 脚本与安装期 autopatch —— 详见 [`patches/README.md`](patches/README.md)。当宿主尚未暴露 `advisor` 时需要它（钉住的基线 dsh-private b8343cb 未暴露）；每次 dsh 升级后需重跑（升级会重置宿主改动）。
-
-```sh
-export DSH_SOURCE_DIR="$DSH_HOME/source/current"   # 或仅设置 DSH_HOME
-scripts/apply-dsh-patch.sh --check   # 只读可应用性检查
-scripts/apply-dsh-patch.sh           # 应用并重建宿主包
-scripts/verify-dsh-patch.sh          # 断言源码与构建产物标记
-scripts/revert-dsh-patch.sh          # 回滚（例如 dsh 升级前）
-```
-
-git 安装会在安装期自动运行 autopatch（`postinstall` 与 `prepare`）；用 `DSH_ADVISOR_AUTOPATCH=0` 完全跳过。autopatch 只 warn、绝不导致安装失败；tarball 安装请按上面的命令手动应用。**安全说明：**apply/revert 脚本（以及 autopatch）会在应用/安装时运行目标树的构建代码（`tsc` / `tsdown`），位于 agent 运行所在沙箱之外 —— 只把它们指向你信任的 dsh 源码树，并把上面的 `onlyBuiltDependencies` 放行当作它本来的样子：允许该包在安装时执行其代码。
 
 ### 验证
 
-不启动即可验证配置行，然后启动：
-
 ```sh
-dsh --profile <name> --dump-config   # shows a "# == dsh-advisor" layer with the advisor row
-dsh --profile <name>
+dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-advisor" 层
+dsh --profile web
 ```
+
+tarball 安装、宿主 patch（web Settings 页需要宿主暴露 `advisor` 命名空间 —— git 安装会自动应用随附的 patch）与卸载见 [docs/install.zh.md](docs/install.zh.md)；patch 本身见 [patches/README.md](patches/README.md)。
 
 ## 配置
 
@@ -83,7 +48,7 @@ advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabl
 
 配置在**三个配置面**之间合成（后一层覆盖前一层；各处使用同一组键）：
 
-1. **插件行 config** —— `$DSH_HOME/profiles/<name>/cordis.patch.yml`（见下）。这是合成 base。
+1. **插件行 config** —— `$DSH_HOME/profiles/web/cordis.patch.yml`（见下）。这是合成 base。
 2. **dsh web Settings 页** —— Advisor section（enabled 开关、只列出系统内已配置 provider 及其模型的 provider/model 选择框、可选字段）保存到 `advisor` settings namespace，覆盖插件行 config 而无需改动它。保存后新会话立即生效，无需重启（运行时 live 读取合成值）。需要当前版本的 dsh web 构建（其 web shell 能加载 `dshClient` 包并渲染 `settings.section` slot）。
 3. **`/advisor` 指令** —— 按会话且临时：翻转的是会话级 override，从不修改持久化配置（见[用法](#用法)）。
 
@@ -92,7 +57,7 @@ advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabl
 插件行配置：
 
 ```yaml
-# profiles/<name>/cordis.patch.yml — the profile's user patch layer
+# profiles/web/cordis.patch.yml — the profile's user patch layer
 - id: advisor
   config:
     enabled: true              # master switch (default false)
@@ -176,6 +141,13 @@ pnpm pack                 # build + produce dsh-advisor-0.0.1.tgz
 `prepack` 运行 `pnpm build`；`prepare` 运行链接农场、构建外加宿主 patch 自动应用（`bash scripts/autopatch-install.sh`），因此 `pnpm pack` 会构建两次（每个生命周期一次）——这是为保持 git 安装可构建而接受的取舍。`postinstall` 只运行 autopatch（tarball 安装已带构建产物，完全跳过构建）。
 
 集成测试（`tests/integration.test.ts`）把插件组合进一个带 stub LLM adapter 的真实 cordis 上下文，驱动完整的 turn → delta → advisor call → inject/steer 循环。
+
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [docs/install.zh.md](docs/install.zh.md) | 完整安装指南：git / tarball / 本地目录安装、宿主 patch、卸载、`--dump-config` 验证 |
+| [patches/README.md](patches/README.md) | 宿主暴露 patch：动机、apply / revert / verify、安装期 autopatch、安全说明 |
 
 ## 许可证
 
