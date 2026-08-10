@@ -8,15 +8,23 @@
  * T1 scaffold: declares the Cordis plugin entry (`name`/`inject`/`apply`).
  * T2: config contract — the Loader schema (`Config`) plus the explicit
  * provider/model gate via `resolveAdvisorConfig` (spec §5 / S4).
- * The runtime wiring (session observation, advisor call, emission guard,
- * delivery, commands) lands in T3–T8.
+ * T3: session observation — subscribe `session/event`, detect stepped
+ * `turn/end` (reason.kind ∈ {completed, 'max-tokens', error}, spec §4), drive
+ * a per-session bounded delta renderer, and dispose per-session state on
+ * `session/disposed` / `agent/disposed` (KD-5).
+ * The advisor runtime (queue → llm.stream → note extraction), emission guard,
+ * delivery, and commands land in T4–T8.
  *
  * @module dsh-advisor
  */
 
 import type { Context } from 'cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { resolveAdvisorConfig } from './config'
 import type { AdvisorConfig } from './config'
+import { SessionTranscriptObserver } from './transcript'
+import type { Delta } from './transcript'
 
 export const name = 'dsh-advisor'
 
@@ -36,8 +44,33 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     enabled: resolved.enabled,
     disabledReason: resolved.disabledReason,
   })
-  // T3: subscribe session/event; render bounded deltas per session.
-  // T4: advisor runtime (ctx.llm.stream + JSON-frame note extraction).
-  // T5/T6: emission guard + inject/steer delivery with immuneTurns cooldown.
-  // T7: /advisor commands.
+  if (!resolved.enabled) return
+
+  // T3: per-session transcript observation. On each stepped reviewable
+  // turn/end a bounded markdown delta is rendered; the onDelta seam is where
+  // T4's advisor runtime hooks in (queue → llm.stream → note extraction) —
+  // for now the delta is only logged at debug level.
+  const observer = new SessionTranscriptObserver({
+    maxDeltaMessages: resolved.maxDeltaMessages,
+    onDelta: (sessionId: string, delta: Delta) => {
+      ctx.logger('advisor').debug('rendered transcript delta', {
+        sessionId,
+        willContinue: delta.willContinue,
+        chars: delta.markdown.length,
+      })
+    },
+  })
+
+  ctx.on('session/event', (session: Session, event: SessionEvent) => {
+    observer.handleEvent(session.id, session.events, event)
+  })
+  // Per-session renderer lifecycle. Spec KD-5(c) pins `agent/disposed`;
+  // `session/disposed` is the store-level pair (both are idempotent — a
+  // renderer is deleted at most once, whichever signal lands first).
+  ctx.on('agent/disposed', ({ agent }: { agent: Agent }) => {
+    observer.disposeSession(agent.id)
+  })
+  ctx.on('session/disposed', (session: Session) => {
+    observer.disposeSession(session.id)
+  })
 }
