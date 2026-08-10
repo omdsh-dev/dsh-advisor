@@ -1,11 +1,27 @@
 # dsh-advisor
 
+[![License: MIT](https://img.shields.io/github/license/dsh-external/dsh-advisor)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933)](package.json)
+[![GitHub stars](https://img.shields.io/github/stars/dsh-external/dsh-advisor)](https://github.com/dsh-external/dsh-advisor)
+[![GitHub release](https://img.shields.io/github/v/release/dsh-external/dsh-advisor)](https://github.com/dsh-external/dsh-advisor/releases)
+[![GitHub pull requests](https://img.shields.io/github/issues-pr/dsh-external/dsh-advisor)](https://github.com/dsh-external/dsh-advisor/pulls)
+
 A standalone dsh plugin bundle porting the omp "advisor"
 subsystem: a per-session reviewer model that observes the primary transcript,
 reviews each stepped turn with an explicitly configured model (provider +
 model are required), and injects severity-ranked advice (nit / concern /
 blocker) back into the session — without polluting or recursively reviewing
 itself.
+
+```sh
+dsh plugin --profile <name> add github:dsh-external/dsh-advisor   # pin a commit with #<sha>
+```
+
+pnpm ≥ 10 blocks a git dependency's `prepare` script by default: if the first
+`add` fails with `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`, allow the build once
+in the profile's `pnpm-workspace.yaml` (`onlyBuiltDependencies`, or
+`allowBuilds` on pnpm ≥ 10.26) and re-run the `add` — see
+[From a git URL](#from-a-git-url-one-command).
 
 **Advisory only.** The advisor never approves or rejects the primary agent's
 actions; it never issues commands as if it were the primary agent. Every
@@ -15,6 +31,35 @@ policy) so it can never stall or pollute the primary loop.
 
 ## Install
 
+### From a git URL (one command)
+
+```sh
+dsh plugin --profile <name> add github:dsh-external/dsh-advisor   # pin a commit with #<sha>
+```
+
+A git install fetches sources, so pnpm runs the bundle's `prepare` script
+(`pnpm build`) while installing. pnpm ≥ 10 refuses to run a git dependency's
+`prepare` until it is explicitly allowed, so the first `add` fails with
+`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`; `dsh` points at the fix — copy the
+exact package key pnpm printed into the profile's `pnpm-workspace.yaml`:
+
+```yaml
+# $DSH_HOME/profiles/<name>/pnpm-workspace.yaml
+onlyBuiltDependencies:
+  - dsh-advisor
+# pnpm ≥ 10.26 also accepts the allowBuilds form:
+# allowBuilds:
+#   dsh-advisor: true
+```
+
+and re-run the `add`. Treat that allowance as what it is: permission to
+execute the package's code on your machine at install time, outside any
+sandbox the agent runs under. Only allow packages whose source you trust, and
+pin a commit (`github:dsh-external/dsh-advisor#<sha>`) so a later push cannot
+silently change what runs.
+
+### From a tarball
+
 Pack the bundle and install it into a profile:
 
 ```sh
@@ -22,51 +67,46 @@ pnpm pack
 dsh plugin --profile <name> add dsh-advisor-0.0.1.tgz
 ```
 
-The first `dsh plugin` use initializes the profile (with `@deepseek-ai/dsh-base`
-as its first bundle); `dsh` appends `dsh-advisor` to the profile's
-`dsh.profile.bundles` because the package declares `dsh.bundle`. Verify the
-row without booting, then boot:
+A tarball ships the built artifacts (`lib/` + `cordis.patch.yml`), so no
+`prepare` script runs and no build permission is needed. The first `dsh
+plugin` use initializes the profile (with `@deepseek-ai/dsh-base` as its first
+bundle); `dsh` appends `dsh-advisor` to the profile's `dsh.profile.bundles`
+because the package declares `dsh.bundle`. The bundle inserts one plugin row —
+`id: advisor`, `name: dsh-advisor` (see `cordis.patch.yml`). The runtime
+dependencies (`cordis`, `schemastery`, and
+`@deepseek-ai/dsh-{session,agent,llm,commands,timeout}`) are declared as
+peerDependencies and resolved by the dsh installation's flat profile module
+fallback — no extra install step.
+
+### Building from a git install
+
+A git install (above) fetches **sources, not built artifacts**, so the bundle
+builds itself from source: `package.json` declares `"prepare": "pnpm build"` —
+the same build `prepack` runs when packing a tarball — and pnpm runs it
+automatically after installing devDependencies. The devDependencies resolve
+from the committed `peer-stubs/` type shims (`file:./peer-stubs/<name>` for
+the five directly consumed `@deepseek-ai/dsh-*` packages: minimal runtime
+stand-ins for `dsh-{llm,session,commands,timeout}`, type-only for
+`dsh-agent`), so `pnpm install` is self-contained in any clone — no access to
+private registry packages, no local dsh checkout. (An earlier packaging note
+warned that git installs would fail because the bundle shipped no `prepare`
+script; that catch is resolved — git installs now work end to end.)
+
+### Verify
+
+Verify the row without booting, then boot:
 
 ```sh
 dsh --profile <name> --dump-config   # shows a "# == dsh-advisor" layer with the advisor row
 dsh --profile <name>
 ```
 
-The bundle inserts one plugin row — `id: advisor`, `name: dsh-advisor` (see
-`cordis.patch.yml`). The runtime dependencies (`cordis` +
-`@deepseek-ai/dsh-{session,agent,llm,commands}`) are declared as
-peerDependencies and resolved by the dsh installation's flat profile module
-fallback, which also provides `schemastery` for the config schema — no extra
-install step.
-
-### Installing from a git host: the build-script catch
-
-A tarball (or npm-published) install ships built artifacts and needs no build
-permission. Installing straight from a git host is different: a git install
-fetches **sources, not built artifacts**, so a TypeScript package arrives
-without its `lib/` output and fails to load unless the author ships a
-`prepare` script that builds from source. This bundle currently ships built
-artifacts via `prepack` and does **not** define a `prepare` script — install it
-from a tarball (`pnpm pack`) or from npm, not from git, until a `prepare`
-script lands.
-
-For packages that do ship a `prepare` script, pnpm ≥ 10 refuses to run a git
-dependency's `prepare` script until it is explicitly allowed, so the first
-`add` fails; `dsh` points at the fix — copy the exact package key pnpm printed
-into the profile's `pnpm-workspace.yaml`:
-
-```yaml
-allowBuilds:
-  <package-key>: true
-```
-
-and re-run the `add`. Treat that allowance as what it is: permission to
-execute the package's code on your machine at install time, outside any
-sandbox the agent runs under. Only allow packages whose source you trust, and
-pin a commit (`github:you/plugin#<sha>`) so a later push cannot silently
-change what runs.
-
 ## Config
+
+> **Settings page (planned):** editing these settings from the dsh Settings
+> page lands in the same iteration via plan `dsh-advisor-settings-n2`.
+> TODO: document the three-surface relationship (Settings page / plugin-row
+> config / `/advisor` command) after that plan merges.
 
 The advisor is off by default. When enabled, `provider` and `model` are
 **mandatory**: `enabled: true` without both is a hard gate — the advisor never
@@ -186,25 +226,23 @@ harness iteration roadmap):
 
 ## Development
 
-The runtime dependencies (`cordis` + `@deepseek-ai/dsh-{session,agent,llm,commands}`)
-are private; at dev time they resolve through a gitignored shim overlay
-(`dev/`, generated by `scripts/dev-link.mjs`). The committed files contain no
-local paths; all machine-specific paths live only in the generated `dev/`
-directory.
+The bundle builds itself on install: `package.json` declares
+`"prepare": "pnpm build"` (the same build `prepack` runs), so any clone is
+immediately buildable. The private `@deepseek-ai/dsh-*` runtime dependencies
+resolve at dev time from the committed `peer-stubs/` type shims — the five
+directly consumed packages are declared as `file:./peer-stubs/<name>`
+devDependencies (minimal runtime stand-ins for
+`dsh-{llm,session,commands,timeout}`, type-only for `dsh-agent`), and each
+shim's `package.json` records the dsh-private commit it mirrors. No local dsh
+checkout or extra setup is needed — a plain `pnpm install` in any clone is
+self-contained.
 
 ```sh
-# point at a dsh source tree (default: sibling directory `dsh-private`)
-DSH_SOURCE=<path-to-dsh-checkout> pnpm dev:link
-pnpm install
-```
-
-Then:
-
-```sh
-pnpm test        # vitest (unit + the composed integration loop)
-pnpm typecheck   # tsc --noEmit (strict, moduleResolution: bundler)
-pnpm build       # tsc emit to lib/ (runs automatically via prepack on pack)
-pnpm pack        # build + produce dsh-advisor-<version>.tgz
+pnpm install      # registry deps + file: peer-stubs, no environment setup
+pnpm test         # vitest (unit + the composed integration loop)
+pnpm typecheck    # tsc --noEmit (strict, moduleResolution: bundler)
+pnpm build        # tsc emit to lib/ (runs automatically via prepare/prepack)
+pnpm pack         # build + produce dsh-advisor-0.0.1.tgz
 ```
 
 The integration test (`tests/integration.test.ts`) composes the plugin into a
