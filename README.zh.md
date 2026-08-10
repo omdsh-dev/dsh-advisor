@@ -173,7 +173,7 @@ pnpm build                # tsc -p tsconfig.build.json emit to lib/ + node scrip
 pnpm pack                 # build + produce dsh-advisor-0.0.1.tgz
 ```
 
-开发时的 `cordis` 从所链接的源码树解析（宿主内置的 vendored 基线），而非 npm registry —— 真实包就是对着它类型化的，这是唯一一致的身份；`schemastery` 等公开 devDependencies 照常从 npm registry 解析。
+`cordis` 声明为确定性的 devDependency（`^4.0.0-rc.7` —— npm registry 最高就是该版本，因此范围精确钉住 dsh 宿主内置的基线）；安装后链接农场的无 bin cordis shim 仍会把 `node_modules/cordis` 覆盖为 vendored 文件，因为真实包是对着 vendored 构建类型化/运行的，模块身份要求开发期的 `import 'cordis'` 解析到同一份文件。其余公开 devDependencies（`schemastery`、`react` 等）照常从 npm registry 解析。
 
 `prepack` 运行 `pnpm build`；`prepare` 运行链接农场、构建外加宿主 patch 自动应用（`bash scripts/autopatch-install.sh`），因此 `pnpm pack` 会构建两次（每个生命周期一次）——这是为保持 git 安装可构建而接受的取舍。`postinstall` 只运行 autopatch（tarball 安装已带构建产物，完全跳过构建）。
 

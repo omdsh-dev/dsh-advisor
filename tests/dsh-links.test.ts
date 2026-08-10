@@ -52,6 +52,15 @@ describe('dev-time dsh resolution contract (real packages via DSH_HOME)', () => 
     expect(npmrc).toMatch(/auto-install-peers\s*=\s*false/)
   })
 
+  it('cordis is a deterministic devDependency (^4.0.0-rc.7 — the vendored baseline)', () => {
+    // Registry cordis tops out at 4.0.0-rc.7, so the range resolves to exactly
+    // the baseline the dsh tree vendors. The devDep records that contract in
+    // the manifest + lockfile and satisfies the peer; the link farm's cordis
+    // shim still overrides node_modules/cordis with the VENDORED files (the
+    // real packages type against the vendored build — module identity).
+    expect(root.devDependencies?.cordis).toBe('^4.0.0-rc.7')
+  })
+
   it('prepare chains the link setup before the build; dsh:link / dsh:link:check exist', () => {
     expect(root.scripts.prepare).toBe(
       'node scripts/setup-dsh-links.mjs && pnpm build && bash scripts/autopatch-install.sh',

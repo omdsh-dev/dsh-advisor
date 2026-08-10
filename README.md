@@ -321,10 +321,14 @@ pnpm build                # tsc -p tsconfig.build.json emit to lib/ + node scrip
 pnpm pack                 # build + produce dsh-advisor-0.0.1.tgz
 ```
 
-Dev-time `cordis` resolves from the linked source tree (the vendored baseline
-the host ships), not the npm registry — the real packages type against it, so
-it is the only consistent identity; `schemastery` and the other public
-devDependencies resolve from the npm registry as usual.
+`cordis` is declared as a deterministic devDependency (`^4.0.0-rc.7` — the npm
+registry tops out at exactly that version, so the range pins the baseline the
+dsh host vendors); after install the link farm's bin-less cordis shim still
+overrides `node_modules/cordis` with the vendored files, because the real
+packages type and run against the vendored build and module identity requires
+dev-time `import 'cordis'` to resolve to the same files. The other public
+devDependencies (`schemastery`, `react`, …) resolve from the npm registry as
+usual.
 
 `prepack` runs `pnpm build`; `prepare` runs the link farm, the build, and the
 host-patch autopatch (`bash scripts/autopatch-install.sh`), so `pnpm pack`
