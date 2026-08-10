@@ -72,12 +72,13 @@ describe('host exposure patch artifact (C-1)', () => {
     expect(patch.startsWith('diff --git a/packages/host/apiproxy/src/api-proxy.ts'), 'git-diff format').toBe(true)
     expect(patch).toContain('--- a/packages/host/apiproxy/src/api-proxy.ts')
     expect(patch).toContain('+++ b/packages/host/apiproxy/src/api-proxy.ts')
-    // The allowlist change itself: ui-onboarding stays, advisor is added.
-    expect(patch).toContain("-const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding'])")
-    expect(patch).toContain("+const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding', 'advisor'])")
+    // The allowlist change itself: ui-onboarding stays, advisor is added (the
+    // baseline const already carries AGENT_PRESET_SETTINGS_NAMESPACE upstream).
+    expect(patch).toContain("-const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding', AGENT_PRESET_SETTINGS_NAMESPACE])")
+    expect(patch).toContain("+const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding', 'advisor', AGENT_PRESET_SETTINGS_NAMESPACE])")
     // The comment above the allowlist is updated in the same hunk.
-    expect(patch).toContain('-/** Product settings intentionally exposed beside model-provider namespaces. */')
-    expect(patch).toContain('+/** Product settings intentionally exposed beside model-provider namespaces (ui-onboarding, advisor). */')
+    expect(patch).toContain('- * Product settings intentionally exposed beside model-provider namespaces.')
+    expect(patch).toContain('+ * Product settings intentionally exposed beside model-provider namespaces (ui-onboarding, advisor, agent-preset).')
   })
 
   it('ships the apply/revert/verify scripts and the autopatch opt-out', () => {
@@ -314,7 +315,7 @@ describe('host exposure patch artifact (C-1)', () => {
       expect(after, 'tree status unchanged by --check').toBe(before)
     })
 
-    describe.skipIf(patched)('pinned unpatched baseline (b8343cb)', () => {
+    describe.skipIf(patched)('pinned unpatched baseline (20da39e)', () => {
       it('git apply --check succeeds and --reverse --check fails (not yet applied)', () => {
         const forward = run(['git', '-C', tree, 'apply', '--check', PATCH_FILE])
         expect(forward.status, `forward apply --check exit 0 — stderr:\n${forward.stderr}`).toBe(0)
