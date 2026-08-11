@@ -114,12 +114,23 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     // tags by `style[data-plugin=<id>]` + per-module `data-plugin-css`, so
     // the bundle MUST carry that wiring or the section renders unstyled.
     const bundle = readFileSync(resolve(repo, 'lib/client.js'), 'utf8')
+    // F-1 regression (QC consolidated): the artifact must carry neither a raw
+    // NUL byte nor the builder's absolute machine path — esbuild's virtual
+    // CSS-module comment (`// dsh-css-modules:\0<abs path>.mjs`) leaks both and
+    // the build script strips it before writing the artifact.
+    expect(bundle, 'no raw NUL byte in the artifact (virtual-module comment stripped)').not.toContain('\u0000')
+    expect(bundle, 'no builder machine path leak in the artifact').not.toContain('/Users/')
     // Idempotent injection: one <style> per module file, guarded by a
     // data-plugin-css presence check. Quote-agnostic: esbuild's printer
     // normalizes JS string quotes, so accept both.
     expect(bundle).toMatch(/document\.createElement\(['"]style['"]\)/)
     expect(bundle).toContain('data-plugin')
     expect(bundle).toContain('document.head.appendChild')
+    // F-2 (QC consolidated): pin the attribution the loader cleanup keys on —
+    // the web shell removes plugin-owned tags by `style[data-plugin=<id>]`, so
+    // the stub must actually assign tag.dataset.plugin, not merely contain the
+    // literal "data-plugin". Quote/whitespace-normalized assignment form.
+    expect(bundle, 'tag.dataset.plugin attribution (loader cleanup key)').toMatch(/tag\.dataset\.plugin\s*=/)
     // tagId wiring: dsh-advisor/<basename>.
     expect(bundle).toContain('dsh-advisor/advisor-section.module.css')
     // Hashed class-map export ([hash]_[local]): the section classes reach the

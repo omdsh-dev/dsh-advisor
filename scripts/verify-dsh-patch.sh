@@ -13,8 +13,10 @@
 #                                   lib/index.js                → expect PRODUCT_SETTINGS_NAMESPACES … advisor
 #                                   (tsdown bundle — the package `main`, the runtime
 #                                    entry when dsh packages are consumed outside the
-#                                    tsx-from-source install; the probe greps the
-#                                    assignment context, quote- and order-agnostic)
+#                                    tsx-from-source install; two line probes: the
+#                                    constant declaration (fixed-string grep -F —
+#                                    shape-agnostic) and the advisor allowlist
+#                                    entry line (quote-agnostic regex))
 #
 # By default the marker must be present (patch applied and rebuilt); --absent
 # inverts the assertion (after revert). In --absent mode the bundle
@@ -46,7 +48,7 @@
 set -euo pipefail
 
 usage() {
-  sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -183,17 +185,23 @@ fi
 #     "advisor",
 #     ...
 #   ]);
-# grep -E is line-based, so a single [^;]* context probe cannot span the
-# newlines. The two probes check the constant declaration line and the quoted
-# allowlist entry line separately — quote- and order-agnostic. In --absent
-# mode (after revert) only the advisor ENTRY line discriminates: the constant
-# declaration exists in the unpatched bundle too, so that probe is marked
-# present-only (P) — absent mode keys on the advisor entry probe alone.
+# grep is line-based, so a single [^;]* context probe cannot span the
+# newlines. The two probes check the constant declaration line and the advisor
+# allowlist entry line separately. The constant probe is a fixed-string
+# (grep -F) probe — SHAPE-agnostic: it matches the declaration regardless of
+# the Set body's ordering or whitespace (its marker contains no regex
+# metacharacters, so no ERE is needed). The advisor entry probe is an
+# ENTRY-LINE-based quote-agnostic regex: anchored at the start of the line and
+# accepting either quote character (the tsdown printer's quote choice is not
+# contractual). In --absent mode (after revert) only the advisor ENTRY line
+# discriminates: the constant declaration exists in the unpatched bundle too,
+# so that probe is marked present-only (P) — absent mode keys on the advisor
+# entry probe alone.
 PROBES=(
   "packages/host/apiproxy/src/api-proxy.ts|'ui-onboarding', 'advisor'|host-apiproxy source (src/api-proxy.ts)"
   "packages/host/apiproxy/lib/types/api-proxy.js|'ui-onboarding', 'advisor'|host-apiproxy build (lib/types/api-proxy.js)"
-  "packages/host/apiproxy/lib/index.js|PRODUCT_SETTINGS_NAMESPACES = new Set\\(|host-apiproxy bundle (lib/index.js — allowlist constant)|E|P"
-  "packages/host/apiproxy/lib/index.js|^[[:space:]]*\"advisor\"|host-apiproxy bundle (lib/index.js — advisor allowlist entry)|E"
+  "packages/host/apiproxy/lib/index.js|PRODUCT_SETTINGS_NAMESPACES = new Set(|host-apiproxy bundle (lib/index.js — allowlist constant)|F|P"
+  "packages/host/apiproxy/lib/index.js|^[[:space:]]*[\"']advisor[\"']|host-apiproxy bundle (lib/index.js — advisor allowlist entry)|E"
 )
 
 EXPECT_LABEL="present"

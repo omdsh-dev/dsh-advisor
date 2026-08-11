@@ -149,8 +149,13 @@ SKIP):
 - bundle: `packages/host/apiproxy/lib/index.js` is probed with TWO line-based
   probes — the new tsdown (rolldown) emits the `Set` multi-line, so a single
   context regex cannot span the newlines. Present mode checks the constant
-  declaration line (`PRODUCT_SETTINGS_NAMESPACES = new Set(`) **and** the
-  quoted `"advisor"` allowlist-entry line (`^[[:space:]]*"advisor"`). Absent
+  declaration line (`PRODUCT_SETTINGS_NAMESPACES = new Set(` — a fixed-string
+  `grep -F` probe, **shape-agnostic**: its marker contains no regex
+  metacharacters, so it matches the declaration regardless of the Set body's
+  ordering or whitespace) **and** the advisor allowlist-entry line
+  (`^[[:space:]]*["']advisor["']` — an **entry-line-based, quote-agnostic**
+  regex: anchored at line start and accepting either quote character, since
+  the tsdown printer's quote choice is not contractual). Absent
   mode keys on the advisor entry probe only: the constant declaration exists
   in the unpatched bundle too, so that probe is marked present-only and
   skipped — the advisor entry is the discriminator of the reverted state.

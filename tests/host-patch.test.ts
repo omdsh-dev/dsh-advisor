@@ -111,20 +111,23 @@ describe('host exposure patch artifact (C-1)', () => {
     )
     // The bundle probe is split into two line-based probes: the new tsdown
     // (rolldown) emits the Set multi-line, so no single context regex can span
-    // the newlines. The two probes pin the constant declaration line and the
-    // quoted allowlist entry line separately (quote- and order-agnostic).
+    // the newlines. The two probes pin the constant declaration line (a
+    // fixed-string `grep -F` probe — shape-agnostic: no regex metacharacters,
+    // so it matches whatever ordering/whitespace the bundle uses) and the
+    // advisor allowlist entry line (a quote-agnostic entry-line regex)
+    // separately.
     expect(probes, 'bundle probe pins the allowlist constant declaration line').toContain(
-      'PRODUCT_SETTINGS_NAMESPACES = new Set\\\\(',
+      'PRODUCT_SETTINGS_NAMESPACES = new Set(',
     )
     expect(probes, 'bundle probe pins the quoted advisor allowlist entry line').toContain(
-      '^[[:space:]]*\\"advisor\\"',
+      '^[[:space:]]*[\\"\']advisor[\\"\']',
     )
     // The constant declaration exists in the unpatched bundle too, so the
     // constant probe is present-only (|P): --absent mode must SKIP it and key
     // on the advisor entry probe alone. The advisor entry probe stays
     // both-mode — its entry ends with `|E"`, no |P scope.
     expect(probes, 'bundle constant probe is present-only (skipped with --absent)').toContain(
-      'allowlist constant)|E|P',
+      'allowlist constant)|F|P',
     )
     expect(probes, 'advisor entry probe stays both-mode (absent keys on it)').toContain(
       'advisor allowlist entry)|E"',

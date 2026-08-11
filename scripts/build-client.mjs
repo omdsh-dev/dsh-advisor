@@ -155,6 +155,13 @@ const result = await build({
         // map rides the default export as a JSON literal. The advisor section
         // imports that default binding and consumes its classes in JSX, so
         // the export — and the whole stub — survives bundling unchanged.
+        //
+        // tagId selector-safety (F-5, QC consolidated): the guard builds
+        // `style[data-plugin-css=<JSON.stringify(tagId)>]` via JS escaping,
+        // NOT CSS escaping — so tagId (`dsh-advisor/<basename>`) must stay
+        // CSS-attribute-selector-safe: no `"`, no `\`, no `]`. CSS-module
+        // basenames satisfy this by construction (plain [A-Za-z0-9_.-] file
+        // names), which is why the virtual id is allowed to carry one.
         const contents = [
           `const css = ${JSON.stringify(code.toString())};`,
           `const tagId = ${JSON.stringify(`${ID}/${basename(fileId)}`)};`,
@@ -167,7 +174,10 @@ const result = await build({
           `}`,
           `export default ${JSON.stringify(classMap)};`,
         ].join('\n')
-        return { loader: 'js', contents }
+        // F-3 (QC consolidated): declare the physical css file as a watch
+        // dependency (mirror of the dsh tsdown preset's addWatchFile(fileId)),
+        // so a watch-mode build rebuilds when the module css changes.
+        return { loader: 'js', contents, watchFiles: [fileId] }
       })
     },
   }],
@@ -181,7 +191,17 @@ if (result.errors.length > 0) {
 // closure-factory load handoff, must not VALUE-import `@deepseek-ai/*` outside
 // the frozen externals table, and must contain NO `import.meta` / ESM
 // statements — the web loader executes this file as a classic <script>.
+//
+// F-1 (QC consolidated): esbuild stamps the virtual CSS-module id — including
+// a raw NUL byte and the builder's absolute path — into an output comment
+// (`// dsh-css-modules:\0dsh-css:<abs path>.mjs`). Strip those comment lines
+// so the shipped/served artifact carries neither the NUL byte nor a local
+// machine path (the regex matches the observed esbuild 0.28 comment form;
+// the \x00 is the raw byte, [^\n]* the rest of the line, gm spans all of them).
 const bundleText = readFileSync(OUT_FILE, 'utf8')
+  .replace(/^\/\/ dsh-css-modules:\x00[^\n]*\n/gm, '')
+// The strip must land in the artifact itself, not just the in-memory text.
+writeFileSync(OUT_FILE, bundleText)
 if (!bundleText.includes('window.__ModuleLoader__.load(') || !bundleText.includes(JSON.stringify(ID))) {
   throw new Error('client bundle contract: the closure-factory load handoff with the plugin id is missing')
 }
@@ -193,6 +213,15 @@ for (const match of bundleText.matchAll(/require\(\s*["'](@deepseek-ai\/[^"']+)[
 }
 if (bundleText.includes('import.meta') || /(^|\n)\s*(import|export)\s/.test(bundleText)) {
   throw new Error('client bundle contract: emitted bundle contains import.meta / ESM statements — the classic-script loader would fail to parse it')
+}
+// F-1 regression (QC consolidated): the artifact must never ship a raw NUL
+// byte or the builder's absolute machine path — both leaked through esbuild's
+// virtual-module comment (`// dsh-css-modules:\0…`) and stripped above.
+if (bundleText.includes('\u0000')) {
+  throw new Error('client bundle contract: emitted bundle contains a NUL byte — esbuild virtual-module comment not stripped')
+}
+if (bundleText.includes('/Users/')) {
+  throw new Error('client bundle contract: emitted bundle leaks a builder machine path ("/Users/")')
 }
 // CSS-modules inline wiring: the bundle must carry the guarded <style
 // data-plugin> injection stub and the tagId of the advisor section module
@@ -210,6 +239,13 @@ for (const fragment of [
 // Quote-agnostic: esbuild's printer normalizes string quotes, so accept both.
 if (!/document\.createElement\(['"]style['"]\)/.test(bundleText)) {
   throw new Error('client bundle contract: CSS-modules inline wiring missing — document.createElement("style") not in the emitted bundle')
+}
+// F-2 (QC consolidated): pin the attribution the loader cleanup keys on —
+// the web shell removes plugin-owned tags by `style[data-plugin=<id>]`, so the
+// stub must actually assign tag.dataset.plugin (not just carry the literal
+// "data-plugin" string). Quote/whitespace-normalized: match the assignment.
+if (!/tag\.dataset\.plugin\s*=/.test(bundleText)) {
+  throw new Error('client bundle contract: CSS-modules inline wiring missing — tag.dataset.plugin attribution (loader cleanup key) not in the emitted bundle')
 }
 
 // Declarations for `exports["./client"].types`: tsc emits the client .d.ts
