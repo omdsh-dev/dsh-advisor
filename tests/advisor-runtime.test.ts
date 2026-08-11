@@ -26,7 +26,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 // The overlay shim (`export *`) forwards named exports but not the package
 // default, so `LlmService` (named export of @deepseek-ai/dsh-llm) is imported
 // by name, not as the default.

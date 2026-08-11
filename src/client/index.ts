@@ -4,7 +4,7 @@
  * the settings namespaces and the provider directory through the connection
  * wire, and keeps fresh on pushed invalidations. Export discipline: the
  * client half value-imports ONLY the frozen platform module table
- * (CLIENT_EXTERNALS: react / cordis / ui-slots / web-react / ui-primitives /
+ * (CLIENT_EXTERNALS: react / @deepseek-ai/cordis / ui-slots / web-react / ui-primitives /
  * schema-form / the documented `@deepseek-ai/dsh-client-runtime/client`
  * exemption); every other `@deepseek-ai/*` import is type-only (erased at
  * build) — values arrive via cordis injection (`ctx.get('connection')`, slot

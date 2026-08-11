@@ -20,7 +20,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { MemorySettings } from './support/memory-settings'
 import { ADVISOR_SETTINGS_NAMESPACE, installAdvisorSettings } from '../src/settings'

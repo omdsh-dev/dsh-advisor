@@ -37,7 +37,7 @@
  * @module dsh-advisor/gateway
  */
 
-import type { Context } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import type { Settings } from '@deepseek-ai/dsh-settings'
 import { GatewayService, Remote } from '@deepseek-ai/dsh-type-meta'
 import { ADVISOR_SETTINGS_NAMESPACE } from './settings'

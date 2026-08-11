@@ -20,11 +20,11 @@
  * link their bins into `.bin`, i.e. write into the shared dsh tree; the
  * advisor never imports them). The in-box `cordis` framework is provided as a
  * generated shim package (no bin) whose entry files point at the vendored
- * cordis, so `import 'cordis'` resolves to the same module the real packages
- * type against. Every peerDependency of this package must resolve from the
- * tree or the script fails with guidance. It is wired into the `prepare`
- * lifecycle (before `pnpm build`) and available standalone as `pnpm dsh:link`
- * (re-run after changing `$DSH_HOME`/`$DSH_SOURCE_DIR`) and
+ * cordis, so `import '@deepseek-ai/cordis'` resolves to the same module the
+ * real packages type against. Every peerDependency of this package must
+ * resolve from the tree or the script fails with guidance. It is wired into
+ * the `prepare` lifecycle (before `pnpm build`) and available standalone as
+ * `pnpm dsh:link` (re-run after changing `$DSH_HOME`/`$DSH_SOURCE_DIR`) and
  * `pnpm dsh:link:check`.
  *
  * Modes:
@@ -105,11 +105,17 @@ function resolveTreeReact(sourceRoot) {
   return { react: reactDir, 'react-dom': reactDomDir }
 }
 
-/** The peerDependencies of this package that must be linkable from the tree. */
+/**
+ * The peerDependencies of this package that must be linkable from the tree.
+ * `@deepseek-ai/cordis` is exempt: the in-box cordis framework is provided by
+ * the private shim (node_modules/@deepseek-ai/cordis), not the farm — the
+ * vendored package declares a `bin`, so collectDeepseekPackages() excludes it
+ * and it would otherwise land in missingPeers.
+ */
 function requiredPeers() {
   const root = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8'))
   return Object.keys(root.peerDependencies ?? {})
-    .filter((name) => name.startsWith('@deepseek-ai/'))
+    .filter((name) => name.startsWith('@deepseek-ai/') && name !== '@deepseek-ai/cordis')
     .sort()
 }
 
@@ -122,7 +128,7 @@ function readdirSafe(dir) {
 }
 
 const linkDir = join(repo, 'node_modules', '@deepseek-ai')
-const cordisShimDir = join(repo, 'node_modules', 'cordis')
+const cordisShimDir = join(repo, 'node_modules', '@deepseek-ai', 'cordis')
 
 function linkKind() {
   return process.platform === 'win32' ? 'junction' : 'dir'
@@ -135,15 +141,15 @@ function ensure(linkPath, target) {
 
 /**
  * The in-box cordis framework: the real packages type and run against the
- * tree's vendored cordis, so dev-time `import 'cordis'` must resolve to the
- * SAME files (module identity drives both the Context augmentations the
- * packages declare and runtime behavior). The vendored package declares a
- * `bin`, and symlinking it into node_modules makes pnpm link its bin into
- * `.bin` (a chmod write into the shared dsh tree), so instead of a package
- * symlink this writes a small private shim: a directory with a bin-less
- * package.json whose entry files are symlinks to the vendored files — the
- * same resolved files (node and tsc follow symlinks to the realpath), no
- * bin.
+ * tree's vendored cordis, so dev-time `import '@deepseek-ai/cordis'` must
+ * resolve to the SAME files (module identity drives both the Context
+ * augmentations the packages declare and runtime behavior). The vendored
+ * package declares a `bin`, and symlinking it into node_modules makes pnpm
+ * link its bin into `.bin` (a chmod write into the shared dsh tree), so
+ * instead of a package symlink this writes a small private shim: a directory
+ * with a bin-less package.json whose entry files are symlinks to the
+ * vendored files — the same resolved files (node and tsc follow symlinks to
+ * the realpath), no bin.
  */
 function writeCordisShim(sourceRoot) {
   const vendorCordis = join(sourceRoot, 'vendor', 'cordis')
@@ -152,9 +158,13 @@ function writeCordisShim(sourceRoot) {
     throw new Error(`vendored cordis not found at ${vendorCordis} — the source tree must provide the in-box cordis framework`)
   }
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
-  if (manifest.name !== 'cordis' && manifest.name !== '@deepseek-ai/cordis') {
-    throw new Error(`vendored cordis at ${vendorCordis} declares name "${manifest.name}" — expected "cordis" (or "@deepseek-ai/cordis" since the 20260811 snapshot rename)`)
+  if (manifest.name !== '@deepseek-ai/cordis') {
+    throw new Error(`vendored cordis at ${vendorCordis} declares name "${manifest.name}" — expected "@deepseek-ai/cordis" (only the 20260811 snapshot rename is accepted; the legacy "cordis" name is no longer supported)`)
   }
+  // Migration cleanup: remove the legacy node_modules/cordis shim (safe for
+  // both a plain-dir shim and a pnpm symlink) so no stale bare-cordis
+  // resolution survives.
+  rmSync(join(repo, 'node_modules', 'cordis'), { recursive: true, force: true })
   rmSync(cordisShimDir, { recursive: true, force: true })
   mkdirSync(cordisShimDir, { recursive: true })
   ensure(join(cordisShimDir, 'index.js'), join(vendorCordis, 'lib', 'index.js'))
@@ -170,7 +180,7 @@ function writeCordisShim(sourceRoot) {
     join(cordisShimDir, 'package.json'),
     JSON.stringify(
       {
-        name: 'cordis',
+        name: '@deepseek-ai/cordis',
         version: manifest.version,
         private: true,
         type: 'module',
@@ -208,6 +218,11 @@ function checkCordisShim(sourceRoot) {
   }
   probe('index.d.ts', join(vendorCordis, 'lib', 'types', 'index.d.ts'))
   probe('index.js', join(vendorCordis, 'lib', 'index.js'))
+  // Migration leftover: the legacy bare-cordis shim must be gone — the new
+  // build answers only the renamed package.
+  if (existsSync(join(repo, 'node_modules', 'cordis'))) {
+    problems.push('legacy node_modules/cordis shim present (re-run pnpm dsh:link)')
+  }
   return problems.length > 0 ? problems.join('; ') : undefined
 }
 

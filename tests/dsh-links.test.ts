@@ -52,13 +52,18 @@ describe('dev-time dsh resolution contract (real packages via DSH_HOME)', () => 
     expect(npmrc).toMatch(/auto-install-peers\s*=\s*false/)
   })
 
-  it('cordis is a deterministic devDependency (^4.0.0-rc.7 — the vendored baseline)', () => {
-    // Registry cordis tops out at 4.0.0-rc.7, so the range resolves to exactly
-    // the baseline the dsh tree vendors. The devDep records that contract in
-    // the manifest + lockfile and satisfies the peer; the link farm's cordis
-    // shim still overrides node_modules/cordis with the VENDORED files (the
-    // real packages type against the vendored build — module identity).
-    expect(root.devDependencies?.cordis).toBe('^4.0.0-rc.7')
+  it('@deepseek-ai/cordis is the peer-only vendored baseline (^4.0.1-rc.1, shim-provided)', () => {
+    // The vendored baseline is @deepseek-ai/cordis 4.0.1-rc.1 (the 20260811
+    // snapshot rename). The package is unpublished, so it lives ONLY in
+    // peerDependencies — never devDependencies — and dev-time resolution comes
+    // from the link script's private shim at node_modules/@deepseek-ai/cordis,
+    // not the registry (the real packages type against the vendored build —
+    // module identity).
+    const range = root.peerDependencies?.['@deepseek-ai/cordis']
+    expect(typeof range, 'peer @deepseek-ai/cordis has a version range').toBe('string')
+    expect(range?.length ?? 0, 'peer range is non-empty').toBeGreaterThan(0)
+    expect(root.devDependencies?.cordis, 'no legacy bare-cordis devDependency').toBeUndefined()
+    expect(root.devDependencies?.['@deepseek-ai/cordis'], 'no @deepseek-ai/cordis devDependency').toBeUndefined()
   })
 
   it('prepare chains the link setup before the build; dsh:link / dsh:link:check exist', () => {
