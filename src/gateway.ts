@@ -100,6 +100,9 @@ export class AdvisorConfigGateway extends GatewayService {
     // schema is non-strict (unknown keys merge through), so the explicit
     // reject happens here, before the write — same strictness as the Loader.
     resolveAdvisorConfig(patch)
+    // S2: an empty patch is a no-op — return the current composed value
+    // without a pointless settings round-trip.
+    if (Object.keys(patch).length === 0) return { config: this.readConfig() }
     const settings = this.settings
     if (settings === undefined) {
       throw new Error('advisor: settings service is unavailable — configuration cannot be written')
@@ -113,18 +116,27 @@ export class AdvisorConfigGateway extends GatewayService {
    * (qc2 W-1): a user layer the resolver rejects (e.g. an unknown key that
    * survived the non-strict settings schema) resolves to disabled-with-reason
    * carrying the message — the gateway never fails the RPC on a bad user
-   * layer, and gate semantics hold (no model call can start).
+   * layer, and gate semantics hold (no model call can start). S1: when the
+   * raw source is still readable, the fallback seeds its scalar latches
+   * (systemPrompt / immuneTurns / maxDeltaMessages) instead of hardcoded
+   * defaults, so an invalid layer only drops the offending keys.
    */
   private readConfig(): ResolvedAdvisorConfig {
     let config: ResolvedAdvisorConfig
     try {
       config = resolveAdvisorConfig(this.bridge.source())
     } catch (error) {
+      let raw: AdvisorConfig | undefined
+      try {
+        raw = this.bridge.source()
+      } catch {
+        // unreadable source — fall back to the schema defaults below
+      }
       config = {
         enabled: false,
-        systemPrompt: '',
-        immuneTurns: 3,
-        maxDeltaMessages: 60,
+        systemPrompt: raw?.systemPrompt ?? '',
+        immuneTurns: raw?.immuneTurns ?? 3,
+        maxDeltaMessages: raw?.maxDeltaMessages ?? 60,
         disabledReason: error instanceof Error ? error.message : String(error),
       }
     }

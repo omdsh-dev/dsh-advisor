@@ -159,6 +159,53 @@ describe('with a settings service (set writes the user layer)', () => {
       },
     })
   })
+
+  it('a second set MERGES into the existing user layer (merge, not replace semantics)', async () => {
+    const ctx = new Context()
+    await ctx.plugin(MemorySettings)
+    const bridge = installAdvisorSettings(ctx, entryConfig({ systemPrompt: 'entry prompt' }))
+    const gateway = new AdvisorConfigGateway(ctx, bridge)
+    await waitRegistered(ctx)
+    await vi.waitFor(() => expect(settingsOf(gateway)).toBeDefined())
+
+    await gateway.set({ enabled: true, provider: 'deepseek', model: 'deepseek-chat' })
+    await gateway.set({ maxDeltaMessages: 10 })
+
+    // The user layer keeps ALL four keys written across the two calls — a
+    // replace-semantics write would have dropped the earlier trio.
+    const descriptor = ctx.settings.describe().find((d) => d.ns === ADVISOR_SETTINGS_NAMESPACE)!
+    expect(descriptor.user).toEqual({
+      enabled: true,
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      maxDeltaMessages: 10,
+    })
+    expect(gateway.get()).toEqual({
+      config: {
+        enabled: true,
+        provider: 'deepseek',
+        model: 'deepseek-chat',
+        systemPrompt: 'entry prompt',
+        immuneTurns: 3,
+        maxDeltaMessages: 10,
+      },
+    })
+  })
+
+  it('an empty patch is a no-op: returns the current composed value without touching the user layer (S2)', async () => {
+    const ctx = new Context()
+    await ctx.plugin(MemorySettings)
+    const bridge = installAdvisorSettings(ctx, entryConfig({ enabled: true, provider: 'deepseek', model: 'deepseek-chat' }))
+    const gateway = new AdvisorConfigGateway(ctx, bridge)
+    await waitRegistered(ctx)
+    await vi.waitFor(() => expect(settingsOf(gateway)).toBeDefined())
+
+    const result = await gateway.set({})
+    const descriptor = ctx.settings.describe().find((d) => d.ns === ADVISOR_SETTINGS_NAMESPACE)!
+    expect(descriptor.user).toBeUndefined()
+    expect(result).toEqual(gateway.get())
+    expect(result.config.enabled).toBe(true)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -275,9 +322,16 @@ class FakeConnectionService extends Service {
 }
 
 describe('typertGateway endpoint claims + payload contract', () => {
-  async function composeGatewayHarness(): Promise<{ ctx: Context; connection: FakeConnectionService }> {
+  async function composeGatewayHarness(seedUser?: Record<string, unknown>): Promise<{ ctx: Context; connection: FakeConnectionService }> {
     const ctx = new Context()
     await ctx.plugin(MemorySettings)
+    if (seedUser !== undefined) {
+      // Pre-seed the advisor user section BEFORE the namespace registers — the
+      // dev-time mirror of a file-backed provider whose raw document already
+      // contains the section when the plugin loads.
+      const settings = ctx.settings as unknown as MemorySettings
+      settings.seed(ADVISOR_SETTINGS_NAMESPACE, seedUser)
+    }
     await ctx.plugin(TypertRegistry)
     await ctx.plugin(FakeConnectionService)
     await ctx.plugin(TypertGatewayService)
@@ -356,6 +410,45 @@ describe('typertGateway endpoint claims + payload contract', () => {
     const { ctx } = await composeGatewayHarness()
     const result = await ctx.typertGateway.invoke({ namespace: 'advisor', method: 'get', args: {} })
     expect(result).toMatchObject({ config: { enabled: false, immuneTurns: 5 } })
+  })
+
+  it('a seeded bad user layer never fails get: ok:true + disabled-with-reason carrying the message (M2 containment)', async () => {
+    // Pre-existing user section with an unknown key (survives the non-strict
+    // settings schema) — the gateway's read must contain it (qc2 W-1): ok:true,
+    // disabled-with-reason carrying the resolver message, no model call can
+    // start (gate semantics), and the scalar latches are seeded from the raw
+    // source (S1) rather than hardcoded defaults.
+    const { connection } = await composeGatewayHarness({ bogus: 1 })
+    const got = await connection.handler!('advisor/get', { args: {} }, new AbortController().signal)
+    expect(got.ok).toBe(true)
+    if (got.ok) {
+      const config = (got.value as { config: ResolvedAdvisorConfig }).config
+      expect(config.enabled).toBe(false)
+      expect(config.disabledReason).toContain('unknown config key "bogus"')
+      // S1: the readable raw source seeds the scalar latches (entry values).
+      expect(config.immuneTurns).toBe(5)
+      expect(config.systemPrompt).toBe('entry prompt')
+      // The offending config is not a usable provider/model pair — omitted.
+      expect('provider' in config).toBe(false)
+      expect('model' in config).toBe(false)
+    }
+  })
+
+  it('rejects a business-invalid patch at the wire: ok:false + unknown config key (M3)', async () => {
+    const { connection } = await composeGatewayHarness()
+    const signal = new AbortController().signal
+
+    const rejected = await connection.handler!('advisor/set', { args: { patch: { bogus: 1 } } }, signal)
+    expect(rejected.ok).toBe(false)
+    if (!rejected.ok) {
+      expect(rejected.error.message).toContain('unknown config key "bogus"')
+    }
+    // The rejected write persisted nothing: the composed config is unchanged.
+    const got = await connection.handler!('advisor/get', { args: {} }, signal)
+    expect(got.ok).toBe(true)
+    if (got.ok) {
+      expect((got.value as { config: ResolvedAdvisorConfig }).config.enabled).toBe(false)
+    }
   })
 })
 
