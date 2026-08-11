@@ -6,7 +6,6 @@ category: workflow-patterns
 severity: low
 title: dsh executes same-step tool calls by per-tool isConcurrencySafe — subagent calls run serially
 description: dsh's agent-loop schedules sibling tool calls by a per-tool classifier; the subagent tool is not concurrency-safe, so N subagent dispatches emitted in one message still execute serially (each awaited). Verified from session logs and source.
-plan_id: dsh-advisor-mvp
 tags:
   - dsh
   - tool-calls
@@ -56,5 +55,5 @@ Any dsh-hosted iteration/plan dispatch planning; debugging "why did my parallel 
 
 ## Examples
 
-- QC tri dispatch in this iteration: 3 seats × ~5 min serial ≈ 15 min (functionally correct tri).
+- QC tri dispatch on dsh: 3 seats × ~5 min serial ≈ 15 min (functionally correct tri).
 - The omp deep-dive subagent was backgrounded and its final report was recovered from the child session log under the dsh sessions dir.

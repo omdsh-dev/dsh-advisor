@@ -34,8 +34,8 @@ dsh plugin --profile web add github:dsh-external/dsh-advisor   # <name> = your p
 ```
 
 A git install fetches **sources, not built artifacts**, so the bundle builds
-itself on install (`prepare` self-build, then the `postinstall` host-patch
-autopatch). pnpm ≥ 10 blocks a git dependency's `prepare` by default: the first
+itself on install (`prepare` self-build). pnpm ≥ 10 blocks a git dependency's
+`prepare` by default: the first
 `add` fails with `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`, and pnpm prints the
 exact package key — allow the build in the profile's `pnpm-workspace.yaml`
 (`onlyBuiltDependencies: [dsh-advisor]`, or run `dsh plugin --profile web
@@ -57,10 +57,7 @@ dsh --profile web --dump-config   # shows a "# == dsh-advisor" layer with the ad
 dsh --profile web
 ```
 
-Tarball install, the host patch (the web Settings page needs the host to
-expose the `advisor` namespace — git installs apply the shipped patch
-automatically), and uninstall are covered in [docs/install.md](docs/install.md);
-the patch itself in [patches/README.md](patches/README.md).
+Tarball install and uninstall are covered in [docs/install.md](docs/install.md).
 
 ## Config
 
@@ -80,7 +77,10 @@ ones; every surface uses the same key set):
    the plugin-row config without editing it. Saving applies to new sessions
    immediately — no restart (the runtime reads the composed value live).
    Requires a current dsh web build whose shell loads packages that declare
-   `dsh.client` and renders `settings.section` slots.
+   `dsh.client` and renders `settings.section` slots. The `advisor` namespace
+   joins the web configuration boundary via the upstream registration opt-in
+   `exposeToWebClients` (dsh ≥ snapshot 20da39e) — no host patching is
+   required.
 3. **`/advisor` command** — per-session and ephemeral: it flips a session
    override, never the persisted config (see [Usage](#usage)).
 
@@ -225,12 +225,11 @@ harness iteration roadmap):
 ## Development
 
 The bundle builds itself on install: `package.json` declares `"prepare": "node
-scripts/setup-dsh-links.mjs && pnpm build && bash
-scripts/autopatch-install.sh"` (the dev-time link farm, the same build
-`prepack` runs, plus the install-time host-patch autopatch), so any clone is
+scripts/setup-dsh-links.mjs && pnpm build"` (the dev-time link farm plus the
+same build `prepack` runs), so any clone is
 immediately buildable **once `DSH_HOME` points at a dsh home whose
 `source/current` is a dsh source tree** (or `DSH_SOURCE_DIR` points at such a
-tree directly — the same resolution the host-patch scripts use). The private
+tree directly). The private
 `@deepseek-ai/dsh-*` runtime dependencies are **peerDependencies only**; at dev
 time `scripts/setup-dsh-links.mjs` (wired into `prepare`, standalone as
 `pnpm dsh:link`, verified with `pnpm dsh:link:check`) links the REAL packages
@@ -264,11 +263,10 @@ dev-time `import 'cordis'` to resolve to the same files. The other public
 devDependencies (`schemastery`, `react`, …) resolve from the npm registry as
 usual.
 
-`prepack` runs `pnpm build`; `prepare` runs the link farm, the build, and the
-host-patch autopatch (`bash scripts/autopatch-install.sh`), so `pnpm pack`
-runs the build twice (once per lifecycle) — the documented tradeoff that keeps
-git-install builds working. `postinstall` runs only the autopatch
-(already-built tarball installs skip the build entirely).
+`prepack` runs `pnpm build`; `prepare` runs the link farm and the build, so
+`pnpm pack` runs the build twice (once per lifecycle) — the documented
+tradeoff that keeps git-install builds working. There is no `postinstall`
+step: already-built tarball installs skip the build entirely.
 
 The integration test (`tests/integration.test.ts`) composes the plugin into a
 real cordis context with a stub LLM adapter and drives the full
@@ -278,8 +276,7 @@ turn → delta → advisor call → inject/steer cycle.
 
 | Doc | Content |
 |---|---|
-| [docs/install.md](docs/install.md) | full install guide: git / tarball / local-directory install, host patch, uninstall, `--dump-config` verification |
-| [patches/README.md](patches/README.md) | host exposure patch: rationale, apply / revert / verify, install-time autopatch, security |
+| [docs/install.md](docs/install.md) | full install guide: git / tarball / local-directory install, web Settings exposure, uninstall, `--dump-config` verification |
 
 ## License
 

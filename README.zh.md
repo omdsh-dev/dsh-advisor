@@ -24,7 +24,7 @@ dsh plugin --profile web add github:dsh-external/dsh-advisor   # <name> = 你的
 dsh plugin --profile web add github:dsh-external/dsh-advisor   # <name> = 你的 profile 名；用 #<sha> 钉住 commit
 ```
 
-git 安装拉取的是**源码而非构建产物**，因此组合包会在安装时自行构建（`prepare` 自建，随后是 `postinstall` 的宿主 patch 自动应用）。pnpm ≥ 10 默认拦截 git 依赖的 `prepare`：第一次 `add` 会报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，pnpm 会打印出确切的包 key —— 在 profile 的 `pnpm-workspace.yaml` 中放行构建（`onlyBuiltDependencies: [dsh-advisor]`，或运行 `dsh plugin --profile web approve-builds`），然后重新执行 `add`。请把这次放行当作它本来的样子：允许该包的代码在安装时于你的机器上执行；并钉住 commit（`#<sha>`），这样之后的 push 无法悄悄改变实际运行的代码。
+git 安装拉取的是**源码而非构建产物**，因此组合包会在安装时自行构建（`prepare` 自建）。pnpm ≥ 10 默认拦截 git 依赖的 `prepare`：第一次 `add` 会报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，pnpm 会打印出确切的包 key —— 在 profile 的 `pnpm-workspace.yaml` 中放行构建（`onlyBuiltDependencies: [dsh-advisor]`，或运行 `dsh plugin --profile web approve-builds`），然后重新执行 `add`。请把这次放行当作它本来的样子：允许该包的代码在安装时于你的机器上执行；并钉住 commit（`#<sha>`），这样之后的 push 无法悄悄改变实际运行的代码。
 
 ### 本地目录安装（推荐用于开发 / 验证）
 
@@ -40,7 +40,7 @@ dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-adv
 dsh --profile web
 ```
 
-tarball 安装、宿主 patch（web Settings 页需要宿主暴露 `advisor` 命名空间 —— git 安装会自动应用随附的 patch）与卸载见 [docs/install.zh.md](docs/install.zh.md)；patch 本身见 [patches/README.md](patches/README.md)。
+tarball 安装与卸载见 [docs/install.zh.md](docs/install.zh.md)。
 
 ## 配置
 
@@ -49,7 +49,7 @@ advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabl
 配置在**三个配置面**之间合成（后一层覆盖前一层；各处使用同一组键）：
 
 1. **插件行 config** —— `$DSH_HOME/profiles/web/cordis.patch.yml`（见下）。这是合成 base。
-2. **dsh web Settings 页** —— Advisor section（enabled 开关、只列出系统内已配置 provider 及其模型的 provider/model 选择框、可选字段）保存到 `advisor` settings namespace，覆盖插件行 config 而无需改动它。保存后新会话立即生效，无需重启（运行时 live 读取合成值）。需要当前版本的 dsh web 构建（其 web shell 能加载 `dsh.client` 声明包并渲染 `settings.section` slot）。
+2. **dsh web Settings 页** —— Advisor section（enabled 开关、只列出系统内已配置 provider 及其模型的 provider/model 选择框、可选字段）保存到 `advisor` settings namespace，覆盖插件行 config 而无需改动它。保存后新会话立即生效，无需重启（运行时 live 读取合成值）。需要当前版本的 dsh web 构建（其 web shell 能加载 `dsh.client` 声明包并渲染 `settings.section` slot）。`advisor` 命名空间通过上游注册 opt-in `exposeToWebClients`（dsh ≥ snapshot 20da39e）加入 web 配置边界 —— 无需任何宿主补丁。
 3. **`/advisor` 指令** —— 按会话且临时：翻转的是会话级 override，从不修改持久化配置（见[用法](#用法)）。
 
 两个持久化配置面共享同一个硬门禁：`enabled: true` 而 `provider`/`model` 为空时绝不发起模型调用（disabled-with-reason）。Settings 页还会在 enabled 且必填字段为空时阻止保存；宿主侧硬门禁始终是所有路径上的最后防线。
@@ -132,7 +132,7 @@ MVP 有意放弃与 omp 的完整对等。已接受的差距（在 harness 迭�
 
 ## 开发
 
-组合包在安装时自行构建：`package.json` 声明了 `"prepare": "node scripts/setup-dsh-links.mjs && pnpm build && bash scripts/autopatch-install.sh"`（开发期链接农场、与 `prepack` 相同的构建、外加安装期宿主 patch 自动应用），因此任何克隆在 **`DSH_HOME` 指向一个含 `source/current` 的 dsh home（或 `DSH_SOURCE_DIR` 直接指向一个 dsh 源码树 —— 与宿主 patch 脚本的解析一致）** 后立即可构建。私有的 `@deepseek-ai/dsh-*` 运行时依赖**只声明为 peerDependencies**；开发期由 `scripts/setup-dsh-links.mjs`（挂在 `prepare` 上、独立命令为 `pnpm dsh:link`、用 `pnpm dsh:link:check` 校验）把该树里的**真实包**链接进 `node_modules/@deepseek-ai/` —— 树声明的每个 `@deepseek-ai/*` 包（声明 `bin` 的工具 CLI 会被跳过：链接它们会让 pnpm 向共享树写入 bin）、无 bin 的内置 `cordis` 框架 shim、以及树自带的 `react`/`react-dom` 副本（node 解析 —— 包括外部化的 CJS 依赖 —— 必须看到同一个 react 身份，即真实 client 包所用的身份；`.npmrc` 设了 `node-linker=hoisted`（dsh profile 约定），避免 `.pnpm` 逐包目录遮蔽这些链接）。农场幂等、会清理陈旧条目，并在树缺失或 peer 无法链接时给出明确指引。`.npmrc` 还设了 `auto-install-peers=false`（dsh profile 约定）：私有 peer 绝不能从 npm registry 获取。
+组合包在安装时自行构建：`package.json` 声明了 `"prepare": "node scripts/setup-dsh-links.mjs && pnpm build"`（开发期链接农场、与 `prepack` 相同的构建），因此任何克隆在 **`DSH_HOME` 指向一个含 `source/current` 的 dsh home（或 `DSH_SOURCE_DIR` 直接指向一个 dsh 源码树）** 后立即可构建。私有的 `@deepseek-ai/dsh-*` 运行时依赖**只声明为 peerDependencies**；开发期由 `scripts/setup-dsh-links.mjs`（挂在 `prepare` 上、独立命令为 `pnpm dsh:link`、用 `pnpm dsh:link:check` 校验）把该树里的**真实包**链接进 `node_modules/@deepseek-ai/` —— 树声明的每个 `@deepseek-ai/*` 包（声明 `bin` 的工具 CLI 会被跳过：链接它们会让 pnpm 向共享树写入 bin）、无 bin 的内置 `cordis` 框架 shim、以及树自带的 `react`/`react-dom` 副本（node 解析 —— 包括外部化的 CJS 依赖 —— 必须看到同一个 react 身份，即真实 client 包所用的身份；`.npmrc` 设了 `node-linker=hoisted`（dsh profile 约定），避免 `.pnpm` 逐包目录遮蔽这些链接）。农场幂等、会清理陈旧条目，并在树缺失或 peer 无法链接时给出明确指引。`.npmrc` 还设了 `auto-install-peers=false`（dsh profile 约定）：私有 peer 绝不能从 npm registry 获取。
 
 ```sh
 export DSH_HOME=~/.dsh    # 含 source/current 的 dsh home（或直接设置 DSH_SOURCE_DIR）
@@ -145,7 +145,7 @@ pnpm pack                 # build + produce dsh-advisor-0.0.1.tgz
 
 `cordis` 声明为确定性的 devDependency（`^4.0.0-rc.7` —— npm registry 最高就是该版本，因此范围精确钉住 dsh 宿主内置的基线）；安装后链接农场的无 bin cordis shim 仍会把 `node_modules/cordis` 覆盖为 vendored 文件，因为真实包是对着 vendored 构建类型化/运行的，模块身份要求开发期的 `import 'cordis'` 解析到同一份文件。其余公开 devDependencies（`schemastery`、`react` 等）照常从 npm registry 解析。
 
-`prepack` 运行 `pnpm build`；`prepare` 运行链接农场、构建外加宿主 patch 自动应用（`bash scripts/autopatch-install.sh`），因此 `pnpm pack` 会构建两次（每个生命周期一次）——这是为保持 git 安装可构建而接受的取舍。`postinstall` 只运行 autopatch（tarball 安装已带构建产物，完全跳过构建）。
+`prepack` 运行 `pnpm build`；`prepare` 运行链接农场与构建，因此 `pnpm pack` 会构建两次（每个生命周期一次）——这是为保持 git 安装可构建而接受的取舍。没有 `postinstall` 步骤：tarball 安装已带构建产物，完全跳过构建。
 
 集成测试（`tests/integration.test.ts`）把插件组合进一个带 stub LLM adapter 的真实 cordis 上下文，驱动完整的 turn → delta → advisor call → inject/steer 循环。
 
@@ -153,8 +153,7 @@ pnpm pack                 # build + produce dsh-advisor-0.0.1.tgz
 
 | 文档 | 内容 |
 |---|---|
-| [docs/install.zh.md](docs/install.zh.md) | 完整安装指南：git / tarball / 本地目录安装、宿主 patch、卸载、`--dump-config` 验证 |
-| [patches/README.md](patches/README.md) | 宿主暴露 patch：动机、apply / revert / verify、安装期 autopatch、安全说明 |
+| [docs/install.zh.md](docs/install.zh.md) | 完整安装指南：git / tarball / 本地目录安装、web Settings 暴露、卸载、`--dump-config` 验证 |
 
 ## 许可证
 
