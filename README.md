@@ -112,6 +112,14 @@ Plugin-row config:
 | `immuneTurns` | int ≥ 0, `3` | After a concern/blocker is actually steered, the next N stepped primary turns must complete before another interrupting note may steer; notes inside the window downgrade to inject. |
 | `maxDeltaMessages` | int ≥ 0, `60` | Bounded advisor input window. Deltas beyond N are truncated with a `… <earlier messages omitted>` marker; `0` = unbounded. |
 
+**Model capability & budget**: the advisor call runs with `reasoningEffort:
+'off'` — sent only when the configured model's adapter declares that effort
+(deepseek models do; any other model gets the option omitted automatically, so
+non-reasoning providers keep working) — and a **5120-token** output cap (a
+user-directed 20× supersession of the original 256). Extracted notes are
+bounded (1000 chars) and the notice summary to 120 chars, so the raised budget
+cannot translate into an unbounded injection into the primary session.
+
 ## Usage
 
 Once installed and enabled, the advisor observes every session. Control it per

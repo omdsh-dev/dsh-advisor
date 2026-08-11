@@ -607,6 +607,82 @@ describe('integration — agentic reply-complete gate drives the loop without tu
 })
 
 // ---------------------------------------------------------------------------
+// 6. C-1 self-trigger fix in the composed harness: the advisor's OWN delivery
+// re-emits `agent/inbox/spliced` (the dsh host's inject/steer → inbox.splice
+// → session.append path), and that splice must NOT re-trigger the review gate.
+// Exactly one review (and one model call) per completed round.
+// ---------------------------------------------------------------------------
+
+describe('integration — advisor self-delivery never re-triggers the review gate (C-1)', () => {
+  it('a re-emitted advisor inbox splice during delivery produces exactly one review per round', async () => {
+    const { ctx, adapter } = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [
+        [...textReply('{"note":"nit one","severity":"nit"}')],
+        [...textReply('{"note":"nit two","severity":"nit"}')],
+      ],
+    )
+    const { session, log } = makeSession('s1')
+    const inject = vi.fn()
+    const steer = vi.fn()
+    // The fake agent mirrors the dsh host: inject/steer deliver through the
+    // inbox, which re-emits `agent/inbox/spliced` carrying the advisor's own
+    // message (source.kind 'advisor' — NOT a user input). Without the C-1
+    // payload discrimination this splice would self-trigger a second review.
+    const emitAdvisorSplice = (): void => {
+      const event = {
+        type: 'agent/inbox/spliced',
+        seq: log.length,
+        time: 1_000 + log.length,
+        data: {
+          target: 'next-turn',
+          start: 0,
+          inserted: [{
+            id: MessageId(`advisor-${log.length}`),
+            role: 'user',
+            content: [text('[advisor:nit] delivered note')],
+            source: { kind: ADVISOR_SOURCE_KIND },
+          }],
+        },
+      } as unknown as SessionEvent
+      log.push(event)
+      ctx.emit('session/event', session, event)
+    }
+    inject.mockImplementation(emitAdvisorSplice)
+    steer.mockImplementation(emitAdvisorSplice)
+    const agent = { id: 's1', inject, steer } as unknown as Agent
+    ctx.emit('agent/created', { agent })
+
+    // Round 1 completes.
+    feed(ctx, session, log, [
+      inboxSpliced('prompt one'), userMessage('prompt one'),
+      assistantMessage('reply one'),
+    ])
+    // Round 2 input → review 1 → the delivery re-emits the advisor splice,
+    // which must NOT start a second review of the still-current round.
+    feed(ctx, session, log, [inboxSpliced('prompt two'), userMessage('prompt two')])
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
+    // Let any would-be self-trigger drain settle: exactly one model call.
+    await flush()
+    expect(adapter.requests).toHaveLength(1)
+    const first = deltaTextOf(adapter.requests[0]!)
+    expect(first).toContain('**agent**: reply one')
+    expect(first).not.toContain('prompt two')
+
+    // Round 2 reply + round 3 input → review 2: still one review per round.
+    feed(ctx, session, log, [assistantMessage('reply two')])
+    feed(ctx, session, log, [inboxSpliced('prompt three'), userMessage('prompt three')])
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(2))
+    expect(adapter.requests).toHaveLength(2)
+    const second = deltaTextOf(adapter.requests[1]!)
+    expect(second).toContain('**user**: prompt two')
+    expect(second).toContain('**agent**: reply two')
+    expect(second).not.toContain('prompt three')
+  })
+})
+
+
+// ---------------------------------------------------------------------------
 // 2. Conditional command activation (T7 ⚠️)
 // ---------------------------------------------------------------------------
 
@@ -859,5 +935,55 @@ describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix w
       role: 'user',
       source: { kind: ADVISOR_SOURCE_KIND },
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 7. Root-llm resolution on an isolated child scope (qc1 W-3 / qc2 S-4)
+//
+// The NO_ADAPTER root cause: a plugin fiber composed in an isolated scope
+// resolves a LOCAL `llm` service that lacks the provider adapters (they live
+// on the application ROOT's LlmService). `ensureRuntime` resolves the llm
+// from `ctx.root.get('llm')` first, so the advisor call must reach the root
+// adapter while the child's own llm is never touched. This is the automated
+// regression test for the host-verified fix — the previously missing
+// isolate-scope coverage.
+// ---------------------------------------------------------------------------
+
+describe('integration — root-llm resolution from an isolated child scope (qc1 W-3)', () => {
+  it('a plugin on a child whose local llm has no adapters still reaches the ROOT adapter', async () => {
+    const root = new Context()
+    await root.plugin(LlmService)
+    const adapter = new StubAdapter([[...textReply('{"note":"root adapter reached","severity":"concern"}')]])
+    root.llm.registerAdapter(['stub'], adapter)
+
+    // Child scope with an ISOLATED llm: the child's own llm service is a bare
+    // stub that throws if ever called (no adapter registrations — the exact
+    // deployment scenario behind NO_ADAPTER). Only the root LlmService carries
+    // the registered adapter, and `ensureRuntime` must reach it.
+    const child = root.isolate('llm')
+    child.provide('llm', {
+      stream: (): AsyncIterable<StreamChunk> => {
+        throw new Error('the child-local llm must never be called — the root llm resolves the adapter')
+      },
+    } as never)
+    child.provide('sessions', {} as never)
+    child.provide('agents', { get: () => undefined } as never)
+    await child.plugin(advisorPlugin, fullConfig({ enabled: true, provider: 'stub', model: 'stub-model' }))
+
+    const { agent, steer } = makeFakeAgent('s1')
+    child.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+    feed(child, session, log, simpleTurn(1, 'do the thing', 'done'))
+
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
+    // The ROOT adapter received the call — the child-local llm (which would
+    // throw) was never used.
+    expect(adapter.requests).toHaveLength(1)
+    expect(adapter.requests[0]!.provider).toBe('stub')
+    expect(adapter.requests[0]!.model).toBe('stub-model')
+    const message = steer.mock.calls[0]![0] as UserMessage
+    expect(message.source.kind).toBe(ADVISOR_SOURCE_KIND)
+    expect(message.content).toEqual([{ type: 'text', text: '[advisor:concern] root adapter reached' }])
   })
 })

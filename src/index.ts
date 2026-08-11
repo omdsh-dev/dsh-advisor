@@ -254,6 +254,16 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // true }` is required for the observer to receive every session's events
   // regardless of scope placement. Q2=grill-me-locked fix; verified by host
   // test (PM operator step, evidence in iteration guides).
+  //
+  // The three lifecycle listeners below dispatch through the SAME
+  // scope-filtered carrier as `session/event` (dsh-session/dsh-agent
+  // `announce`/`emitDisposed`), so they must be `{ global: true }` too (qc3
+  // F4): a scoped fiber that observes out-of-scope sessions via the global
+  // session/event listener would otherwise create per-session state —
+  // renderers, runtimes, cooldowns, overrides — whose dispose events are
+  // filtered out, a per-session leak for the host's lifetime. Create/dispose
+  // symmetry restored; both dispose listeners are documented idempotent
+  // (a runtime is disposed at most once, whichever signal lands first).
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
     observer.handleEvent(session.id, session.events, event)
   }, { global: true })
@@ -266,19 +276,19 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
     ensureRuntime(agent.id)
     delivery.registerAgent(agent)
-  })
+  }, { global: true })
   ctx.on('agent/disposed', ({ agent }: { agent: Agent }) => {
     observer.disposeSession(agent.id)
     disposeRuntime(agent.id)
     delivery.unregisterAgent(agent.id)
     overrides.clear(agent.id)
-  })
+  }, { global: true })
   ctx.on('session/disposed', (session: Session) => {
     observer.disposeSession(session.id)
     disposeRuntime(session.id)
     delivery.unregisterAgent(session.id)
     overrides.clear(session.id)
-  })
+  }, { global: true })
 
   // T1-settings live re-apply: construction-time latches (immuneTurns on the
   // delivery, maxDeltaMessages on the observer, systemPrompt + provider/model

@@ -206,6 +206,35 @@ describe('DeltaRenderer — cursor advance on append', () => {
     const events = buildEvents([...simpleTurn(1, 'hi', 'hello'), turnStart(2), turnEnd(2)])
     expect(renderer.update(events)).toBeUndefined()
   })
+
+  it('update(events, true) excludes the last event from the delta without copying (qc3 F1)', () => {
+    const renderer = new DeltaRenderer()
+    const turn1 = buildEvents(simpleTurn(1, 'fix the bug', 'I will fix it.'))
+    renderer.update(turn1)
+    // A new reply since the cursor, then the arriving human input as the
+    // trailing event: skipLast treats the trigger as excluded — the delta is
+    // the completed prior round, never the arriving input.
+    const events = buildEvents([
+      ...simpleTurn(1, 'fix the bug', 'I will fix it.'),
+      assistantMessage('round two reply'),
+      userMessage('next prompt'),
+    ])
+    const delta = renderer.update(events, true)
+    expect(delta).toBeDefined()
+    expect(delta!.markdown).toContain('**agent**: round two reply')
+    expect(delta!.markdown).not.toContain('next prompt')
+    // The skipped trigger is consumed by the cursor: the next update is
+    // incremental (only the content after the trigger).
+    const more = buildEvents([
+      ...simpleTurn(1, 'fix the bug', 'I will fix it.'),
+      assistantMessage('round two reply'),
+      userMessage('next prompt'),
+      assistantMessage('round three reply'),
+    ])
+    const second = renderer.update(more)
+    expect(second!.markdown).toContain('**agent**: round three reply')
+    expect(second!.markdown).not.toContain('round two reply')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -458,6 +487,31 @@ function inboxSpliced(value: string): EventSpec {
         source: { kind: 'user' },
       }],
     },
+  }
+}
+
+/** An `agent/inbox/spliced` whose single inserted message carries an arbitrary source kind (C-1). */
+function inboxSplicedWith(value: string, source: { kind: string; [key: string]: unknown }): EventSpec {
+  return {
+    type: 'agent/inbox/spliced',
+    data: {
+      target: 'next-turn',
+      start: 0,
+      inserted: [{
+        id: MessageId(`inbox-${value}`),
+        role: 'user',
+        content: [text(value)],
+        source,
+      }],
+    },
+  }
+}
+
+/** An `agent/inbox/spliced` with no inserted messages (claim/clear — C-1). */
+function inboxClear(): EventSpec {
+  return {
+    type: 'agent/inbox/spliced',
+    data: { target: 'next-turn', start: 0, inserted: [] },
   }
 }
 
@@ -716,6 +770,88 @@ describe('SessionTranscriptObserver — agentic reply-complete gate (KD-N4-5)', 
     ])
     expect(deltas).toHaveLength(0)
     expect(stepped).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SessionTranscriptObserver — inbox-spliced payload discrimination (C-1)
+//
+// `agent/inbox/spliced` fires on EVERY inbox mutation, including the advisor's
+// own inject/steer deliveries (source.kind 'advisor'), workspace-context sync
+// ('workspace-instructions'), tool-result splicing ('tool'), and claim/clear
+// (empty `inserted`). Only an inserted message with `source.kind === 'user'`
+// is a human input — anything else must not self-trigger the review gate.
+// ---------------------------------------------------------------------------
+
+describe('SessionTranscriptObserver — inbox-spliced payload discrimination (C-1 self-trigger fix)', () => {
+  const observe = (): { deltas: string[]; stepped: string[]; observer: SessionTranscriptObserver } => {
+    const deltas: string[] = []
+    const stepped: string[] = []
+    const observer = new SessionTranscriptObserver({
+      maxDeltaMessages: 60,
+      onDelta: (_sessionId, delta) => deltas.push(delta.markdown),
+      onSteppedTurnEnd: (_sessionId) => stepped.push('x'),
+    })
+    return { deltas, stepped, observer }
+  }
+  /** One completed agentic round with an unreviewed assistant increment in place. */
+  const round = (): EventSpec[] => [userMessage('prompt one'), assistantMessage('reply one')]
+
+  it('the advisor\'s own note delivery (inserted source.kind advisor) never triggers', () => {
+    const { deltas, stepped, observer } = observe()
+    feed(observer, 's1', [
+      ...round(),
+      inboxSplicedWith('[advisor:nit] consider extracting a helper', { kind: ADVISOR_SOURCE_KIND }),
+    ])
+    expect(deltas).toHaveLength(0)
+    expect(stepped).toHaveLength(0)
+  })
+
+  it('a workspace-context sync (inserted source.kind workspace-instructions) never triggers', () => {
+    const { deltas, stepped, observer } = observe()
+    feed(observer, 's1', [
+      ...round(),
+      inboxSplicedWith('the repo is at /repo', { kind: 'workspace-instructions' }),
+    ])
+    expect(deltas).toHaveLength(0)
+    expect(stepped).toHaveLength(0)
+  })
+
+  it('a tool-result splice (inserted source.kind tool) never triggers', () => {
+    const { deltas, stepped, observer } = observe()
+    feed(observer, 's1', [
+      ...round(),
+      inboxSplicedWith('3 passed', { kind: 'tool', callId: CallId('call-0') }),
+    ])
+    expect(deltas).toHaveLength(0)
+    expect(stepped).toHaveLength(0)
+  })
+
+  it('an empty-clear splice (no inserted messages) never triggers', () => {
+    const { deltas, stepped, observer } = observe()
+    feed(observer, 's1', [...round(), inboxClear()])
+    expect(deltas).toHaveLength(0)
+    expect(stepped).toHaveLength(0)
+  })
+
+  it('excluded splices never advance the cursor: a later genuine user splice triggers exactly one review', () => {
+    const { deltas, stepped, observer } = observe()
+    feed(observer, 's1', [
+      ...round(),
+      inboxSplicedWith('[advisor:nit] a note', { kind: ADVISOR_SOURCE_KIND }),
+      inboxSplicedWith('workspace sync', { kind: 'workspace-instructions' }),
+      inboxSplicedWith('2 failed', { kind: 'tool', callId: CallId('call-0') }),
+      inboxClear(),
+      inboxSpliced('prompt two'),           // the one genuine human splice
+    ])
+    expect(deltas).toHaveLength(1)
+    expect(stepped).toHaveLength(1)
+    // The delta is the completed prior round; none of the excluded splices
+    // entered it, and the genuine trigger did not either.
+    expect(deltas[0]).toContain('**user**: prompt one')
+    expect(deltas[0]).toContain('**agent**: reply one')
+    expect(deltas[0]).not.toContain('prompt two')
+    expect(deltas[0]).not.toContain('advisor')
   })
 })
 

@@ -77,6 +77,8 @@ advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabl
 | `immuneTurns` | int ≥ 0, `3` | 实际 steer 过一次 concern/blocker 后，接下来 N 个完成的 stepped 主 turn 必须走完，另一条打断性 note 才可再次 steer；窗口内的 note 降级为 inject。 |
 | `maxDeltaMessages` | int ≥ 0, `60` | 有界的 advisor 输入窗口。超过 N 的 delta 以 `… <earlier messages omitted>` 标记截断；`0` = 无上限。 |
 
+**模型能力与预算**：advisor 调用以 `reasoningEffort: 'off'` 运行 —— 仅当所配置模型的 adapter 声明该档位时才发送（deepseek 模型声明；其他模型会自动省略该选项，因此非推理供应商照常工作）—— 并以 **5120 tokens** 作为输出上限（用户指示的 256 → 5120 的 20 倍超驰）。抽取出的 note 有界（1000 字符），notice summary 有界（120 字符），因此提高的预算不会变成注入主会话的无界内容。
+
 ## 用法
 
 安装并启用后，advisor 观察每个会话。用 `/advisor` 指令按会话控制它（组合了 command registry 时可用）：

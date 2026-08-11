@@ -33,7 +33,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import type { GenerateOptions, StreamChunk, UserMessage } from '@deepseek-ai/dsh-llm'
-import { CallId, MessageId } from '@deepseek-ai/dsh-llm'
+import { CallId, CONTEXT_SUMMARY_MAX_CHARS, MessageId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, SurfaceOp } from '@deepseek-ai/dsh-session'
 import { AdvisorDelivery, buildAdvisorMessage } from '../src/delivery'
@@ -131,6 +131,16 @@ describe('AdvisorDelivery — advisor message construction (spec §6)', () => {
       summary: '[concern] extract the helper',
     })
     expect(message.content).toEqual([{ type: 'text', text: '[advisor:concern] extract the helper' }])
+  })
+
+  it('bounds the notice summary to CONTEXT_SUMMARY_MAX_CHARS with an ellipsis (qc3 F-2 / qc2 S-1)', () => {
+    const message = buildAdvisorMessage({ note: 'n'.repeat(500), severity: 'concern' })
+    const source = message.source as { kind: string; form?: string; summary?: string }
+    expect(source.form).toBe('notice')
+    expect(source.summary!.length).toBeLessThanOrEqual(CONTEXT_SUMMARY_MAX_CHARS)
+    expect(source.summary!.endsWith('…')).toBe(true)
+    // The bounded summary is derived from the same formatter as the content.
+    expect(message.content).toEqual([{ type: 'text', text: `[advisor:concern] ${'n'.repeat(500)}` }])
   })
 
   it('routes the self-describing advisor message, not the raw note', () => {

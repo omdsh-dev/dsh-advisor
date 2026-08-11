@@ -22,9 +22,12 @@
  *    single-trigger path.
  * 2. **agent reply complete** (harness/agentic sessions, which never emit
  *    `turn/end`): fires on human-input arrival (`user/message` with
- *    `source.kind === 'user'`, or `agent/inbox/spliced` — inbox-spliced input
- *    may commit as that event first and never re-emit as `user/message`,
- *    matched by type string per the `compact/*` precedent). Before rendering,
+ *    `source.kind === 'user'`, or `agent/inbox/spliced` whose `inserted`
+ *    carries a message with `source.kind === 'user'` — inbox-spliced input
+ *    may commit as that event first and never re-emit as `user/message`).
+ *    Non-user inbox splices (the advisor's own inject/steer deliveries,
+ *    workspace/tool/empty splices) never trigger (C-1 self-trigger fix).
+ *    Before rendering,
  *    a read-only predicate checks for an unreviewed non-advisor
  *    `assistant/message` since the renderer cursor; on a miss the cursor is
  *    untouched (the first user input of a session neither triggers nor
@@ -229,6 +232,12 @@ export class DeltaRenderer {
    * Process a session event log snapshot and return the next delta, or
    * `undefined` when no new (renderable) content was appended.
    *
+   * `skipLast` treats the final log event as excluded — the arriving trigger
+   * of an append-type review (qc3 F1): equivalent to the caller slicing
+   * `events.slice(0, events.length - 1)` WITHOUT the O(full-log) shallow copy
+   * the reply-complete gate used to pay on every review. The excluded event
+   * must be the last log entry (the wiring guarantees it).
+   *
    * - Detects a reset: a rewrite event (`compact/*`, replace surface op) in
    *   the unconsumed portion, a shorter log than the cursor, or a delivered
    *   prefix whose fingerprint changed. On reset the cursor rewinds to 0 and
@@ -236,10 +245,11 @@ export class DeltaRenderer {
    * - Otherwise appends the new events, extracts their messages (advisor
    *   excluded), and renders only those (incremental delta).
    */
-  update(events: readonly SessionEvent[]): Delta | undefined {
-    let replay = events.length < this.cursor
+  update(events: readonly SessionEvent[], skipLast = false): Delta | undefined {
+    const effectiveLength = skipLast ? events.length - 1 : events.length
+    let replay = effectiveLength < this.cursor
     if (!replay) {
-      const fresh = events.slice(this.cursor)
+      const fresh = events.slice(this.cursor, effectiveLength)
       replay = fresh.some(isRewriteEvent)
     }
     if (!replay && this.cursor > 0 && this.deliveredFingerprint !== undefined) {
@@ -248,11 +258,11 @@ export class DeltaRenderer {
     let added: Message[] = []
     if (replay) {
       this.reset()
-      this.rebuild(events)
+      this.rebuild(events, effectiveLength)
     } else {
-      added = this.append(events.slice(this.cursor))
+      added = this.append(events, this.cursor, effectiveLength)
     }
-    this.cursor = events.length
+    this.cursor = effectiveLength
     this.deliveredFingerprint = fingerprintOf(events, this.cursor)
     return replay ? this.renderSurface() : this.renderTail(added)
   }
@@ -305,9 +315,9 @@ export class DeltaRenderer {
     return false
   }
 
-  /** Rebuild the fold from a full log (post-reset replay). */
-  private rebuild(events: readonly SessionEvent[]): void {
-    const folded = foldSurface(events)
+  /** Rebuild the fold from a full log (post-reset replay, bounded to `length`). */
+  private rebuild(events: readonly SessionEvent[], length: number): void {
+    const folded = foldSurface(events.slice(0, length))
     for (const seq of folded.nodes) {
       const message = deriveEventMessage(events[seq]!)
       if (message === null || isAdvisorMessage(message)) continue
@@ -321,10 +331,11 @@ export class DeltaRenderer {
     }
   }
 
-  /** Incrementally fold new events (guaranteed append-only) and return added messages. */
-  private append(events: readonly SessionEvent[]): Message[] {
+  /** Incrementally fold new events in `[start, end)` (guaranteed append-only) and return added messages. */
+  private append(events: readonly SessionEvent[], start: number, end: number): Message[] {
     const added: Message[] = []
-    for (const event of events) {
+    for (let index = start; index < end; index++) {
+      const event = events[index]!
       const message = deriveEventMessage(event)
       if (message === null || isAdvisorMessage(message)) continue
       this.surface.push(event.seq)
@@ -406,18 +417,24 @@ export function isReviewableTurnEnd(event: SessionEvent): boolean {
  * - `user/message` with `source.kind === 'user'` — the primary signal: a
  *   direct human prompt (the queued message claimed for a step).
  * - `agent/inbox/spliced` — the fallback: inbox-spliced input commits as
- *   this log-only event first and may never re-emit as `user/message`.
- *   Matched by type string (the merged `SessionEventMap` entry comes from
- *   the dsh-agent peer, per the `compact/*` precedent). Its `inserted`
- *   messages are the arriving input — excluded from the delta like any
- *   append-type trigger.
+ *   this log-only event first and may never re-emit as `user/message`
+ *   (the merged `SessionEventMap` entry comes from the dsh-agent peer, per
+ *   the `compact/*` precedent). Payload-discriminated (C-1 fix): the event
+ *   only triggers when `inserted` is non-empty and carries at least one
+ *   message whose `source.kind === 'user'`. Every other inbox mutation is
+ *   excluded — the advisor's OWN inject/steer deliveries (source.kind
+ *   `advisor`), workspace-context sync (`workspace-instructions`),
+ *   tool-result splicing (`tool`), and claim/clear splices (empty
+ *   `inserted`) must not self-trigger the review gate.
  *
  * Synthetic/injected user-role messages (tool results, advisor notes,
  * workspace context) carry other `source.kind` values and never trigger.
  */
 export function isHumanInputEvent(event: SessionEvent): boolean {
   if (event.type === 'user/message') return event.data.source.kind === 'user'
-  if (event.type === 'agent/inbox/spliced') return true
+  if (event.type === 'agent/inbox/spliced') {
+    return event.data.inserted.some((message) => message.source.kind === 'user')
+  }
   return false
 }
 
@@ -506,12 +523,14 @@ export class SessionTranscriptObserver {
     this.options.onSteppedTurnEnd?.(sessionId)
     // Append-type trigger: the arriving input opens the next round — exclude
     // the trigger event itself so it never enters the delta (the wiring
-    // guarantees `event` is the last log entry). Rewrite-type trigger
-    // (compact summary replace): pass the full log so `update()` detects the
-    // rewrite and replays the post-rewrite surface (KD-5).
+    // guarantees `event` is the last log entry). skipLast does this WITHOUT
+    // the O(full-log) copy the previous `events.slice(0, -1)` paid on every
+    // review (qc3 F1). Rewrite-type trigger (compact summary replace): pass
+    // the full log so `update()` detects the rewrite and replays the
+    // post-rewrite surface (KD-5).
     const delta = isRewriteEvent(event)
       ? renderer.update(events)
-      : renderer.update(events.slice(0, events.length - 1))
+      : renderer.update(events, true)
     if (delta !== undefined) this.options.onDelta(sessionId, delta)
   }
 

@@ -37,7 +37,13 @@
 
 import { createUserMessage, isQuotaExceededError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { INVALID_CREDENTIAL_CODE, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
-import type { FinishReason, GenerateOptions, LlmFailure, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type {
+  FinishReason,
+  GenerateOptions,
+  LlmFailure,
+  LlmResolvedModelInfo,
+  StreamChunk,
+} from '@deepseek-ai/dsh-llm'
 import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { createEmissionGuard } from './emission-guard'
 import type { EmissionGuard } from './emission-guard'
@@ -69,6 +75,15 @@ export type AdvisorRuntimeStatus = 'running' | 'paused' | 'quota_exhausted' | 'h
 /** Minimal `ctx.llm` surface the runtime drives (satisfied by `LlmService`). */
 export interface AdvisorLlm {
   stream(options: GenerateOptions): AsyncIterable<StreamChunk>
+  /**
+   * Optional capability query (LlmService exposes it; injected fakes may not).
+   * Used to capability-gate `reasoningEffort` (qc2 W-1 / qc1 W-1 / qc3 F-3):
+   * the dsh LlmService rejects an explicit effort for any model whose adapter
+   * does not declare it, so the runtime resolves the model's declared efforts
+   * and passes `'off'` only when the model supports it. Absent → the option
+   * is omitted and `resolveCallFor` materializes the adapter default.
+   */
+  resolveModelInfo?(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>
 }
 
 /** Logger seam (cordis `ctx.logger('advisor')` satisfies it; console works too). */
@@ -121,8 +136,24 @@ const DEFAULT_MAX_TOKENS = 256
  * (256 -> 5120) so even a reasoning-heavy reply cannot starve the JSON frame.
  * Exported so the test suites assert the pinned value instead of a magic
  * literal.
+ *
+ * Supersession note (qc2 S-2 / qc1 S-2 / qc3 F-2): the frozen spec §8.2
+ * (KD-2) pins `maxTokens: 256` ("so a runaway reply cannot blow the budget").
+ * This 5120 value is the USER-DIRECTED supersession of that pin — a 20x
+ * worst-case per-call ceiling, adopted together with `reasoningEffort: 'off'`
+ * (capability-gated, see `resolveReasoningEffort`) so the raised budget goes
+ * to the JSON frame rather than reasoning output. The looser runaway-reply
+ * guard is re-bounded downstream: `extractAdviceNote` caps the note at
+ * `ADVISOR_NOTE_MAX_CHARS` and `buildAdvisorMessage` bounds the notice
+ * summary via `boundContextSummary`.
  */
 export const ADVISOR_MAX_TOKENS = 5_120
+/**
+ * One extracted note's length cap (qc3 F-2 / qc2 S-1): a verbose/rogue advisor
+ * reply with the 20x token budget must not inject an unbounded user-role
+ * message into the primary session. Truncated with a '…' marker.
+ */
+export const ADVISOR_NOTE_MAX_CHARS = 1_000
 const DEFAULT_RETRY_BACKOFF_MS = 1_000
 const DEFAULT_MAX_QUEUED = 32
 /** Whole-call deadline for one `llm.stream` (qc2 W-4 / qc3 W-1); see `callTimeoutMs`. */
@@ -181,7 +212,10 @@ function* balancedObjects(text: string): Generator<string> {
  * string after trim (else drop), `severity` missing/invalid defaults to
  * `nit`. A reply with no parseable frame returns `undefined` — the caller
  * drops + logs, and there is NO retry for parse failures (the retry budget is
- * reserved for transport errors, KD-2). Never throws.
+ * reserved for transport errors, KD-2). The note is capped at
+ * {@link ADVISOR_NOTE_MAX_CHARS} with a '…' marker (qc3 F-2 — the 20x token
+ * budget must not translate into an unbounded injection into the primary
+ * session). Never throws.
  */
 export function extractAdviceNote(reply: string): AdviceNote | undefined {
   for (const frame of balancedObjects(reply)) {
@@ -196,8 +230,11 @@ export function extractAdviceNote(reply: string): AdviceNote | undefined {
     const note = record.note
     if (typeof note !== 'string' || note.trim().length === 0) continue // KD-2: drop empty note
     const severity = record.severity
+    const trimmed = note.trim()
     return {
-      note: note.trim(),
+      note: trimmed.length > ADVISOR_NOTE_MAX_CHARS
+        ? `${trimmed.slice(0, ADVISOR_NOTE_MAX_CHARS - 1)}…`
+        : trimmed,
       severity: severity === 'concern' || severity === 'blocker' ? severity : 'nit',
     }
   }
@@ -321,6 +358,14 @@ export class AdvisorRuntime {
   private readonly onNote: (note: AdviceNote) => void
   private readonly logger: AdvisorRuntimeLogger
   private readonly controller = new AbortController()
+  /**
+   * Per-(provider, model) reasoning-effort capability cache (qc2 W-1 / qc1
+   * W-1 / qc3 F-3): resolving the model's declared efforts on EVERY advisor
+   * call would add an adapter round-trip per delta; one resolution per
+   * (provider, model) per runtime suffices — the route is pinned for the
+   * runtime's lifetime.
+   */
+  private readonly reasoningEffortCache = new Map<string, ReasoningEffortId | undefined>()
 
   private readonly queue: Delta[] = []
   private state: AdvisorRuntimeStatus = 'running'
@@ -529,7 +574,12 @@ export class AdvisorRuntime {
     using deadlineHandle = deadline(this.controller.signal, this.callTimeoutMs, ADVISOR_CALL_TIMEOUT)
     const deadlineSignal = deadlineHandle.signal
     try {
-      const stream = this.llm.stream(this.buildOptions(delta, deadlineSignal))
+      // Capability-gate `reasoningEffort` (qc2 W-1 / qc1 W-1 / qc3 F-3):
+      // resolve the model's declared efforts ONCE per (provider, model) and
+      // pass 'off' only when supported; never fail the call on a resolution
+      // error (the option is simply omitted).
+      const reasoningEffort = await this.resolveReasoningEffort()
+      const stream = this.llm.stream(this.buildOptions(delta, deadlineSignal, reasoningEffort))
       const iterator = stream[Symbol.asyncIterator]()
       for (;;) {
         const next = await raceIteratorNext(iterator, deadlineSignal)
@@ -605,7 +655,7 @@ export class AdvisorRuntime {
     return { kind: 'note', note }
   }
 
-  private buildOptions(delta: Delta, signal: AbortSignal): GenerateOptions {
+  private buildOptions(delta: Delta, signal: AbortSignal, reasoningEffort: ReasoningEffortId | undefined): GenerateOptions {
     return {
       provider: this.provider,
       model: this.model,
@@ -620,9 +670,14 @@ export class AdvisorRuntime {
       // (finish: max-tokens), and KD-2 dropped every reply. Turn reasoning OFF
       // so the budget goes to the JSON frame, and raise it for headroom
       // (ADVISOR_MAX_TOKENS). The advisor's job is a short structured note —
-      // reasoning is not needed. The branded ReasoningEffortId only accepts
-      // values the adapter defines ('off' is llm-deepseek's).
-      reasoningEffort: ReasoningEffortId('off'),
+      // reasoning is not needed. Capability-gated (qc2 W-1 / qc1 W-1 / qc3
+      // F-3): `resolveReasoningEffort` passes the branded 'off' ONLY when the
+      // resolved model declares it; otherwise the option is omitted entirely
+      // (the dsh LlmService would reject an explicit effort for a model whose
+      // adapter lacks reasoning metadata with UNSUPPORTED_REASONING_EFFORT,
+      // silently killing the advisor for non-deepseek models — pre-n4 these
+      // worked because no effort was sent).
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       // n4 user direction: amplify the token budget 20x (256 -> 5120) so even a
       // reasoning-heavy reply cannot starve the JSON frame.
       maxTokens: ADVISOR_MAX_TOKENS,
@@ -630,5 +685,30 @@ export class AdvisorRuntime {
       // KD-5: `purpose` is a closed union ('compaction' | 'session-title'); an
       // advisor call is an ordinary conversation request and leaves it unset.
     }
+  }
+
+  /**
+   * Capability-gate the `reasoningEffort: 'off'` option (qc2 W-1 / qc1 W-1 /
+   * qc3 F-3): pass the branded 'off' effort only when the resolved model's
+   * `reasoning.efforts` includes it, else omit the option (`resolveCallFor`
+   * materializes the adapter default). Cached per (provider, model) — one
+   * resolution per runtime, never per call. A resolution failure (unknown
+   * route, adapter throw) is advisory: the call proceeds WITHOUT the option,
+   * matching the pre-n4 behavior for every model that does not declare 'off'.
+   */
+  private async resolveReasoningEffort(): Promise<ReasoningEffortId | undefined> {
+    const key = `${this.provider}\u0000${this.model}`
+    if (this.reasoningEffortCache.has(key)) return this.reasoningEffortCache.get(key)
+    let effort: ReasoningEffortId | undefined
+    try {
+      const info = await this.llm.resolveModelInfo?.(this.provider, this.model)
+      effort = info?.reasoning?.efforts.some((entry) => entry.id === ReasoningEffortId('off'))
+        ? ReasoningEffortId('off')
+        : undefined
+    } catch {
+      effort = undefined
+    }
+    this.reasoningEffortCache.set(key, effort)
+    return effort
   }
 }
