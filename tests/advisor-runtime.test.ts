@@ -5,7 +5,7 @@
  * Contract under test:
  * - `AdvisorRuntime` (per-session): `enqueue(delta)` queues a rendered transcript
  *   delta and asynchronously drains it — one `llm.stream` call per delta with
- *   `{ provider, model, system, messages: [user delta], maxTokens: 256 }` and
+ *   `{ provider, model, system, messages: [user delta], maxTokens: 5120 }` and
  *   `purpose` left UNSET (KD-5). Extracted `{note, severity}` is handed to the
  *   `onNote` hook (the T5 emission guard wraps it).
  * - JSON-frame extraction (KD-2): first balanced `{…}` parsed, tolerant of
@@ -30,10 +30,10 @@ import { Context } from 'cordis'
 // The overlay shim (`export *`) forwards named exports but not the package
 // default, so `LlmService` (named export of @deepseek-ai/dsh-llm) is imported
 // by name, not as the default.
-import { LlmService, LlmAdapter } from '@deepseek-ai/dsh-llm'
+import { LlmService, LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmFailure, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import { AdvisorRuntime, extractAdviceNote } from '../src/advisor-runtime'
+import { AdvisorRuntime, ADVISOR_MAX_TOKENS, extractAdviceNote } from '../src/advisor-runtime'
 import type { AdvisorLlm, AdvisorRuntimeOptions, AdvisorRuntimeStatus, AdviceNote } from '../src/advisor-runtime'
 import type { Delta } from '../src/transcript'
 import { apply } from '../src/index'
@@ -137,7 +137,7 @@ describe('AdvisorRuntime — drain calls llm.stream once per delta with expected
       provider: 'test-provider',
       model: 'test-model',
       system: TEST_SYSTEM_PROMPT,
-      maxTokens: 5120,
+      maxTokens: ADVISOR_MAX_TOKENS,
       reasoningEffort: 'off',
     })
     // KD-5: purpose is a closed union and must be left unset for an advisor call.
@@ -468,7 +468,7 @@ class RecordingAdapter extends LlmAdapter {
       provider,
       id: model,
       name: model,
-      reasoning: { efforts: [{ id: 'off' as never, name: 'Off' }, { id: 'high' as never, name: 'High' }], defaultEffort: 'off' as never },
+      reasoning: { efforts: [{ id: ReasoningEffortId('off'), name: 'Off' }, { id: ReasoningEffortId('high'), name: 'High' }], defaultEffort: ReasoningEffortId('off') },
     })
   }
 
@@ -508,7 +508,7 @@ describe('AdvisorRuntime — composed with a real LlmService + registered adapte
       provider: 'test-provider',
       model: 'test-model',
       system: TEST_SYSTEM_PROMPT,
-      maxTokens: 5120,
+      maxTokens: ADVISOR_MAX_TOKENS,
       reasoningEffort: 'off',
     })
     expect(adapter.requests[0]!.purpose).toBeUndefined()

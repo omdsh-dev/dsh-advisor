@@ -10,7 +10,7 @@
  * - a FIFO queue of pending transcript deltas (bounded — spec §6 "bounded
  *   backlog"; drop-newest when full);
  * - a serialized async drain loop: one `llm.stream` call per delta with
- *   `{ provider, model, system, messages: [user delta], maxTokens: 256 }` and
+ *   `{ provider, model, system, messages: [user delta], maxTokens: 5120 }` and
  *   `purpose` left UNSET (KD-5 — an advisor call is an ordinary conversation
  *   request);
  * - a call-level deadline on every `llm.stream` call (dsh-timeout `deadline`,
@@ -35,7 +35,7 @@
  * @module dsh-advisor/advisor-runtime
  */
 
-import { createUserMessage, isQuotaExceededError } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, isQuotaExceededError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { INVALID_CREDENTIAL_CODE, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 import type { FinishReason, GenerateOptions, LlmFailure, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
@@ -116,6 +116,13 @@ export interface AdvisorRuntimeOptions {
 
 /** Pinned policy values (KD-2 / KD-5). */
 const DEFAULT_MAX_TOKENS = 256
+/**
+ * n4 user direction: the advisor call runs with a 20x token budget
+ * (256 -> 5120) so even a reasoning-heavy reply cannot starve the JSON frame.
+ * Exported so the test suites assert the pinned value instead of a magic
+ * literal.
+ */
+export const ADVISOR_MAX_TOKENS = 5_120
 const DEFAULT_RETRY_BACKOFF_MS = 1_000
 const DEFAULT_MAX_QUEUED = 32
 /** Whole-call deadline for one `llm.stream` (qc2 W-4 / qc3 W-1); see `callTimeoutMs`. */
@@ -608,16 +615,17 @@ export class AdvisorRuntime {
         source: { kind: 'user' },
       })],
       // n4 root-cause (host-observed "reply yielded no note"): deepseek-v4-flash
-      // is a reasoning model — with maxTokens=256 the reasoning stream consumed
-      // the whole budget, the text output came back EMPTY (finish: max-tokens),
-      // and KD-2 dropped every reply. Turn reasoning OFF so the budget goes to
-      // the JSON frame, and raise it for headroom. The advisor's job is a short
-      // structured note — reasoning is not needed. The branded ReasoningEffortId
-      // only accepts values the adapter defines ('off' is llm-deepseek's).
-      reasoningEffort: 'off' as never,
+      // is a reasoning model — with the default 256-token budget the reasoning
+      // stream consumed the whole budget, the text output came back EMPTY
+      // (finish: max-tokens), and KD-2 dropped every reply. Turn reasoning OFF
+      // so the budget goes to the JSON frame, and raise it for headroom
+      // (ADVISOR_MAX_TOKENS). The advisor's job is a short structured note —
+      // reasoning is not needed. The branded ReasoningEffortId only accepts
+      // values the adapter defines ('off' is llm-deepseek's).
+      reasoningEffort: ReasoningEffortId('off'),
       // n4 user direction: amplify the token budget 20x (256 -> 5120) so even a
       // reasoning-heavy reply cannot starve the JSON frame.
-      maxTokens: 5120,
+      maxTokens: ADVISOR_MAX_TOKENS,
       signal,
       // KD-5: `purpose` is a closed union ('compaction' | 'session-title'); an
       // advisor call is an ordinary conversation request and leaves it unset.

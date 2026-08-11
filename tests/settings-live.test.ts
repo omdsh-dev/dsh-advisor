@@ -41,7 +41,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from 'cordis'
 import { MemorySettings } from './support/memory-settings'
-import { LlmAdapter, LlmService, MessageId } from '@deepseek-ai/dsh-llm'
+import { LlmAdapter, LlmService, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -76,7 +76,7 @@ class StubAdapter extends LlmAdapter {
       provider,
       id: model,
       name: model,
-      reasoning: { efforts: [{ id: 'off' as never, name: 'Off' }, { id: 'high' as never, name: 'High' }], defaultEffort: 'off' as never },
+      reasoning: { efforts: [{ id: ReasoningEffortId('off'), name: 'Off' }, { id: ReasoningEffortId('high'), name: 'High' }], defaultEffort: ReasoningEffortId('off') },
     })
   }
 
@@ -108,7 +108,7 @@ class GatedAdapter extends LlmAdapter {
       provider,
       id: model,
       name: model,
-      reasoning: { efforts: [{ id: 'off' as never, name: 'Off' }, { id: 'high' as never, name: 'High' }], defaultEffort: 'off' as never },
+      reasoning: { efforts: [{ id: ReasoningEffortId('off'), name: 'Off' }, { id: ReasoningEffortId('high'), name: 'High' }], defaultEffort: ReasoningEffortId('off') },
     })
   }
 

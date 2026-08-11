@@ -92,7 +92,12 @@ advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabl
 
 `/advisor on` 也是手动恢复路径：被 quota/rate-limit 暂停的会话 advisor（`quota_exhausted` —— KD-5 没有自动恢复定时器）会在原地恢复；被终止的 advisor（永久性模型错误，如凭据无效）会为该会话全新重建。
 
-在每个正常结束（`completed`、`max-tokens` 或 `error`）的 stepped 主 turn 之后，advisor 评审增量 transcript delta，并按严重度排序，至多发出一条 note：
+advisor 采用双模式触发，取决于会话形态：
+
+- **标准 stepped 会话** —— 在每个正常结束（`completed`、`max-tokens` 或 `error`）的 stepped 主 turn 之后，评审增量 transcript delta。
+- **agentic / harness 会话**（从不发出 `turn/end`）—— 在每个完成的 agent 回复轮次之后：当新的用户输入（含 inbox 拼接输入）在未评审的 assistant 增量之后到达时，评审该增量。
+
+无论哪种模式，每次评审至多发出一条 note，按严重度排序：
 
 - **nit** —— 轻微的样式、清晰度或质量建议；通过 `agent.inject` 送达（非唤醒，在下一个 pre-step 边界消费）。
 - **concern** —— 在继续之前值得权衡的重大风险或明显更优的方向；通过 `agent.steer` 送达（唤醒），受 `immuneTurns` 冷却约束。
@@ -108,7 +113,7 @@ advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabl
 
 ## 工作原理
 
-插件订阅 `session/event`；在每个 step 的 `turn/end` 之后，它渲染主 transcript 的增量 markdown delta（排除 advisor 自己的消息），并放入按会话的 runtime 队列。runtime 通过 `ctx.llm.stream` 调用一个单独配置的模型，从 JSON-framed 回复中提取一条 `{note, severity}`，经过 emission guard 门禁（normalize / dedupe / content-free 抑制 / 每次更新至多一条 note），然后路由：nit → inject，concern/blocker → steer。compaction 与 surface 重写会重置 observer、emission guard 与 immuneTurns latch（KD-5）；drain 完全异步且 backlog 有界，因此失败或 quota 耗尽的 advisor 只能丢弃自己的 backlog —— 永远不会卡住主循环。
+插件订阅 `session/event`。两种触发方式会把主 transcript 的增量 markdown delta（排除 advisor 自己的消息）渲染出来并放入按会话的 runtime 队列：标准 stepped 会话在每个 stepped `turn/end` 之后；agentic/harness 会话（从不发出 `turn/end`）则在新的用户输入（含 inbox 拼接输入）于未评审的 assistant 增量之后到达时 —— 即每个完成的 agent 回复轮次。runtime 通过 `ctx.llm.stream` 调用一个单独配置的模型，从 JSON-framed 回复中提取一条 `{note, severity}`，经过 emission guard 门禁（normalize / dedupe / content-free 抑制 / 每次更新至多一条 note），然后路由：nit → inject，concern/blocker → steer。advisor 调用以关闭推理（reasoning off）和 20 倍 token 预算运行，因此 JSON note 绝不会被推理输出挤占。compaction 与 surface 重写会重置 observer、emission guard 与 immuneTurns latch（KD-5）；drain 完全异步且 backlog 有界，因此失败或 quota 耗尽的 advisor 只能丢弃自己的 backlog —— 永远不会卡住主循环。
 
 ## 限制与路线图
 

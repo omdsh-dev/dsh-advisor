@@ -77,8 +77,14 @@ export interface AdvisorDeliveryOptions {
  * `[advisor:{severity}] {note}`.
  */
 export function buildAdvisorMessage(note: AdviceNote): UserMessage {
+  // One formatter for content and summary: the summary is derived from the
+  // same string as the content via a fixed slice of the `[advisor:` marker
+  // (`[` + everything after it), so the severity formatting can never drift
+  // between the two — and note text mentioning "advisor:" cannot affect it.
+  const text = `[advisor:${note.severity}] ${note.note}`
+  const summary = `[${text.slice('[advisor:'.length)}`
   return createUserMessage({
-    content: [{ type: 'text', text: `[advisor:${note.severity}] ${note.note}` }],
+    content: [{ type: 'text', text }],
     // n4 (user direction): declare the notice form + a collapsed-row summary so
     // the web shell's ContextInjectionRow shows "… · advisor · [nit] <note>"
     // instead of a bare producer label. The severity tag is part of the summary
@@ -86,7 +92,7 @@ export function buildAdvisorMessage(note: AdviceNote): UserMessage {
     source: {
       kind: ADVISOR_SOURCE_KIND,
       form: 'notice' as const,
-      summary: `[${note.severity}] ${note.note}`,
+      summary,
     },
   })
 }
