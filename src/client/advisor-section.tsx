@@ -21,10 +21,13 @@
  * key from the apply patch (the stored value stays unchanged).
  *
  * When the last load could not reach the `advisor.get` gateway endpoint (the
- * gateway is not ready on this host — no settings service, or the channel is
- * down), the form is replaced by the `namespaceUnavailable` notice and Apply
- * is never offered, so the page never presents a writable-looking editor
- * whose writes the host would refuse (KD-G5, the n2-era C-1 mitigation).
+ * gateway channel is down or not ready on this host), the form is replaced by
+ * the `namespaceUnavailable` notice and Apply is never offered, so the page
+ * never presents a writable-looking editor whose writes the host would refuse
+ * (KD-G5). Note: without a settings service the gateway's `get` still
+ * succeeds (entry fallback — the form renders), while `set` fails with a
+ * clear "settings service is unavailable" error; the notice covers channel
+ * unreachability, not the no-settings-service case.
  */
 
 import type { ReactNode } from 'react'
