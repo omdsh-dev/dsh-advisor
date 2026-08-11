@@ -4,13 +4,13 @@
  * limited to the system-configured providers and their models (KD-S2), the
  * required-when-enabled gate (KD-S4, also enforced in the store), the
  * `systemPrompt` textarea, the `immuneTurns`/`maxDeltaMessages` number inputs,
- * and Apply/Cancel writing the `advisor` namespace user layer through the
+ * and Apply writing the `advisor` namespace user layer through the
  * store (`settings.mutate` path ops + `expectedRevision`).
  *
  * Presentation: the settings-panel design language (ModelsSection
  * vocabulary) via `advisor-section.module.css` — the section column, the form
  * grouped in one outlined card, 32px fields with the shared select chevron,
- * capsule Apply/Cancel, and 12/18 hint tones. Every color resolves through a
+ * capsule Apply, and 12/18 hint tones. Every color resolves through a
  * `--dsw-alias-*` token so the section adapts to the light/dark theme.
  *
  * A stored provider/model that is no longer among the current options
@@ -236,9 +236,6 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
         <div className={styles['editorActions']}>
           <button type="button" className={styles['primaryButton']} disabled={busy || gateFailed} onClick={() => { void controller.apply() }}>
             {saving ? t('applying') : t('apply')}
-          </button>
-          <button type="button" className={styles['secondaryButton']} disabled={saving} onClick={() => { controller.resetDraft() }}>
-            {t('cancel')}
           </button>
         </div>
       </div>
