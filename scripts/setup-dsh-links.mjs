@@ -8,7 +8,7 @@
  * `node_modules/@deepseek-ai/`, so no `peer-stubs/` copies are needed and
  * every developer resolves against the same tree.
  *
- * Source-tree resolution (same convention as `patches/README.md`):
+ * Source-tree resolution (the dsh source tree convention):
  *   1. `$DSH_SOURCE_DIR` (explicit override)
  *   2. `${DSH_HOME}/source/current`
  *   3. `${HOME}/.dsh/source/current` (the standard DSH_HOME location)

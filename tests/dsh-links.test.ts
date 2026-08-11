@@ -62,9 +62,7 @@ describe('dev-time dsh resolution contract (real packages via DSH_HOME)', () => 
   })
 
   it('prepare chains the link setup before the build; dsh:link / dsh:link:check exist', () => {
-    expect(root.scripts.prepare).toBe(
-      'node scripts/setup-dsh-links.mjs && pnpm build && bash scripts/autopatch-install.sh',
-    )
+    expect(root.scripts.prepare).toBe('node scripts/setup-dsh-links.mjs && pnpm build')
     expect(root.scripts['dsh:link']).toBe('node scripts/setup-dsh-links.mjs')
     expect(root.scripts['dsh:link:check']).toBe('node scripts/setup-dsh-links.mjs --check')
   })

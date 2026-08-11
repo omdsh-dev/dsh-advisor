@@ -19,10 +19,10 @@
  * registration opt-in: `exposeToWebClients: true` makes the registration
  * descriptor report `exposed: true`, and on dsh ≥ the 20da39e snapshot the
  * host's `exposedNamespaces()` unions exactly those namespaces — so no host
- * allowlist patch is required there. The shipped
- * `patches/@deepseek-ai+dsh-host-apiproxy@0.0.1.patch` remains only as a
- * compatibility shim for older hosts that lack the mechanism (its retirement
- * is a separate follow-up, gated on runtime verification).
+ * patch is required. Older dsh builds (pre-20da39e) that lack the opt-in
+ * simply do not expose the namespace; the client section then renders the
+ * unexposed-namespace notice and configuration goes through the plugin config
+ * row only.
  *
  * @module dsh-advisor/settings
  */
@@ -78,7 +78,8 @@ export interface AdvisorSettingsBridge {
  * attach, on committed changes, and at detach. The registration opts into the
  * configuration-client boundary (`exposeToWebClients: true` — the upstream
  * registration-level opt-in, threaded through `installSettingsSection`'s
- * hooks; no host allowlist patch needed on dsh ≥ the 20da39e snapshot).
+ * hooks; on dsh ≥ the 20da39e snapshot the host exposes exactly these
+ * namespaces, so no host patch is needed).
  *
  * qc1 W-5 (multi-fiber dedupe): the host composes several dsh-advisor fibers,
  * and this runs on EVERY instance — but `Settings.register` fails loud on a
@@ -109,8 +110,9 @@ export function installAdvisorSettings(ctx: Context, entry: AdvisorConfig): Advi
         // Registration-level opt-in: the descriptor reports `exposed: true`,
         // and the host's `exposedNamespaces()` (dsh ≥ the 20da39e snapshot)
         // unions such namespaces into the configuration-client boundary — no
-        // host allowlist patch required there (older hosts keep the shim
-        // patch; retirement is a separate follow-up).
+        // host patch is required. Older hosts that lack the opt-in do not
+        // expose the namespace; the section falls back to the config-row
+        // notice.
         exposeToWebClients: true,
       })
     } catch (error) {
