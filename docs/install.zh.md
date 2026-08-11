@@ -53,7 +53,7 @@ tarball 附带的是构建产物（`lib/` + `cordis.patch.yml`），因此不会
 
 ## 4. web Settings 暴露
 
-dsh web Settings 页通过 dsh 宿主的 apiproxy 读写 settings 命名空间，而 apiproxy 只向配置客户端暴露一个 allowlist 命名空间集合：模型提供者命名空间 + 产品命名空间（locale / permission / ui-conversation / ui-theme / ui-onboarding / agent-presets）。**上游 dsh 没有注册级 opt-in**（`exposeToWebClients` 不存在于上游 `SettingsRegisterOptions`——已在 pristine 20da39e 快照上核实），因此 `advisor` 命名空间在当前 dsh 构建上**不在** web 配置边界内。web section 因此显示明确的配置行提示而非可写表单；请通过 profile 的 `cordis.patch.yml` 中的插件配置行（`- id: advisor` + `config:` 映射）配置顾问。无需也不施加任何宿主补丁。
+dsh web Settings 页通过 dsh 宿主的 apiproxy 读写 settings 命名空间，而 apiproxy 只向配置客户端暴露一个 allowlist 命名空间集合：模型提供者命名空间 + 产品命名空间（locale / permission / ui-conversation / ui-theme / ui-onboarding / agent-presets）。**上游 dsh 没有注册级 opt-in**（`exposeToWebClients` 不存在于上游 `SettingsRegisterOptions`——已在 pristine 20da39e 快照上核实），因此 `advisor` 命名空间**不在 apiproxy allowlist 上**。Advisor section 不依赖该 allowlist：它通过**官方 `GatewayService` RPC 通道**与宿主通信——插件注册 `AdvisorConfigGateway`（带 `@Remote('get')`/`@Remote('set')` 方法的 `GatewayService`），宿主的 typertGateway 认领 `/api/advisor/get` + `/api/advisor/set`（与 dsh 内建 `goals` 服务同一机制），section 经 `connection.rpc` 调用它们。进程内写入（`ctx.settings.update`）没有 exposed-namespace 检查，因此在任何提供 GatewayService 通道的 dsh 构建上保存都可用。无需也不施加任何宿主补丁。
 
 ## 5. 验证
 
@@ -62,7 +62,7 @@ dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-adv
 dsh --profile web
 ```
 
-启动后，web Settings 页会渲染 Advisor section；在当前 dsh 构建上它显示配置行提示（命名空间不在 web 配置边界内）。顾问完全通过插件配置行运行——该提示是说明信息，不是错误。
+启动后，web Settings 页会渲染 Advisor section；它通过 `/api/advisor/get` + `/api/advisor/set` live 读写 `advisor` 命名空间——保存后新会话立即生效。
 
 ## 6. 卸载
 

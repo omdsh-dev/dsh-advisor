@@ -93,11 +93,15 @@ configuration clients: model-provider namespaces plus product namespaces
 agent-presets). **Upstream dsh has no registration-level opt-in**
 (`exposeToWebClients` does not exist in upstream `SettingsRegisterOptions` —
 verified against the pristine 20da39e snapshot), so the `advisor` namespace is
-**not exposed** on the web configuration boundary on current dsh builds. The
-web section therefore shows an explicit config-row notice instead of a
-writable form, and the advisor is configured via the plugin config row in the
-profile's `cordis.patch.yml` (`- id: advisor` + `config:` map). No host
-patching is applied or required.
+**not on the apiproxy allowlist**. The Advisor section does not depend on that
+allowlist: it talks to the host through the **official `GatewayService` RPC
+channel** — the plugin registers `AdvisorConfigGateway` (a `GatewayService`
+with `@Remote('get')`/`@Remote('set')` methods), the host's typertGateway
+claims `/api/advisor/get` + `/api/advisor/set` (the same mechanism the dsh
+`goals` service uses), and the section calls them via `connection.rpc`. The
+in-process write (`ctx.settings.update`) carries no exposed-namespace check,
+so saving works on any dsh build that ships the GatewayService channel. No
+host patching is applied or required.
 
 ## 5. Verify
 
@@ -106,10 +110,9 @@ dsh --profile web --dump-config   # shows a "# == dsh-advisor" layer with the ad
 dsh --profile web
 ```
 
-After booting, the web Settings page renders the Advisor section; on current
-dsh builds it shows the config-row notice (the namespace is not on the web
-configuration boundary). The advisor runs fully from the plugin config row —
-the notice is informational, not an error.
+After booting, the web Settings page renders the Advisor section; it reads and
+writes the `advisor` namespace live through `/api/advisor/get` +
+`/api/advisor/set` — saving applies to new sessions immediately.
 
 ## 6. Uninstall
 

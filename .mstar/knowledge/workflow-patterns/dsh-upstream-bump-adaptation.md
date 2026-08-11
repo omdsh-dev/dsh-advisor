@@ -57,7 +57,7 @@ Every artifact that mirrors an upstream shape (the client declaration, verify pr
 
 ## When to Apply
 
-Any dsh plugin bundle that ships a client half, immediately after a `$DSH_HOME` staging snapshot upgrade. Host-side settings exposure needs no patch and has no upstream opt-in — the web section is notice-only and configuration flows through the plugin config row (see the settings exposure boundary knowledge doc).
+Any dsh plugin bundle that ships a client half, immediately after a `$DSH_HOME` staging snapshot upgrade. Host-side settings exposure needs no patch and has no upstream opt-in — the web section talks through the GatewayService RPC channel (`/api/<ns>/<method>`), which is not allowlist-gated (see the settings exposure boundary knowledge doc).
 
 ## Examples
 
