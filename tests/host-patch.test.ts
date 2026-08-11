@@ -119,6 +119,16 @@ describe('host exposure patch artifact (C-1)', () => {
     expect(probes, 'bundle probe pins the quoted advisor allowlist entry line').toContain(
       '^[[:space:]]*\\"advisor\\"',
     )
+    // The constant declaration exists in the unpatched bundle too, so the
+    // constant probe is present-only (|P): --absent mode must SKIP it and key
+    // on the advisor entry probe alone. The advisor entry probe stays
+    // both-mode — its entry ends with `|E"`, no |P scope.
+    expect(probes, 'bundle constant probe is present-only (skipped with --absent)').toContain(
+      'allowlist constant)|E|P',
+    )
+    expect(probes, 'advisor entry probe stays both-mode (absent keys on it)').toContain(
+      'advisor allowlist entry)|E"',
+    )
     // The source / tsc-emit probes keep the single-quoted source form.
     expect(probes, 'source/build probes keep the single-quoted marker').toContain(MARKER)
   })

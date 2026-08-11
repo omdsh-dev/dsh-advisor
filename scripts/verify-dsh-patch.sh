@@ -17,9 +17,11 @@
 #                                    assignment context, quote- and order-agnostic)
 #
 # By default the marker must be present (patch applied and rebuilt); --absent
-# inverts the assertion (after revert). Verdict: any existing probe that violates
-# the assertion → exit 1; if no probe file exists at all, the tree is not a dsh
-# tree → exit 1.
+# inverts the assertion (after revert). In --absent mode the bundle
+# constant-declaration probe (present in the unpatched bundle too) is skipped —
+# the advisor allowlist entry is the only discriminator of the reverted state.
+# Verdict: any existing probe that violates the assertion → exit 1; if no probe
+# file exists at all, the tree is not a dsh tree → exit 1.
 #
 # With --runtime [URL] the script skips the file probes and instead queries a
 # running dsh web server: POST {url}/api/settings.describe and assert the
@@ -170,8 +172,9 @@ if [[ ! -d "$TARGET" ]]; then
   exit 1
 fi
 
-# Probes: (relative path|match string|label) with an optional match-mode field:
+# Probes: (relative path|match string|label) with optional mode fields:
 #   F = fixed string (grep -F, default); E = extended regex (grep -E).
+#   P = present-only: the probe is SKIPPED when --absent is active.
 # The src / tsc-emit probes keep the literal single-quoted source marker. The
 # tsdown bundle (lib/index.js) probe is split into TWO line-based probes
 # because the new tsdown (rolldown) emits the Set multi-line:
@@ -182,11 +185,14 @@ fi
 #   ]);
 # grep -E is line-based, so a single [^;]* context probe cannot span the
 # newlines. The two probes check the constant declaration line and the quoted
-# allowlist entry line separately — quote- and order-agnostic.
+# allowlist entry line separately — quote- and order-agnostic. In --absent
+# mode (after revert) only the advisor ENTRY line discriminates: the constant
+# declaration exists in the unpatched bundle too, so that probe is marked
+# present-only (P) — absent mode keys on the advisor entry probe alone.
 PROBES=(
   "packages/host/apiproxy/src/api-proxy.ts|'ui-onboarding', 'advisor'|host-apiproxy source (src/api-proxy.ts)"
   "packages/host/apiproxy/lib/types/api-proxy.js|'ui-onboarding', 'advisor'|host-apiproxy build (lib/types/api-proxy.js)"
-  "packages/host/apiproxy/lib/index.js|PRODUCT_SETTINGS_NAMESPACES = new Set\\(|host-apiproxy bundle (lib/index.js — allowlist constant)|E"
+  "packages/host/apiproxy/lib/index.js|PRODUCT_SETTINGS_NAMESPACES = new Set\\(|host-apiproxy bundle (lib/index.js — allowlist constant)|E|P"
   "packages/host/apiproxy/lib/index.js|^[[:space:]]*\"advisor\"|host-apiproxy bundle (lib/index.js — advisor allowlist entry)|E"
 )
 
@@ -197,9 +203,16 @@ FAIL=0
 CHECKED=0
 
 for probe in "${PROBES[@]}"; do
-  IFS='|' read -r rel marker label mode <<< "$probe"
+  IFS='|' read -r rel marker label mode scope <<< "$probe"
   mode="${mode:-F}"
   file="${TARGET}/${rel}"
+  # Present-only probes (e.g. the bundle constant declaration — present in the
+  # unpatched bundle too) are skipped in --absent mode: they cannot
+  # discriminate the reverted state; absent mode keys on the advisor entry.
+  if [[ "$ABSENT" -eq 1 && "$scope" == "P" ]]; then
+    [[ "$QUIET" -eq 0 ]] && printf '  [SKIP] %-52s present-mode probe (skipped with --absent)\n' "$label"
+    continue
+  fi
   if [[ ! -f "$file" ]]; then
     [[ "$QUIET" -eq 0 ]] && printf '  [SKIP] %-52s file missing\n' "$label"
     continue

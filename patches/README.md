@@ -146,10 +146,14 @@ SKIP):
   `'ui-onboarding', 'advisor'`
 - build: `packages/host/apiproxy/lib/types/api-proxy.js` contains
   `'ui-onboarding', 'advisor'`
-- bundle: `packages/host/apiproxy/lib/index.js` contains
-  `"ui-onboarding", "advisor"` (the tsdown bundle — the package `main`, the
-  runtime entry for consumers outside the tsx-from-source install; tsdown
-  emits double-quoted string literals, hence the bundle-form marker)
+- bundle: `packages/host/apiproxy/lib/index.js` is probed with TWO line-based
+  probes — the new tsdown (rolldown) emits the `Set` multi-line, so a single
+  context regex cannot span the newlines. Present mode checks the constant
+  declaration line (`PRODUCT_SETTINGS_NAMESPACES = new Set(`) **and** the
+  quoted `"advisor"` allowlist-entry line (`^[[:space:]]*"advisor"`). Absent
+  mode keys on the advisor entry probe only: the constant declaration exists
+  in the unpatched bundle too, so that probe is marked present-only and
+  skipped — the advisor entry is the discriminator of the reverted state.
 
 > The constant is module-private, so it never reaches the `.d.ts`; the compiled
 > JS (`lib/types/api-proxy.js`, the tsc emit under `outDir: lib/types`) and the
