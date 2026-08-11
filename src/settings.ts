@@ -19,12 +19,25 @@
  */
 
 import type { Context } from 'cordis'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import { Config } from './config'
 import type { AdvisorConfig } from './config'
 
 /** The `advisor` settings namespace (registered when a settings service exists). */
 export const ADVISOR_SETTINGS_NAMESPACE = settingsNamespace('advisor')
+
+/**
+ * Mirror of @deepseek-ai/dsh-settings' `isUnloading` guard (its
+ * `installSettingsSection` skips source/listener work while the plugin fiber
+ * is unloading or disposed). The library compares `ctx.fiber.state` against
+ * `FiberState.DISPOSED` / `FiberState.UNLOADING`; the const enum is erased at
+ * runtime, so the vendored numeric values (4 / 5) are mirrored here.
+ */
+function isUnloading(ctx: Context): boolean {
+  const state = (ctx as unknown as { fiber?: { state?: number } }).fiber?.state
+  return state === 4 || state === 5
+}
 
 /**
  * The live configuration source for the runtime.
@@ -35,9 +48,10 @@ export const ADVISOR_SETTINGS_NAMESPACE = settingsNamespace('advisor')
  * a callback that re-applies derived state whenever the composed value changes
  * (attach, committed change, or detach back to the entry). The contract is
  * `(cb) => void` per the plan: the listener set is owned by the consumer's
- * plugin closure for its lifetime, and the detach path is handled by
- * `installSettingsSection`'s own disposer, so no per-listener disposer is
- * returned (qc1 S-3 — a discarded disposer would invite misuse).
+ * plugin closure for its lifetime, and the detach path is handled by the
+ * inject child's disposer (the `installSettingsSection` contract), so no
+ * per-listener disposer is returned (qc1 S-3 — a discarded disposer would
+ * invite misuse).
  */
 export interface AdvisorSettingsBridge {
   source(): AdvisorConfig
@@ -47,23 +61,57 @@ export interface AdvisorSettingsBridge {
 /**
  * Install the `advisor` settings namespace and wire the live source.
  *
- * Mirrors the dsh `agent-default-model` pattern exactly: `installSettingsSection`
- * rides a conditional `ctx.inject(['settings'], ...)` child, so with no
- * settings service the source stays the entry config (its own disposer falls
- * back to `entry` when the service goes away). `setSource` swaps the
- * authoritative thunk (the settings scope's resolved value while attached);
- * `onChange` fires at attach, on committed changes, and at detach.
+ * Mirrors the dsh `agent-default-model` pattern exactly (the dsh-settings
+ * `installSettingsSection` contract): the registration rides a conditional
+ * `ctx.inject(['settings'], ...)` child, so with no settings service the
+ * source stays the entry config. `setSource` swaps the authoritative thunk
+ * (the settings scope's resolved value while attached); `onChange` fires at
+ * attach, on committed changes, and at detach.
+ *
+ * qc1 W-5 (multi-fiber dedupe): the host composes several dsh-advisor fibers,
+ * and this runs on EVERY instance — but `Settings.register` fails loud on a
+ * duplicate namespace (`settings namespace "advisor" is already registered`).
+ * The register call runs inside the conditional inject child, so the duplicate
+ * error surfaces ASYNCHRONOUSLY there (an outer try/catch around a library
+ * `installSettingsSection` call cannot see it) — this child body wraps the
+ * register instead. A deduped instance logs (debug) and keeps the
+ * entry-source fallback: its `source` thunk is only ever swapped by a
+ * SUCCESSFUL registration's setSource hook, so the ALREADY-REGISTERED
+ * instance owns the live namespace. The reviewer's settings wiring (the
+ * `bridge.onChange` live re-apply in `index.ts`) is the concern — it only
+ * re-applies when the reviewer's own bridge attached to the live scope; in
+ * practice the reviewer is the first apply, whose inject child registers
+ * first.
  */
 export function installAdvisorSettings(ctx: Context, entry: AdvisorConfig): AdvisorSettingsBridge {
   const listeners = new Set<() => void>()
   let source = (): AdvisorConfig => entry
-  installSettingsSection(ctx, ADVISOR_SETTINGS_NAMESPACE, Config, entry, {
-    setSource: (next) => {
-      source = next
-    },
-    onChange: () => {
-      for (const listener of [...listeners]) listener()
-    },
+  const notify = (): void => {
+    for (const listener of [...listeners]) listener()
+  }
+  ctx.inject(['settings'], (sctx) => {
+    let scope: SettingsScope<AdvisorConfig> | undefined
+    try {
+      scope = sctx.settings.register(ADVISOR_SETTINGS_NAMESPACE, Config, { base: entry })
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('already registered')) throw error
+      ctx.logger('advisor').debug('settings namespace already registered — entry-source fallback (multi-fiber dedupe)')
+      return
+    }
+    // Mirrors installSettingsSection: the source thunk reads the scope's live
+    // resolved value while attached, and the detach disposer falls back to the
+    // entry when the settings service goes away (skipped during unload).
+    source = () => scope.get()
+    sctx.effect(() => () => {
+      if (isUnloading(ctx)) return
+      source = () => entry
+      notify()
+    })
+    notify()
+    scope.watch(() => {
+      if (isUnloading(ctx)) return
+      notify()
+    })
   })
   return {
     source: (): AdvisorConfig => source(),

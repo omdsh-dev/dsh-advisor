@@ -577,8 +577,12 @@ export class AdvisorRuntime {
       // Capability-gate `reasoningEffort` (qc2 W-1 / qc1 W-1 / qc3 F-3):
       // resolve the model's declared efforts ONCE per (provider, model) and
       // pass 'off' only when supported; never fail the call on a resolution
-      // error (the option is simply omitted).
-      const reasoningEffort = await this.resolveReasoningEffort()
+      // error (the option is simply omitted). The resolution is bounded by the
+      // call deadline (n4 QC N-5): the fused signal is threaded through, so a
+      // hung adapter capability lookup that honors cancellation aborts with
+      // the call instead of wedging the drain ahead of the deadline-guarded
+      // stream loop.
+      const reasoningEffort = await this.resolveReasoningEffort(deadlineSignal)
       const stream = this.llm.stream(this.buildOptions(delta, deadlineSignal, reasoningEffort))
       const iterator = stream[Symbol.asyncIterator]()
       for (;;) {
@@ -693,15 +697,20 @@ export class AdvisorRuntime {
    * `reasoning.efforts` includes it, else omit the option (`resolveCallFor`
    * materializes the adapter default). Cached per (provider, model) — one
    * resolution per runtime, never per call. A resolution failure (unknown
-   * route, adapter throw) is advisory: the call proceeds WITHOUT the option,
-   * matching the pre-n4 behavior for every model that does not declare 'off'.
+   * route, adapter throw, or a deadline abort — n4 QC N-5) is advisory: the
+   * call proceeds WITHOUT the option, matching the pre-n4 behavior for every
+   * model that does not declare 'off'. The optional `signal` (the call's
+   * deadline signal) is threaded into `resolveModelInfo`, whose contract
+   * allows adapter-owned asynchronous lookup with cancellation — a hung
+   * lookup that honors the signal aborts with the call deadline instead of
+   * wedging the drain.
    */
-  private async resolveReasoningEffort(): Promise<ReasoningEffortId | undefined> {
+  private async resolveReasoningEffort(signal?: AbortSignal): Promise<ReasoningEffortId | undefined> {
     const key = `${this.provider}\u0000${this.model}`
     if (this.reasoningEffortCache.has(key)) return this.reasoningEffortCache.get(key)
     let effort: ReasoningEffortId | undefined
     try {
-      const info = await this.llm.resolveModelInfo?.(this.provider, this.model)
+      const info = await this.llm.resolveModelInfo?.(this.provider, this.model, signal)
       effort = info?.reasoning?.efforts.some((entry) => entry.id === ReasoningEffortId('off'))
         ? ReasoningEffortId('off')
         : undefined

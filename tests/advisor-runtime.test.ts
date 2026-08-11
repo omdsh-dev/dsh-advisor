@@ -112,6 +112,37 @@ async function* streamOf(chunks: readonly StreamChunk[]): AsyncIterable<StreamCh
   yield * chunks
 }
 
+/**
+ * Fake whose `resolveModelInfo` honors the abort signal (dsh-llm's contract —
+ * "signal - optional cancellation for adapter-owned asynchronous lookup") but
+ * is otherwise slow: it never resolves on its own, only rejects when the
+ * passed signal aborts. With NO signal (the pre-fix n4 QC N-5 behavior) it
+ * hangs forever — exactly the wedged-drain failure the fix removes.
+ */
+class SignalBoundLlm {
+  readonly resolveSignals: Array<AbortSignal | undefined> = []
+  readonly calls: GenerateOptions[] = []
+
+  constructor(private readonly reply: readonly StreamChunk[]) {}
+
+  resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
+    this.resolveSignals.push(signal)
+    if (signal === undefined) return new Promise(() => {}) // no signal → hang forever
+    return new Promise((_resolve, reject) => {
+      if (signal.aborted) {
+        reject(new DOMException('aborted', 'AbortError'))
+        return
+      }
+      signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+    })
+  }
+
+  stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    this.calls.push(options)
+    return streamOf(this.reply)
+  }
+}
+
 /** Chunk script for a successful text reply. */
 const textReply = (text: string): readonly StreamChunk[] => [
   { type: 'text-delta', index: 0, text },
@@ -427,6 +458,26 @@ describe('AdvisorRuntime — failure policy (KD-5)', () => {
     expect(notes).toEqual([{ note: 'recovered', severity: 'concern' }])
     expect(runtime.status()).toBe('running')
     expect(runtime.pendingCount).toBe(0)
+  })
+
+  it('bounds the capability resolution by the call deadline — a signal-honoring hung lookup times out transiently and the retry delivers (n4 QC N-5)', async () => {
+    const llm = new SignalBoundLlm(textReply('{"note":"resolution bounded"}'))
+    const { runtime, notes } = makeRuntime(llm, { callTimeoutMs: 20 })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    // The deadline signal reached the capability resolution (threaded through,
+    // N-5) and aborted it — the first attempt times out (transient) instead of
+    // wedging the drain ahead of the deadline-guarded stream loop.
+    expect(llm.resolveSignals).toHaveLength(1) // the resolution runs once (cached after the abort)
+    expect(llm.resolveSignals[0]).toBeInstanceOf(AbortSignal)
+    expect(llm.resolveSignals[0]!.aborted).toBe(true)
+    // Attempt 1 timed out → the single KD-5 retry (fresh deadline, cached
+    // resolution) delivers the note.
+    expect(llm.calls).toHaveLength(2)
+    expect(notes).toEqual([{ note: 'resolution bounded', severity: 'nit' }])
+    expect(runtime.status()).toBe('running')
   })
 
   it('a timeout is a transient failure: the single retry gets a fresh deadline and can succeed', async () => {

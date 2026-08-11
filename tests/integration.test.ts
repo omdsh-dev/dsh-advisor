@@ -132,6 +132,8 @@ function fullConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
 interface Harness {
   ctx: Context
   adapter: StubAdapter
+  /** Dispose the advisor plugin fiber (the single-reviewer guard's release path, qc1 W-4). */
+  dispose: () => Promise<void>
 }
 
 /**
@@ -153,8 +155,8 @@ async function composeHarness(
   // registry fallback (the primary path is the agent/created map).
   ctx.provide('sessions', {} as never)
   ctx.provide('agents', { get: () => undefined } as never)
-  await ctx.plugin(advisorPlugin, fullConfig(config))
-  return { ctx, adapter }
+  const fiber = await ctx.plugin(advisorPlugin, fullConfig(config))
+  return { ctx, adapter, dispose: () => fiber.dispose() }
 }
 
 /** Fake Agent with inject/steer spies; published via `agent/created`. */
@@ -172,6 +174,20 @@ function makeFakeAgent(id = 's1'): {
 function makeSession(id = 's1'): { session: Session; log: SessionEvent[] } {
   const log: SessionEvent[] = []
   return { session: { id, events: log } as unknown as Session, log }
+}
+
+/**
+ * Feed one completed stepped round through a harness: publish the agent
+ * (KD-4 map), append user / assistant / step-start / turn-end events to the
+ * live log, and emit the turn-end that triggers the standard review path.
+ */
+function feedSteppedRound(ctx: Context, session: Session, log: SessionEvent[], agent: ReturnType<typeof makeFakeAgent>): void {
+  ctx.emit('agent/created', { agent: agent.agent })
+  log.push({ type: 'user/message', seq: 0, time: 0, data: { id: 'u0', role: 'user', content: [], source: { kind: 'user' } } } as never)
+  log.push({ type: 'assistant/message', seq: 1, time: 0, data: { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'wrote a test' }], source: { kind: 'model', provider: 'stub', model: 'stub-model' } } }, surfaceOp: 'append' } as never)
+  log.push({ type: 'step/start', seq: 2, time: 0, data: { turn: 1, step: 1 } } as never)
+  log.push({ type: 'turn/end', seq: 3, time: 0, data: { turn: 1, reason: { kind: 'completed' } } } as never)
+  ctx.emit('session/event', session, log[3] as never)
 }
 
 /** Text of the single user delta message the runtime sends the model. */
@@ -1043,5 +1059,48 @@ describe('single-reviewer guard (n4 QC F-6)', () => {
     expect(fake2.steer).not.toHaveBeenCalled()
     // The first harness keeps working (single reviewer).
     expect(first.adapter.requests.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('releases the reviewer claim when the reviewer fiber is disposed — a later instance wires (qc1 W-4)', async () => {
+    const first = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [textReply('{"note":"first round"}')],
+    )
+    const { session, log } = makeSession()
+    const fake = makeFakeAgent()
+    feedSteppedRound(first.ctx, session, log, fake)
+    await vi.waitFor(() => expect(first.adapter.requests.length).toBeGreaterThanOrEqual(1))
+
+    // Dispose the reviewer fiber: the guard's disposer effect must clear the
+    // claim (no beforeEach reset runs inside this test).
+    await first.dispose()
+    expect((globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']).toBeUndefined()
+
+    // A later instance in the same process can now claim the role and wire.
+    const second = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [textReply('{"note":"second round"}')],
+    )
+    expect((globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']).toBe(true)
+    const session2 = makeSession()
+    const fake2 = makeFakeAgent()
+    feedSteppedRound(second.ctx, session2.session, session2.log, fake2)
+    await vi.waitFor(() => expect(second.adapter.requests.length).toBeGreaterThanOrEqual(1))
+    // The note (severity defaults to nit) routes to inject — the second
+    // instance is a fully wired reviewer, not an inert non-reviewer.
+    expect(fake2.inject).toHaveBeenCalled()
+  })
+
+  it('a rejected config never leaves the reviewer claim taken (qc1 W-4)', () => {
+    // Call apply DIRECTLY (bypassing the Loader's strict schema validation)
+    // with a config `resolveAdvisorConfig` rejects at construction — the
+    // delivery latch's `resolved()` throws. The claim is taken only AFTER
+    // that throwing read, so the flag must stay free for a later valid row.
+    const ctx = new Context()
+    ctx.provide('sessions', {} as never)
+    ctx.provide('agents', { get: () => undefined } as never)
+    expect(() => advisorPlugin.apply(ctx, { enabled: true, bogus: 1 } as never))
+      .toThrow(/unknown config key "bogus"/)
+    expect((globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']).toBeUndefined()
   })
 })

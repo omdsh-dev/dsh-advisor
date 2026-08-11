@@ -64,9 +64,15 @@ export type { AdvisorConfig, ResolvedAdvisorConfig } from './config'
  * fibers (observed: 3 active); with the global session/event subscription every
  * instance would observe every session and N×-review/N×-call per round. The
  * FIRST apply to claim the reviewer role wires the observer/runtime/delivery
- * and the /advisor commands; later instances register settings only (the
- * namespace registration is idempotent by design) and stay inert otherwise.
- * The flag rides globalThis so it survives even module-copy divergence. */
+ * and the /advisor commands; later instances attempt the settings registration
+ * only (qc1 W-5: it is NOT idempotent — dsh-settings register throws on a
+ * duplicate; installAdvisorSettings dedupes it and falls back to the entry
+ * source, so the first registration owns the live namespace) and stay inert
+ * otherwise. The claim is taken only AFTER the construction-time config gate
+ * (qc1 W-4: a rejected first row never leaves the flag claimed) and is
+ * released when the claiming fiber is disposed, so a later re-apply/re-mount
+ * can take over. The flag rides globalThis so it survives even module-copy
+ * divergence. */
 const REVIEWER_KEY = '__dshAdvisorReviewer__'
 function claimReviewer(): boolean {
   const g = globalThis as Record<string, unknown>
@@ -76,14 +82,6 @@ function claimReviewer(): boolean {
 }
 
 export function apply(ctx: Context, config: AdvisorConfig) {
-  const reviewer = claimReviewer()
-  if (!reviewer) {
-    // Non-reviewer instance: settings namespace registration still applies
-    // (installAdvisorSettings below runs unconditionally); everything else —
-    // observer, runtimes, delivery, commands — is skipped.
-    ctx.logger('advisor').debug('non-reviewer instance — observer/runtime/commands skipped (single-reviewer guard)')
-    // Continue: the shared code path below must not run for this instance.
-  }
   // T2: the explicit provider/model gate — no model call without both
   // (spec §5.2). Unknown keys / malformed config throw here, rejecting the
   // plugin row at load; the gate resolves to disabled-with-reason instead.
@@ -241,11 +239,26 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     runtime.dispose()
   }
 
-  // n4 QC F-6: non-reviewer instances stop here — observer/runtime/delivery
-  // and the /advisor commands are wired only by the single claimed reviewer.
-  // Settings registration (installAdvisorSettings above) already ran, so the
-  // namespace stays available on every composition.
-  if (!reviewer) return
+  // n4 QC F-6: claim the single-reviewer role HERE — after every
+  // construction-time throwing read (the delivery latch above resolves the
+  // config and can throw on a rejected row), so a first fiber whose config
+  // fails the gate never leaves the flag claimed (qc1 W-4). Non-reviewer
+  // instances stop here — observer/runtime/delivery and the /advisor commands
+  // are wired only by the single claimed reviewer. The settings registration
+  // (installAdvisorSettings above) already ran deduped (qc1 W-5): the first
+  // registration owns the live namespace on every composition.
+  const reviewer = claimReviewer()
+  if (!reviewer) {
+    ctx.logger('advisor').debug('non-reviewer instance — observer/runtime/commands skipped (single-reviewer guard)')
+    return
+  }
+  // qc1 W-4: release the claim when THIS (reviewer) fiber is disposed, so a
+  // later re-apply/re-mount (plugin-row removal, composition reload, host hot
+  // reload) can take over instead of leaving the advisor silently inert for
+  // the process lifetime. Registered only on the claiming fiber.
+  ctx.effect(() => () => {
+    delete (globalThis as Record<string, unknown>)[REVIEWER_KEY]
+  }, 'advisor: release reviewer claim')
   const observer = new SessionTranscriptObserver({
     maxDeltaMessages: resolved().maxDeltaMessages,
     onSteppedTurnEnd: (sessionId: string) => {
