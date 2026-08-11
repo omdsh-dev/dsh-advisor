@@ -152,8 +152,8 @@ function writeCordisShim(sourceRoot) {
     throw new Error(`vendored cordis not found at ${vendorCordis} — the source tree must provide the in-box cordis framework`)
   }
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
-  if (manifest.name !== 'cordis') {
-    throw new Error(`vendored cordis at ${vendorCordis} declares name "${manifest.name}" — expected "cordis"`)
+  if (manifest.name !== 'cordis' && manifest.name !== '@deepseek-ai/cordis') {
+    throw new Error(`vendored cordis at ${vendorCordis} declares name "${manifest.name}" — expected "cordis" (or "@deepseek-ai/cordis" since the 20260811 snapshot rename)`)
   }
   rmSync(cordisShimDir, { recursive: true, force: true })
   mkdirSync(cordisShimDir, { recursive: true })

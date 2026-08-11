@@ -57,7 +57,6 @@
 import type { ContentBlock, Message } from '@deepseek-ai/dsh-llm'
 import {
   deriveEventMessage,
-  findLastMessageTurnEnd,
   foldSurface,
   isSurfaceEvent,
 } from '@deepseek-ai/dsh-session'
@@ -186,6 +185,31 @@ function renderMessage(message: Message): string {
     }
   }
   return parts.length > 0 ? `**agent**: ${parts.join('\n')}` : '**agent**: <empty>'
+}
+
+/**
+ * Find the latest closed turn that entered at least one model step, ignoring
+ * balanced no-step turns produced by rejection, empty input, or cancellation.
+ * Vendored locally: `@deepseek-ai/dsh-session` removed this export in the
+ * 20260811 snapshot (packages/core/session/src/index.ts) — no replacement
+ * was provided, and the event vocabulary it scans (`step/start`, `turn/end`)
+ * is unchanged, so the original semantics carry over verbatim.
+ * @param events - session events, or an owned suffix, to inspect.
+ * @returns the latest matching turn end, or `undefined`.
+ */
+function findLastMessageTurnEnd(
+  events: readonly SessionEvent[],
+): SessionEvent<'turn/end'> | undefined {
+  const steppedTurns = new Set<number>()
+  let latest: SessionEvent<'turn/end'> | undefined
+  for (const event of events) {
+    if (event.type === 'step/start') {
+      steppedTurns.add(event.data.turn)
+      continue
+    }
+    if (event.type === 'turn/end' && steppedTurns.delete(event.data.turn)) latest = event
+  }
+  return latest
 }
 
 // ---------------------------------------------------------------------------
