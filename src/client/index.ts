@@ -62,7 +62,10 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'advisor: copy dictionaries')
 
   const connection = ctx.get('connection') as ConnectionHandle
-  const controller = new AdvisorSettingsStore(connection.api)
+  // The store reads/writes the advisor config over the connection's generic
+  // RPC channel (the host gateway `/api/advisor/get` + `/api/advisor/set`);
+  // the provider/model directory still rides `connection.api` (KD-G3).
+  const controller = new AdvisorSettingsStore(connection.api, connection.rpc)
   const useSnapshot = bindSnapshotSelector(controller.store)
   // Registration-time text (the nav label thunk) and the inject faces share
   // one bound translate; copy freshness rides the locale revision.

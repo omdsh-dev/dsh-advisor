@@ -15,17 +15,23 @@
  * every consumer passes it through `resolveAdvisorConfig` — the SSOT for the
  * enabled-without-pair disabled-with-reason resolution (no model call).
  *
- * The namespace does NOT join the configuration-client boundary on the
+ * The namespace does NOT join the apiproxy configuration-client boundary on
  * current upstream dsh builds: the host's `exposedNamespaces()` unions only
  * model-provider namespaces plus its own product namespaces (locale /
  * permission / ui-conversation / ui-theme / ui-onboarding / agent-presets) —
  * there is no registration-level opt-in in upstream dsh (verified against the
  * pristine 20da39e snapshot; `SettingsRegisterOptions` has no
  * `exposeToWebClients` key). The advisor namespace is therefore always absent
- * from `settings.describe` on the web configuration boundary, and the client
- * section renders the unexposed-namespace notice; configuration goes through
- * the plugin config row only. No host patch is applied or required for the
- * plugin to function — the runtime reads the entry config exactly as before.
+ * from `settings.describe` on the web configuration boundary — but the web
+ * section reaches the config through the GatewayService channel instead (plan
+ * dsh-advisor-settings-gateway-n5: `AdvisorConfigGateway` claims
+ * `/api/advisor/get` + `/api/advisor/set`, and the client calls
+ * `connection.rpc.call('/api', …)`; the in-process `ctx.settings.update`
+ * behind `set` carries no exposed-namespace check — the allowlist gate exists
+ * only in the apiproxy wire layer). The unexposed-namespace notice is now
+ * only the KD-G5 fallback (gateway unreachable). No host patch is applied or
+ * required for the plugin to function — the runtime reads the entry config
+ * exactly as before.
  *
  * @module dsh-advisor/settings
  */
@@ -81,10 +87,12 @@ export interface AdvisorSettingsBridge {
  * attach, on committed changes, and at detach. The registration carries NO
  * `exposeToWebClients` option — upstream dsh (pristine 20da39e) has no such
  * registration-level opt-in (its `exposedNamespaces()` unions model-provider
- * plus product namespaces only), so the advisor namespace stays off the web
- * configuration boundary on every current dsh build; the client section shows
- * the unexposed-namespace notice and configuration happens through the plugin
- * config row. (A previous iteration believed the opt-in existed upstream and
+ * plus product namespaces only), so the advisor namespace stays off the
+ * apiproxy web configuration boundary on every current dsh build. Web clients
+ * reach the config through the GatewayService channel instead (plan
+ * dsh-advisor-settings-gateway-n5 — `/api/advisor/get` + `/api/advisor/set`);
+ * the in-process settings service is the write target behind the gateway's
+ * `set`. (A previous iteration believed the opt-in existed upstream and
  * declared it here; that conclusion was a circular verification against a
  * locally-modified staging tree — the option does not exist in upstream types
  * and has been removed.)
@@ -119,9 +127,10 @@ export function installAdvisorSettings(ctx: Context, entry: AdvisorConfig): Advi
         // dsh (verified against pristine 20da39e — `SettingsRegisterOptions`
         // has no such key, and the host's `exposedNamespaces()` unions only
         // model-provider plus product namespaces). The namespace stays off
-        // the web configuration boundary; the client section falls back to
-        // the config-row notice, and the runtime reads the entry exactly as
-        // it would without a settings service.
+        // the apiproxy web configuration boundary; web clients reach the
+        // config through the GatewayService channel (advisor/get +
+        // advisor/set), and the runtime reads the entry exactly as it would
+        // without a settings service.
       })
     } catch (error) {
       if (!(error instanceof Error) || !error.message.includes('already registered')) throw error

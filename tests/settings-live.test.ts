@@ -208,9 +208,12 @@ async function composeLiveHarness(
   await vi.waitFor(() => {
     // The registration itself is what the runtime depends on — the advisor
     // namespace must be registered (its descriptor present in describe).
-    // No `exposeToWebClients` opt-in is asserted: upstream dsh (pristine
-    // 20da39e) has no such option, so the namespace stays off the web
-    // configuration boundary and the client shows the config-row notice.
+    // This is the HOST-side settings service: the namespace is NOT on the
+    // apiproxy exposed-namespaces whitelist (upstream has no
+    // `exposeToWebClients` opt-in), so web clients reach the advisor config
+    // through the gateway channel instead (`/api/advisor/get`|`/set` —
+    // plan dsh-advisor-settings-gateway-n5) while the in-process settings
+    // service stays the write target behind it.
     expect(
       ctx.settings.describe().some((d) => d.ns === ADVISOR_SETTINGS_NAMESPACE),
     ).toBe(true)

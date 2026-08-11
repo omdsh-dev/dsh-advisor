@@ -28,6 +28,11 @@
  * read live through the bridge source; committed settings edits re-apply
  * derived state (immuneTurns / maxDeltaMessages / per-session runtimes)
  * without a restart.
+ * Config gateway (plan dsh-advisor-settings-gateway-n5): `apply` also
+ * registers the host-side `AdvisorConfigGateway` (`src/gateway.ts`) — the
+ * `/api/advisor/get` + `/api/advisor/set` Remote endpoints (typertGateway
+ * SRC claims) that make the Settings section truly readable/writable from
+ * the web client.
  *
  * @module dsh-advisor
  */
@@ -42,6 +47,7 @@ import type {} from '@deepseek-ai/dsh-commands'
 import { resolveAdvisorConfig } from './config'
 import type { AdvisorConfig, ResolvedAdvisorConfig } from './config'
 import { installAdvisorSettings } from './settings'
+import { AdvisorConfigGateway } from './gateway'
 import { SessionTranscriptObserver } from './transcript'
 import type { Delta } from './transcript'
 import { AdvisorRuntime } from './advisor-runtime'
@@ -94,6 +100,24 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // to every read: `resolveAdvisorConfig` stays the SSOT for the
   // disabled-with-reason resolution.
   const bridge = installAdvisorSettings(ctx, config)
+  // n5 (plan dsh-advisor-settings-gateway-n5): the host-side `advisor` config
+  // gateway — the `/api/advisor/get` + `/api/advisor/set` Remote endpoints
+  // (typertGateway SRC claims from `ctx.reflect.props` + `remoteMethods`).
+  // It reads the SAME bridge the runtime reads, so get/set always operate on
+  // the live composed config. Multi-fiber dedupe mirrors the settings
+  // registration (qc1 W-5): the cordis Service registration fails loud on a
+  // duplicate key, so the catch lets the FIRST fiber own the `advisor` service
+  // key while later fibers fall back (no gateway) — the typertGateway claim
+  // set dedupes, so claims never conflict. The registration is a fiber effect
+  // (unregistered when this fiber disposes), so a re-apply/re-mount can take
+  // over. The instance needs no handle here: the typertGateway dispatches
+  // through `ctx.get('advisor')`.
+  try {
+    new AdvisorConfigGateway(ctx, bridge)
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes('has been registered')) throw error
+    ctx.logger('advisor').debug('advisor gateway already registered — no gateway on this fiber (multi-fiber dedupe)')
+  }
   const sourceConfig = (): AdvisorConfig => bridge.source()
   const resolved = (): ResolvedAdvisorConfig => resolveAdvisorConfig(sourceConfig())
   // qc2 W-1 containment: a settings user layer the resolver rejects (e.g. an

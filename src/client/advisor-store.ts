@@ -1,9 +1,29 @@
 /**
- * Advisor settings page store (plan dsh-advisor-settings-n2, task 3). One
- * snapshot over the wire faces the section renders from; the host stays the
- * single fact source — every mutation writes through the wire (`settings.mutate`
- * path ops with `expectedRevision`) and the page re-renders from the next
- * describe, pushed or refetched.
+ * Advisor settings page store (plan dsh-advisor-settings-gateway-n5, task 2).
+ * One snapshot over the wire faces the section renders from; the host stays the
+ * single fact source — every mutation writes through the host `advisor` config
+ * gateway (`connection.rpc.call('/api', 'advisor/get' | 'advisor/set', …)`),
+ * and the page re-renders from the next get, pushed or refetched.
+ *
+ * Data-source split (KD-G3):
+ * - the **advisor config** reads/writes ride the gateway RPC channel
+ *   (`/api/advisor/get` returns `{ config }`, `/api/advisor/set` accepts
+ *   `{ patch }` and returns the new composed config) — the `advisor` settings
+ *   namespace is NOT on the apiproxy exposed-namespaces whitelist, so the
+ *   old `api.settings.describe`/`mutate` path is dead for it and the gateway
+ *   is the only web-visible channel (host side: `src/gateway.ts`, `@Remote`
+ *   get/set against the live `AdvisorSettingsBridge` source);
+ * - the **provider/model directory** stays on `api.settings.describe` /
+ *   `api.llm.*` (the `llm-deepseek` namespaces ARE in the exposed set).
+ *
+ * The returned config is the RESOLVED config (through the host hard gate):
+ * absent keys (provider/model/disabledReason) are omitted by the wire
+ * normalization, never present-as-undefined — the draft seeds treat them as
+ * missing. Apply diffs the draft against the last-read config (the seed) and
+ * sends only the changed keys as the `{ patch }`; clearing a provider/model
+ * the seed pins stores an explicit `''` override (the gateway merge cannot
+ * express an unset, and the resolver treats `''` as absent). Clearing a number
+ * input leaves the field empty and omits the key from the patch.
  *
  * The join mirrors the ui-models Models page (store.ts):
  * - **configured** provider = its settings namespace resolves AND its profile
@@ -12,34 +32,43 @@
  * - **model options** = the provider profile's declared `models` first
  *   (KD-S2), else the `llm.models` catalog group for that provider, else
  *   empty options + a reason (guidance copy lives in the section);
- * - the **draft** is seeded from the RESOLVED advisor config (schema defaults
- *   → composition base → user layer) so the form always shows the effective
- *   configuration; Apply writes only the changed keys as set/unset path ops
- *   against the STORED user section (the ProviderEditor pathOps pattern), with
- *   `expectedRevision` from the last describe guarding against stale writes.
- *   Clearing a provider/model whose value the resolved seed pins (composition
- *   base, user layer, or both) stores an explicit `''` override — an `unset`
- *   would merely restore the pinned value, and an already-stored `''` override
- *   is left untouched so the clear stays stable across later applies. Clearing
- *   a number input (immuneTurns/maxDeltaMessages) leaves the field empty and
- *   omits the key from the ops: the stored value stays unchanged.
+ * - the **draft** is seeded from the RESOLVED advisor config so the form
+ *   always shows the effective configuration (KD-G5: `advisor.get` failure →
+ *   the section shows the config-channel notice instead of a writable-looking
+ *   form — never a hard load error, and never Apply).
  */
 
 import type {
-  ConfigurableProviderView, IApiClient, ModelProviderGroup, SettingsNamespaceView,
-  SettingsPathOpView,
+  ClientConnectionRpc, ConfigurableProviderView, IApiClient, ModelProviderGroup,
+  SettingsNamespaceView,
 } from '@deepseek-ai/dsh-client-connection/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import { deletePath, getPath, hasPath, setPath } from '@deepseek-ai/dsh-client-schema-form'
+import { deletePath, getPath, setPath } from '@deepseek-ai/dsh-client-schema-form'
 
 /**
- * The advisor settings namespace this form edits (mirror of the host-side
- * `settingsNamespace('advisor')` in src/settings.ts — kept as a local string
- * constant because the client bundle may not value-import the node-side
- * module or `@deepseek-ai/dsh-settings`).
+ * The wire `config` value the host gateway returns — mirror of the node-side
+ * `ResolvedAdvisorConfig` (src/config.ts). Kept as a local structural type
+ * because the client bundle may not value-import the node-side module: the
+ * wire normalization omits absent keys (provider/model/disabledReason are
+ * simply missing from the JSON), so every optional key reads as undefined.
  */
-export const ADVISOR_NAMESPACE = 'advisor'
+export interface AdvisorConfigView {
+  /** Master switch; the resolved value (false while the gate blocks). */
+  enabled: boolean
+  /** Provider route; absent when unset. */
+  provider?: string
+  /** Model id; absent when unset. */
+  model?: string
+  /** System prompt override ('' = built-in reviewer prompt). */
+  systemPrompt: string
+  /** Cooldown after a delivered interrupt; integer ≥ 0. */
+  immuneTurns: number
+  /** Delta window; integer ≥ 0, 0 = unbounded. */
+  maxDeltaMessages: number
+  /** Present iff the advisor is disabled by the explicit model gate. */
+  disabledReason?: string
+}
 
 /** One provider row the section offers (configured providers only, KD-S2). */
 export interface ProviderOption {
@@ -90,7 +119,6 @@ export interface AdvisorDraft {
 /** Why an Apply failed (copy keys resolve in the section; raw text passes through). */
 export type ApplyFailure =
   | { kind: 'gate'; reason: 'provider' | 'model' }
-  | { kind: 'conflict' }
   | { kind: 'message'; message: string }
 
 /** Apply lifecycle feedback the form renders. */
@@ -115,13 +143,11 @@ export interface AdvisorSettingsState {
   modelsEmptyReason: Readonly<Record<string, ModelsEmptyReason>>
   /** Namespace views by ns, for the provider join. */
   namespaces: Readonly<Record<string, SettingsNamespaceView>>
-  /** The advisor namespace view, when registered. */
-  advisorView: SettingsNamespaceView | undefined
   /**
-   * Whether the `advisor` namespace view was present in the last describe —
-   * when absent (host build does not expose the namespace), the section shows
-   * an unexposed-namespace notice instead of a writable-looking form and
-   * never offers Apply (qc2 W-2 / qc1 S-4 — the C-1 mitigation).
+   * Whether the `advisor.get` gateway endpoint was reachable on the last load
+   * (KD-G3/G5): success = a writable form; failure (gateway not ready, no
+   * settings service on the host) = the section shows the config-channel
+   * notice instead of a writable-looking form and never offers Apply.
    */
   advisorPresent: boolean
   /** The form draft (seeded from the resolved config; never re-seeded by refreshes). */
@@ -130,7 +156,7 @@ export interface AdvisorSettingsState {
   applyState: ApplyState
 }
 
-/** The schema-defaulted advisor config used when no namespace/view resolves. */
+/** The schema-defaulted advisor config used when no config resolves. */
 function defaultDraft(): AdvisorDraft {
   return { enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 }
 }
@@ -145,26 +171,20 @@ function numberField(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback
 }
 
-/** The draft a namespace view resolves to (defaults → base → user layer). */
-function draftOf(view: SettingsNamespaceView | undefined): AdvisorDraft {
-  const value = view?.value
-  const prompt = getPath(value, ['systemPrompt'])
+/**
+ * The draft a resolved gateway config resolves to. Absent keys (the wire
+ * normalization omits provider/model/disabledReason) read as missing — the
+ * seed never invents values the host does not pin.
+ */
+function draftOfConfig(config: AdvisorConfigView | undefined): AdvisorDraft {
   return {
-    enabled: getPath(value, ['enabled']) === true,
-    provider: stringField(getPath(value, ['provider'])),
-    model: stringField(getPath(value, ['model'])),
-    systemPrompt: typeof prompt === 'string' ? prompt : '',
-    immuneTurns: numberField(getPath(value, ['immuneTurns']), 3),
-    maxDeltaMessages: numberField(getPath(value, ['maxDeltaMessages']), 60),
+    enabled: config?.enabled === true,
+    provider: stringField(config?.provider),
+    model: stringField(config?.model),
+    systemPrompt: typeof config?.systemPrompt === 'string' ? config.systemPrompt : '',
+    immuneTurns: numberField(config?.immuneTurns, 3),
+    maxDeltaMessages: numberField(config?.maxDeltaMessages, 60),
   }
-}
-
-/** The stored user section as a plain record (absent → empty). */
-function userOf(view: SettingsNamespaceView | undefined): Record<string, unknown> {
-  const user = view?.user
-  return typeof user === 'object' && user !== null && !Array.isArray(user)
-    ? user as Record<string, unknown>
-    : {}
 }
 
 /** KD-S4 client-form gate: enabled requires a non-empty provider and model. */
@@ -204,7 +224,6 @@ export class AdvisorSettingsStore {
     modelsByProvider: {},
     modelsEmptyReason: {},
     namespaces: {},
-    advisorView: undefined,
     advisorPresent: false,
     draft: defaultDraft(),
     applyState: { kind: 'idle' },
@@ -232,26 +251,29 @@ export class AdvisorSettingsStore {
   /** The draft is seeded once (first load); refreshes never clobber edits. */
   private draftSeeded = false
 
-  /** `expectedRevision` for the next mutate, from the last describe/apply. */
-  private expectedRevision = 0
-
-  /** The stored user section at the last describe/apply (ops diff baseline). */
-  private lastUser: Record<string, unknown> = {}
-
-  /** The resolved advisor config at the last describe/apply (cleared-base detection). */
+  /** The resolved advisor config at the last get/apply (patch diff baseline). */
   private seed: AdvisorDraft = defaultDraft()
 
   /**
-   * @param api - the wire face (settings/llm domains).
+   * @param api - the wire face (settings/llm domains) for the provider/model
+   *   directory (the advisor namespace is NOT on that wire).
+   * @param rpc - the connection's generic RPC caller for the host gateway
+   *   channel (`/api`), injected from the connection handle.
    */
-  constructor(private readonly api: Pick<IApiClient, 'settings' | 'llm'>) {}
+  constructor(
+    private readonly api: Pick<IApiClient, 'settings' | 'llm'>,
+    private readonly rpc: ClientConnectionRpc,
+  ) {}
 
   /**
    * Refresh the whole page snapshot: the provider directory and the settings
-   * namespaces in parallel, then the provider join and the draft seed. A
-   * failure keeps the last good rows and surfaces the error. The draft is
-   * seeded only on the first load — pushed refreshes never discard in-progress
-   * edits (mirror the ProviderEditor draft lifetime).
+   * namespaces in parallel, then the advisor config over the gateway channel,
+   * then the provider join and the draft seed. A provider-directory failure
+   * keeps the last good rows and surfaces the error; an `advisor.get` failure
+   * is NOT a page error (KD-G5 — the section shows the config-channel notice,
+   * the provider directory stays usable). The draft is seeded only on the
+   * first load — pushed refreshes never discard in-progress edits (mirror the
+   * ProviderEditor draft lifetime).
    * @returns nothing; the snapshot carries the outcome.
    */
   async load(): Promise<void> {
@@ -280,10 +302,24 @@ export class AdvisorSettingsStore {
     }
     if (generation !== this.generation) return
 
+    // The advisor config rides the gateway channel, NOT describe (the
+    // namespace is off the apiproxy whitelist). A get failure — transport
+    // down, gateway not ready, no settings service on the host — resolves to
+    // advisorPresent=false (config-channel notice), never a hard load error.
+    let config: AdvisorConfigView | undefined
+    try {
+      const getResult = await this.rpc.call('/api', 'advisor/get', { args: {} })
+      if (getResult.ok) {
+        config = (getResult.value as { config: AdvisorConfigView }).config
+      }
+    } catch {
+      // Unreachable channel → same notice path (KD-G5 fallback).
+    }
+    if (generation !== this.generation) return
+
     const namespaces: Record<string, SettingsNamespaceView> = Object.fromEntries(
       views.map(view => [view.ns, view]),
     )
-    const advisorView = namespaces[ADVISOR_NAMESPACE]
     const options: ProviderOption[] = []
     for (const entry of providers) {
       const namespace = namespaces[entry.settingsNs]
@@ -298,10 +334,15 @@ export class AdvisorSettingsStore {
         configured,
       })
     }
-    this.expectedRevision = advisorView?.revision ?? 0
-    this.lastUser = userOf(advisorView)
-    this.seed = draftOf(advisorView)
-    if (!this.draftSeeded) {
+    this.seed = draftOfConfig(config)
+    // The draft is seeded only from a REAL config (QC tri I-1): when the
+    // first load's get fails (gateway down), seeding the schema defaults and
+    // marking the draft seeded would freeze the form on defaults — once the
+    // gateway recovered, the seed would refresh to the actual config but the
+    // draft would not re-seed, and an Apply (diffed against the correct seed)
+    // would send a full-default patch and wipe the real configuration. Gate
+    // both the seed and the seeded flag on the config having resolved.
+    if (!this.draftSeeded && config !== undefined) {
       this.store.update((s) => { s.draft = this.seed })
       this.draftSeeded = true
     }
@@ -323,8 +364,7 @@ export class AdvisorSettingsStore {
       s.writable = writable
       s.providers = options
       s.namespaces = namespaces
-      s.advisorView = advisorView
-      s.advisorPresent = advisorView !== undefined
+      s.advisorPresent = config !== undefined
       s.modelsByProvider = {}
       s.modelsEmptyReason = {}
     })
@@ -456,7 +496,7 @@ export class AdvisorSettingsStore {
     this.setField('systemPrompt', prompt)
   }
 
-  /** Set the immune-turns cooldown (int ≥ 0; non-numeric input keeps the current value; undefined clears → omitted from ops). */
+  /** Set the immune-turns cooldown (int ≥ 0; non-numeric input keeps the current value; undefined clears → omitted from patch). */
   setImmuneTurns(value: number | undefined): void {
     if (value === undefined) {
       this.clearField('immuneTurns')
@@ -465,7 +505,7 @@ export class AdvisorSettingsStore {
     this.setField('immuneTurns', this.clampInt(value, this.store.getSnapshot().draft.immuneTurns ?? 0))
   }
 
-  /** Set the delta-message window (int ≥ 0; non-numeric input keeps the current value; undefined clears → omitted from ops). */
+  /** Set the delta-message window (int ≥ 0; non-numeric input keeps the current value; undefined clears → omitted from patch). */
   setMaxDeltaMessages(value: number | undefined): void {
     if (value === undefined) {
       this.clearField('maxDeltaMessages')
@@ -474,20 +514,13 @@ export class AdvisorSettingsStore {
     this.setField('maxDeltaMessages', this.clampInt(value, this.store.getSnapshot().draft.maxDeltaMessages ?? 0))
   }
 
-  /** Cancel: re-seed the draft from the latest resolved config and clear feedback. */
-  resetDraft(): void {
-    this.store.update((s) => {
-      s.draft = this.seed
-      s.applyState = { kind: 'idle' }
-    })
-  }
-
   /**
-   * Validate the draft (KD-S4 gate), then write the changed keys as path ops
-   * through `settings.mutate` with `expectedRevision` from the last describe.
-   * A `settings-conflict` result surfaces the conflict failure and re-syncs
-   * (reload) so the user can review and re-apply; any other failure keeps the
-   * form for retry. Nothing to write → the apply reports saved without a call.
+   * Validate the draft (KD-S4 gate), then write the changed keys as a config
+   * patch through the gateway channel (`/api/advisor/set`). Any failure
+   * (business rejection or transport) surfaces the message failure and keeps
+   * the form for retry — the gateway merge has no revision guard, so the old
+   * settings-conflict branch is replaced by plain error handling (KD-G3).
+   * Nothing to write → the apply reports saved without a call.
    * @returns nothing; the apply state carries the outcome.
    */
   async apply(): Promise<void> {
@@ -499,38 +532,24 @@ export class AdvisorSettingsStore {
       })
       return
     }
-    const ops = this.opsFor(state.draft)
-    if (ops.length === 0) {
+    const patch = this.patchFor(state.draft)
+    if (Object.keys(patch).length === 0) {
       this.store.update((s) => { s.applyState = { kind: 'saved' } })
       return
     }
     this.store.update((s) => { s.applyState = { kind: 'saving' } })
     try {
-      const response = await this.api.settings.mutate({
-        ns: ADVISOR_NAMESPACE,
-        ops,
-        expectedRevision: this.expectedRevision,
-      })
-      if (!response.result.ok) {
-        const error = response.result.error
-        if (error.code === 'settings-conflict') {
-          this.store.update((s) => {
-            s.applyState = { kind: 'error', failure: { kind: 'conflict' } }
-          })
-          await this.load() // re-sync the revision and view for a retry
-          return
-        }
+      const result = await this.rpc.call('/api', 'advisor/set', { args: { patch } })
+      if (!result.ok) {
         this.store.update((s) => {
-          s.applyState = { kind: 'error', failure: { kind: 'message', message: error.message } }
+          s.applyState = { kind: 'error', failure: { kind: 'message', message: result.error.message } }
         })
         return
       }
-      // The write landed: adopt the returned view's revision/user/seed so a
-      // follow-up apply diff-cleans and carries the fresh revision even if the
+      // The write landed: adopt the returned composed config as the new seed
+      // so a follow-up apply diff-cleans against the fresh value even if the
       // reload below fails.
-      this.expectedRevision = response.result.value.revision
-      this.lastUser = userOf(response.result.value)
-      this.seed = draftOf(response.result.value)
+      this.seed = draftOfConfig((result.value as { config: AdvisorConfigView }).config)
       // qc3 N-1: the saved feedback is set BEFORE the reload — a reload
       // failure (status 'error') must not mask the landed write; the section
       // renders the saved line alongside the error+retry view.
@@ -546,44 +565,44 @@ export class AdvisorSettingsStore {
     }
   }
 
-  /** The minimal set/unset ops making the stored user section match the draft. */
-  private opsFor(draft: AdvisorDraft): SettingsPathOpView[] {
-    const ops: SettingsPathOpView[] = []
+  /**
+   * The minimal config patch making the effective config match the draft —
+   * only keys whose value differs from the last-read seed are sent, so a
+   * stale read never clobbers concurrent changes to untouched keys and base
+   * (plugin-row) values stay in place. A cleared provider/model the seed pins
+   * becomes an explicit `''` override (the gateway merge cannot express an
+   * unset, and the resolver treats '' as absent); a cleared number field is
+   * omitted (the stored value stays unchanged).
+   */
+  private patchFor(draft: AdvisorDraft): Record<string, unknown> {
+    const patch: Record<string, unknown> = {}
     const always = ['enabled', 'systemPrompt', 'immuneTurns', 'maxDeltaMessages'] as const
     for (const key of always) {
-      const stored = this.lastUser[key]
       const next = draft[key]
       // A cleared number input (undefined) means "leave the stored value
-      // unchanged": omit the key from the ops instead of writing 0.
+      // unchanged": omit the key from the patch instead of writing 0.
       if (next === undefined) continue
-      if (JSON.stringify(stored) !== JSON.stringify(next)) {
-        ops.push({ op: 'set', path: [key], value: next })
+      if (JSON.stringify(this.seed[key]) !== JSON.stringify(next)) {
+        patch[key] = next
       }
     }
     for (const key of ['provider', 'model'] as const) {
       const next = draft[key]
       if (next !== undefined) {
-        const stored = this.lastUser[key]
-        if (JSON.stringify(stored) !== JSON.stringify(next)) {
-          ops.push({ op: 'set', path: [key], value: next })
+        if (JSON.stringify(this.seed[key]) !== JSON.stringify(next)) {
+          patch[key] = next
         }
-      } else if (this.lastUser[key] === '') {
-        // The explicit '' override from a previous clear is already stored:
-        // leave it untouched. An `unset` here would restore the pinned value
-        // and the clear would oscillate on the next apply.
       } else if (this.seed[key] !== undefined) {
         // The resolved seed pins the value (composition base and/or user
-        // layer): an `unset` may only remove the user layer and restore the
-        // base, so the explicit empty-string override is the reliable clear.
-        ops.push({ op: 'set', path: [key], value: '' })
-      } else if (hasPath(this.lastUser, [key])) {
-        // Nothing resolves the key, yet the user layer holds a value the
-        // resolved view does not pin (e.g. dropped by the host projection):
-        // an `unset` removes it for good.
-        ops.push({ op: 'unset', path: [key] })
+        // layer): the gateway merge has no unset, so the explicit empty-string
+        // override is the reliable clear — the host resolver treats '' as
+        // absent and the client reads it as missing (the wire may still carry
+        // the stored ''), keeping the clear stable across later applies.
+        patch[key] = ''
       }
+      // else: nothing resolves the key → nothing stored, no op.
     }
-    return ops
+    return patch
   }
 
   /** Edit one always-present draft field via the schema-form path writer. */

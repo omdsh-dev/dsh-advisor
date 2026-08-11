@@ -1,11 +1,11 @@
 /**
- * Advisor settings section (plan dsh-advisor-settings-n2, task 3): the full
+ * Advisor settings section (plan dsh-advisor-settings-n5, task 2): the full
  * form — `enabled` switch (default off), `provider`/`model` select boxes
  * limited to the system-configured providers and their models (KD-S2), the
  * required-when-enabled gate (KD-S4, also enforced in the store), the
  * `systemPrompt` textarea, the `immuneTurns`/`maxDeltaMessages` number inputs,
- * and Apply writing the `advisor` namespace user layer through the
- * store (`settings.mutate` path ops + `expectedRevision`).
+ * and Apply writing the advisor config through the host gateway channel
+ * (store → `connection.rpc.call('/api', 'advisor/set', { patch })`).
  *
  * Presentation: the settings-panel design language (ModelsSection
  * vocabulary) via `advisor-section.module.css` — the section column, the form
@@ -18,13 +18,13 @@
  * Apply: the user keeps the stored value (it still applies as stored) or
  * reselects — the host gate rejects truly invalid configurations on write.
  * Clearing a number input leaves the field empty; the store then omits that
- * key from the apply ops (the stored value stays unchanged).
+ * key from the apply patch (the stored value stays unchanged).
  *
- * When the last describe carried no `advisor` namespace view (a host build
- * that does not expose the namespace — the C-1 exposure boundary), the form
- * is replaced by the `namespaceUnavailable` notice and Apply is never
- * offered, so the page never presents a writable-looking editor whose writes
- * the host would refuse (qc2 W-2 / qc1 S-4).
+ * When the last load could not reach the `advisor.get` gateway endpoint (the
+ * gateway is not ready on this host — no settings service, or the channel is
+ * down), the form is replaced by the `namespaceUnavailable` notice and Apply
+ * is never offered, so the page never presents a writable-looking editor
+ * whose writes the host would refuse (KD-G5, the n2-era C-1 mitigation).
  */
 
 import type { ReactNode } from 'react'
@@ -64,7 +64,6 @@ export function AdvisorSection(props: AdvisorSectionProps): ReactNode {
 function failureCopy(failure: ApplyFailure, t: AdvisorSectionInjected['t']): string | undefined {
   switch (failure.kind) {
     case 'gate': return undefined
-    case 'conflict': return t('conflict')
     case 'message': return failure.message
   }
 }
@@ -90,15 +89,19 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
   }
   if (state.status !== 'ready') return <h2 className={styles['title']}>{t('title')}</h2>
 
-  // qc2 W-2 / qc1 S-4 (the C-1 mitigation): when the last describe carried no
-  // `advisor` namespace view (host build does not expose it), the form would
-  // present defaults + a writable-looking Apply that can only fail with a
-  // host refusal — render the explicit notice instead and never offer Apply.
+  // KD-G5 (the n2-era C-1 mitigation): when the last load could not reach the
+  // `advisor.get` gateway endpoint (gateway not ready / channel down), the
+  // form would present defaults + a writable-looking Apply that can only fail
+  // with a host refusal — render the explicit notice instead and never offer
+  // Apply. qc3 N-1 mirrors here too: a post-apply reload that loses the
+  // gateway must not mask a landed write — the saved line renders alongside
+  // the notice.
   if (!state.advisorPresent) {
     return (
       <div className={styles['section']}>
         <h2 className={styles['title']}>{t('title')}</h2>
         <p className={styles['intro']}>{t('intro')}</p>
+        {state.applyState.kind === 'saved' ? <p className={styles['savedNotice']} role="status">{t('saved')}</p> : null}
         <p className={styles['notice']} role="status">{t('namespaceUnavailable')}</p>
       </div>
     )
