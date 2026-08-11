@@ -79,7 +79,15 @@ export interface AdvisorDeliveryOptions {
 export function buildAdvisorMessage(note: AdviceNote): UserMessage {
   return createUserMessage({
     content: [{ type: 'text', text: `[advisor:${note.severity}] ${note.note}` }],
-    source: { kind: ADVISOR_SOURCE_KIND },
+    // n4 (user direction): declare the notice form + a collapsed-row summary so
+    // the web shell's ContextInjectionRow shows "… · advisor · [nit] <note>"
+    // instead of a bare producer label. The severity tag is part of the summary
+    // text; per-severity COLOR needs the shell UI (out of plugin reach).
+    source: {
+      kind: ADVISOR_SOURCE_KIND,
+      form: 'notice' as const,
+      summary: `[${note.severity}] ${note.note}`,
+    },
   })
 }
 

@@ -126,6 +126,10 @@ describe('AdvisorDelivery — advisor message construction (spec §6)', () => {
     const message = buildAdvisorMessage({ note: 'extract the helper', severity: 'concern' })
     expect(message.role).toBe('user')
     expect(message.source.kind).toBe(ADVISOR_SOURCE_KIND)
+    expect(message.source).toMatchObject({
+      form: 'notice',
+      summary: '[concern] extract the helper',
+    })
     expect(message.content).toEqual([{ type: 'text', text: '[advisor:concern] extract the helper' }])
   })
 
