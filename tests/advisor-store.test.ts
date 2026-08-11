@@ -522,6 +522,32 @@ describe('apply patch + seed (gateway channel semantics)', () => {
     // the form stays for retry, and no reload re-syncs (describe stays at 1).
     expect(describe).toHaveBeenCalledTimes(1)
   })
+
+  it('surfaces a transport throw from the set call as a message failure, keeping the form, without re-syncing', async () => {
+    // The transport itself rejects (network down mid-write): the catch branch
+    // folds the thrown message into the apply state — the form keeps the
+    // edits for a retry and no reload re-syncs.
+    const { api, rpc, describe, call } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    // The Once is registered AFTER load so it targets the set call, not the
+    // load's get call.
+    call.mockRejectedValueOnce(new Error('transport down'))
+    store.setEnabled(true)
+    store.setProvider('deepseek-official')
+    store.setModel('ds-a')
+    await store.apply()
+    const { applyState, draft } = store.store.getSnapshot()
+    expect(applyState.kind).toBe('error')
+    if (applyState.kind === 'error' && applyState.failure.kind === 'message') {
+      expect(applyState.failure.message).toBe('transport down')
+    }
+    // The in-progress draft survives (nothing was written, nothing re-seeded).
+    expect(draft.enabled).toBe(true)
+    expect(draft.provider).toBe('deepseek-official')
+    expect(draft.model).toBe('ds-a')
+    expect(describe).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('invalidations (refreshIfLoaded)', () => {

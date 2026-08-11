@@ -93,12 +93,15 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
   // `advisor.get` gateway endpoint (gateway not ready / channel down), the
   // form would present defaults + a writable-looking Apply that can only fail
   // with a host refusal — render the explicit notice instead and never offer
-  // Apply.
+  // Apply. qc3 N-1 mirrors here too: a post-apply reload that loses the
+  // gateway must not mask a landed write — the saved line renders alongside
+  // the notice.
   if (!state.advisorPresent) {
     return (
       <div className={styles['section']}>
         <h2 className={styles['title']}>{t('title')}</h2>
         <p className={styles['intro']}>{t('intro')}</p>
+        {state.applyState.kind === 'saved' ? <p className={styles['savedNotice']} role="status">{t('saved')}</p> : null}
         <p className={styles['notice']} role="status">{t('namespaceUnavailable')}</p>
       </div>
     )

@@ -38,13 +38,6 @@ function ok<T>(value: T): RpcResponse<T> {
   return { rpcId: 'r' as never, result: { ok: true, value } }
 }
 
-function fail<T>(message: string): RpcResponse<T> {
-  return {
-    rpcId: 'r' as never,
-    result: { ok: false, error: { code: 'settings-rejected', message, details: { ns: 'advisor' as string } } },
-  }
-}
-
 /** One gateway RPC success (the channel returns the unwrapped result, not the envelope). */
 function okResult<T>(value: T): RpcResult<T> {
   return { ok: true, value }
@@ -381,6 +374,30 @@ describe('AdvisorSection', () => {
     expect(zh.namespaceUnavailable).toMatch(/开关/)
     expect(zh.namespaceUnavailable).toMatch(/无法提供|不能提供/)
     expect(zh.namespaceUnavailable).toMatch(/通道|网关/)
+  })
+
+  it('keeps the saved feedback next to the notice when the post-apply reload loses the gateway', async () => {
+    // qc3 N-1 mirrors into the notice branch (M3): a landed write whose
+    // post-apply reload can no longer reach the gateway must still show the
+    // saved line — the notice explains the channel is down, the write is not
+    // silently masked.
+    const scripted = scriptedApi()
+    // get call 1 (initial load) succeeds; the post-apply reload get fails.
+    scripted.get.mockImplementationOnce(() => Promise.resolve(okResult({ config: defaultConfig() })))
+    scripted.get.mockImplementationOnce(() => Promise.resolve(failResult('advisor gateway is not ready')))
+    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc)
+    await controller.load()
+    const injected: AdvisorSectionInjected = {
+      controller, useSnapshot: bindSnapshotSelector(controller.store), t,
+    }
+    controller.setEnabled(true)
+    controller.setProvider('deepseek-official')
+    controller.setModel('ds-a')
+    await controller.apply()
+    render(<AdvisorSection {...injected} />)
+    expect(screen.getByText(en.saved)).toBeTruthy()
+    expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: en.apply })).toBeNull()
   })
 
   it('renders the load failure with a working retry', async () => {

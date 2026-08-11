@@ -30,7 +30,7 @@ export const en = {
   applying: 'Applying…',
   saved: 'Advisor settings saved. New sessions pick them up immediately.',
   readOnly: 'Settings are read-only in this environment.',
-  namespaceUnavailable: 'The advisor configuration channel is not available yet — the settings gateway is not ready on this host. Configure the advisor via the plugin config row — `- id: advisor` whose `config:` map sets `enabled`/`provider`/`model` (e.g. `config: { enabled: true, provider: …, model: … }`) in `$DSH_HOME/profiles/<name>/cordis.patch.yml`. The advisor plugin runs fully from its plugin config row; the web settings section reconnects once the gateway is up. Note: `/advisor` only toggles the advisor per session; it cannot supply provider/model.',
+  namespaceUnavailable: 'The advisor configuration channel is not available yet — the settings gateway is not ready on this host. Configure the advisor via the plugin config row — `- id: advisor` whose `config:` map sets `enabled`/`provider`/`model` (e.g. `config: { enabled: true, provider: …, model: … }`) in `$DSH_HOME/profiles/<name>/cordis.patch.yml`. The advisor plugin runs fully from its plugin config row; the web settings form becomes available again on the next load once the gateway is reachable. Note: `/advisor` only toggles the advisor per session; it cannot supply provider/model.',
 }
 
 /** The settings.advisor namespace key union. */
@@ -62,5 +62,5 @@ export const zh: typeof en = {
   applying: '保存中…',
   saved: '顾问设置已保存。新会话立即生效。',
   readOnly: '当前环境中的设置为只读。',
-  namespaceUnavailable: '顾问配置通道暂不可用——本宿主上的设置网关尚未就绪。请通过插件配置行配置顾问——在 `$DSH_HOME/profiles/<name>/cordis.patch.yml` 中写 `- id: advisor`，其 `config:` 映射中设置 `enabled`/`provider`/`model`（例如 `config: { enabled: true, provider: …, model: … }`）。顾问插件完全通过插件配置行运行；网关就绪后 web 设置节将重新连接。注意：`/advisor` 仅切换当前会话的顾问开关，无法提供 provider/model。',
+  namespaceUnavailable: '顾问配置通道暂不可用——本宿主上的设置网关尚未就绪。请通过插件配置行配置顾问——在 `$DSH_HOME/profiles/<name>/cordis.patch.yml` 中写 `- id: advisor`，其 `config:` 映射中设置 `enabled`/`provider`/`model`（例如 `config: { enabled: true, provider: …, model: … }`）。顾问插件完全通过插件配置行运行；网关可用后，web 设置表单将在下次加载时重新显示。注意：`/advisor` 仅切换当前会话的顾问开关，无法提供 provider/model。',
 }
