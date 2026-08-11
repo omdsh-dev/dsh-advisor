@@ -6,7 +6,6 @@ category: architecture-patterns
 severity: medium
 title: Adding a dsh web Settings section to a standalone plugin (client half contract)
 description: Verified recipe for a standalone dsh plugin's browser half: the dsh.client declaration (nested under dsh, post-20da39e), closure-factory CJS bundle served from /plugins/<id>/client.js, CSS-modules inline injection with style-tag lifecycle, settings.section slot registration, and the frozen externals/purity/JSX contracts — plus the host-side settings namespace wiring it edits.
-plan_id: dsh-advisor-settings-ui-n3
 tags:
   - dsh
   - plugin
@@ -76,5 +75,5 @@ Any standalone plugin shipping browser UI into dsh web. Reference implementation
 
 ## Examples
 
-- `dsh-advisor` n2: `scripts/build-client.mjs` (esbuild closure factory), `src/client/index.ts` (settings.section id `advisor`), verified via scratch `dsh web` boot (boot graph row, served bundle, vm factory execution).
-- `dsh-advisor` n3: migrated the declaration to the nested `client` key under `dsh` (new host contract), added the CSS-modules inline injection + style-tag lifecycle + NUL/path hygiene (F-1..F-3 QC fix wave, commit df7a262), restyled the section with the ModelsSection vocabulary + `--dsw-alias-*` tokens, and verified the boot-graph row + served bundle at runtime after restart.
+- The dsh-advisor client build (`scripts/build-client.mjs` esbuild closure factory, `src/client/index.ts` settings.section id `advisor`) was verified via a scratch `dsh web` boot (boot graph row, served bundle, vm factory execution).
+- The declaration was later migrated to the nested `client` key under `dsh` (new host contract), the client build gained CSS-modules inline injection + style-tag lifecycle + NUL/path hygiene (commit df7a262), and the section was restyled with the ModelsSection vocabulary + `--dsw-alias-*` tokens; verified via the boot-graph row + served bundle at runtime after restart.

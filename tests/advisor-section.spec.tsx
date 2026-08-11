@@ -282,6 +282,8 @@ describe('AdvisorSection', () => {
     await waitFor(() => expect(controller.store.getSnapshot().applyState.kind).toBe('saved'))
     view.rerender(<AdvisorSection {...injected} />)
     expect(screen.getByRole('status').textContent).toBe(en.saved)
+    // The Cancel button is gone — only Apply renders (user direction: Save only).
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
   })
 
   it('shows the wire failure message when Apply is rejected', async () => {
@@ -332,21 +334,6 @@ describe('AdvisorSection', () => {
     expect(prompt.placeholder).toBe(en.systemPromptPlaceholder)
   })
 
-  it('resets the draft on Cancel', async () => {
-    const { view, controller, injected } = await mountSection({
-      advisor: advisorView({ user: { enabled: true, provider: 'deepseek-official', model: 'ds-a' } }),
-    })
-    const prompt = screen.getByLabelText(en.systemPrompt) as HTMLTextAreaElement
-    fireEvent.change(prompt, { target: { value: 'edited' } })
-    fireEvent.change(screen.getByLabelText(en.immuneTurns), { target: { value: '9' } })
-    view.rerender(<AdvisorSection {...injected} />)
-    expect((screen.getByLabelText(en.systemPrompt) as HTMLTextAreaElement).value).toBe('edited')
-    fireEvent.click(screen.getByRole('button', { name: en.cancel }))
-    view.rerender(<AdvisorSection {...injected} />)
-    expect((screen.getByLabelText(en.systemPrompt) as HTMLTextAreaElement).value).toBe('')
-    expect((screen.getByLabelText(en.immuneTurns) as HTMLInputElement).value).toBe('3')
-  })
-
   it('keeps a cleared number input empty instead of forcing 0', async () => {
     const { view, injected } = await mountSection()
     const input = screen.getByLabelText(en.immuneTurns) as HTMLInputElement
@@ -386,7 +373,7 @@ describe('AdvisorSection', () => {
     expect(notice.textContent).toMatch(/only toggles the advisor per session/i)
     expect(notice.textContent).toMatch(/cannot supply provider\/model/i)
     expect(screen.queryByRole('button', { name: en.apply })).toBeNull()
-    expect(screen.queryByRole('button', { name: en.cancel })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
     expect(screen.queryByLabelText(en.enabled)).toBeNull()
     expect(screen.queryByLabelText(en.provider)).toBeNull()
   })

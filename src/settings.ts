@@ -15,6 +15,15 @@
  * every consumer passes it through `resolveAdvisorConfig` — the SSOT for the
  * enabled-without-pair disabled-with-reason resolution (no model call).
  *
+ * The namespace joins the configuration-client boundary through the upstream
+ * registration opt-in: `exposeToWebClients: true` makes the registration
+ * descriptor report `exposed: true`, and on dsh ≥ the 20da39e snapshot the
+ * host's `exposedNamespaces()` unions exactly those namespaces — so no host
+ * patch is required. Older dsh builds (pre-20da39e) that lack the opt-in
+ * simply do not expose the namespace; the client section then renders the
+ * unexposed-namespace notice and configuration goes through the plugin config
+ * row only.
+ *
  * @module dsh-advisor/settings
  */
 
@@ -66,7 +75,11 @@ export interface AdvisorSettingsBridge {
  * `ctx.inject(['settings'], ...)` child, so with no settings service the
  * source stays the entry config. `setSource` swaps the authoritative thunk
  * (the settings scope's resolved value while attached); `onChange` fires at
- * attach, on committed changes, and at detach.
+ * attach, on committed changes, and at detach. The registration opts into the
+ * configuration-client boundary (`exposeToWebClients: true` — the upstream
+ * registration-level opt-in, threaded through `installSettingsSection`'s
+ * hooks; on dsh ≥ the 20da39e snapshot the host exposes exactly these
+ * namespaces, so no host patch is needed).
  *
  * qc1 W-5 (multi-fiber dedupe): the host composes several dsh-advisor fibers,
  * and this runs on EVERY instance — but `Settings.register` fails loud on a
@@ -92,7 +105,16 @@ export function installAdvisorSettings(ctx: Context, entry: AdvisorConfig): Advi
   ctx.inject(['settings'], (sctx) => {
     let scope: SettingsScope<AdvisorConfig> | undefined
     try {
-      scope = sctx.settings.register(ADVISOR_SETTINGS_NAMESPACE, Config, { base: entry })
+      scope = sctx.settings.register(ADVISOR_SETTINGS_NAMESPACE, Config, {
+        base: entry,
+        // Registration-level opt-in: the descriptor reports `exposed: true`,
+        // and the host's `exposedNamespaces()` (dsh ≥ the 20da39e snapshot)
+        // unions such namespaces into the configuration-client boundary — no
+        // host patch is required. Older hosts that lack the opt-in do not
+        // expose the namespace; the section falls back to the config-row
+        // notice.
+        exposeToWebClients: true,
+      })
     } catch (error) {
       if (!(error instanceof Error) || !error.message.includes('already registered')) throw error
       ctx.logger('advisor').debug('settings namespace already registered — entry-source fallback (multi-fiber dedupe)')

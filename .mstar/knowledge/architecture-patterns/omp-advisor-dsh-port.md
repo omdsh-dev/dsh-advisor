@@ -6,7 +6,6 @@ category: architecture-patterns
 severity: medium
 title: Porting the omp advisor subsystem to dsh — mechanism map and MVP decisions
 description: Durable mechanism map of the omp advisor (second reviewer model per session) onto dsh primitives, with the verified MVP port decisions and the accepted gaps tracked for later iterations.
-plan_id: dsh-advisor-mvp
 tags:
   - advisor
   - omp
@@ -26,7 +25,7 @@ applies_when:
 
 ## Context
 
-omp's advisor attaches an independent reviewer model to a session: after each primary turn it receives an incremental transcript delta, reviews it, and injects severity-ranked advice (nit / concern / blocker) back into the primary session, gated end-to-end so a misbehaving reviewer can never pollute or stall the primary loop. dsh has every low-level mechanism (session event stream, agent inject/steer, independent llm calls, command registry) but no advisor capability. This iteration ported the **core mechanism** as an installable plugin bundle.
+omp's advisor attaches an independent reviewer model to a session: after each primary turn it receives an incremental transcript delta, reviews it, and injects severity-ranked advice (nit / concern / blocker) back into the primary session, gated end-to-end so a misbehaving reviewer can never pollute or stall the primary loop. dsh has every low-level mechanism (session event stream, agent inject/steer, independent llm calls, command registry) but no advisor capability. The port delivered the **core mechanism** as an installable plugin bundle.
 
 ## Guidance (mechanism map)
 

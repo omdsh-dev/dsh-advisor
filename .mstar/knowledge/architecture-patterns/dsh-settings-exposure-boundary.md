@@ -1,18 +1,17 @@
 ---
 module: dsh host settings exposure boundary
-date: 2026-08-10
+date: 2026-08-11
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
-title: dsh host settings exposure boundary — third-party namespaces need a host patch (dsh-llm-fallbacks pattern)
-description: The dsh host apiproxy only exposes allowlisted settings namespaces to web clients; a third-party plugin's settings section is refused with settings-not-exposed. Verified fix path: host patch mechanism shipped by the plugin (patches/ + apply/revert/verify/autopatch scripts, dsh-llm-fallbacks pattern) + unexposed-namespace guidance in the section.
-plan_id: dsh-advisor-settings-n2
+title: dsh host settings exposure boundary — third-party namespaces join via the upstream exposeToWebClients opt-in
+description: The dsh host apiproxy only exposes allowlisted settings namespaces to web clients; a third-party plugin's settings section is refused with settings-not-exposed unless the namespace joins the boundary. Current fix: the upstream registration opt-in `exposeToWebClients: true` (dsh ≥ snapshot 20da39e) unions the namespace into the configuration-client boundary — no host patch. Older hosts fall back to the unexposed-namespace notice + plugin config row.
 tags:
   - dsh
   - settings
   - exposure
   - apiproxy
-  - host-patch
+  - exposeToWebClients
   - settings-not-exposed
   - blocker
 applies_when:
@@ -27,37 +26,33 @@ applies_when:
 
 The dsh web Settings page's wire (`settings.describe` / `settings.mutate` / `settings.update` / `settings.replace`) is served by the host's apiproxy. **The host deliberately exposes only an allowlist of namespaces to web clients** — a future registration does NOT become remotely readable/writable by default (this is an explicit design comment in the apiproxy, not an oversight).
 
-## The boundary (verified at b8343cb, dev mirror AND installed runtime)
+## The boundary (historical allowlist, verified at b8343cb; superseded at 20da39e)
 
-- `exposedNamespaces()` = `modelProviderNamespaces()` (settingsNs of llm configurable providers only) ∪ `WEB_SETTINGS_NAMESPACES ['permission']` ∪ `PRODUCT_SETTINGS_NAMESPACES ['ui-onboarding']` — **hardcoded module constants** in the host apiproxy source (packages/host/apiproxy).
+- Pre-20da39e: `exposedNamespaces()` = `modelProviderNamespaces()` (settingsNs of llm configurable providers only) ∪ `WEB_SETTINGS_NAMESPACES ['permission']` ∪ `PRODUCT_SETTINGS_NAMESPACES ['ui-onboarding']` — **hardcoded module constants** in the host apiproxy source (packages/host/apiproxy). No registration flag existed; a third-party plugin CANNOT expose its namespace from inside the plugin repo.
+- At snapshot 20da39e the host gained the registration-level opt-in: a namespace registered with `exposeToWebClients: true` reports `exposed: true` on its descriptor, and `exposedNamespaces()` unions exactly those namespaces into the configuration-client boundary. The hardcoded allowlist is no longer the only gate.
 - `settings.describe` filters to the exposed set (the client never receives a non-exposed namespace's view); settings mutate/update/replace on a non-exposed namespace → settings-not-exposed refusal.
-- **No config escape hatch**: the apiproxy config only carries a workspace root; no registration flag on `installSettingsSection`; no plugin hook. A third-party plugin CANNOT expose its namespace from inside the plugin repo.
 
 ## Symptoms
 
 - The Settings section renders (slot registration is client-side) but `settings.mutate` always fails with settings-not-exposed; the store sees `advisorView === undefined` and (without a presence check) presents a functional-looking form whose Apply can only fail.
 - QA "toggle → save" fails at the first save; only a static/analysis review catches it before browser testing (the boot graph + bundle + factory-execution smokes do NOT exercise the settings wire).
 
-## Fix path (verified, user-approved)
+## Fix path (current mechanism, verified)
 
-1. **Plugin-side mitigations (always)**: track namespace presence (`advisorPresent`) and render a distinct "advisor namespace unavailable/unexposed in this dsh build" notice with no Apply when the view is absent; special-case settings-not-exposed copy.
-2. **Host patch mechanism (dsh-llm-fallbacks pattern, user-directed)**: the plugin ships the host-side change as a git patch + scripts, so the OPERATOR can apply it to their dsh source tree:
-   - the apiproxy patch under patches/ — minimal diff: add `'advisor'` to `PRODUCT_SETTINGS_NAMESPACES` (or the equivalent allowlist), repo-root-relative paths (pnpm `@scope+pkg@version.patch` naming).
-   - the apply/revert/verify/autopatch scripts under scripts/: runtime-derived target (the DSH_SOURCE_DIR env var, defaulting to the dsh source current dir), tri-state `git apply --check` / `--reverse --check` (idempotent), `--check`/`--skip-build`/`-d|--target` options, probe-based verify (source + build artifact markers, SKIP on missing files), warn-only install-time autopatch with an env opt-out (the DSH_ADVISOR_AUTOPATCH env opt-out), build step: incremental tsc over the apiproxy package plus the host-face tsdown build.
-   - **Gotcha**: the .git entry under the dsh source current dir is a FILE (worktree), so the `.git`-presence check must use `-e` not `-d` (the dsh-llm-fallbacks reference uses `-d` and would reject the real default target).
-   - Security framing: apply runs the target tree's build code — trusted tree only; patch is minimal + revertible; dsh upgrades reset the patch (re-run apply).
-3. **Residual lifecycle**: register as a true blocker-defer (`decision: defer`, severity per impact, Durable Roadmap target: operator applies patch + rebuild → QA re-verifies the real round-trip). The plugin must not claim the round-trip works without it.
+1. **Registration opt-in (the fix, always)**: register the namespace with `exposeToWebClients: true` (the upstream registration-level opt-in, threaded through `installSettingsSection`'s hooks). On dsh ≥ snapshot 20da39e the namespace joins the web configuration boundary with **no host patching** — runtime-verified: `settings.describe` exposes the `advisor` namespace with the opt-in and no host-side change.
+2. **Plugin-side mitigation (always, covers older hosts)**: track namespace presence (`advisorPresent`) and render a distinct "advisor namespace unavailable/unexposed in this dsh build" notice with no Apply when the view is absent; point at the plugin config row in the profile's `cordis.patch.yml` (`- id: advisor` + `config:` map). `/advisor` is a per-session toggle only and cannot supply provider/model.
+3. **Retired: the plugin-shipped host patch mechanism**. The earlier fix shipped a git patch against the host source tree (a shipped patch directory + apply/revert/verify shell scripts with an install-time auto-apply, dsh-llm-fallbacks pattern) that added `'advisor'` to `PRODUCT_SETTINGS_NAMESPACES`. Once the upstream opt-in was runtime-verified, that entire mechanism (patch file, scripts, install-lifecycle automation, host-patch tests) was **retired and deleted** — it modified the operator's dsh source tree on install and had to be re-applied after every dsh upgrade. Do not re-introduce a host-tree patch: the opt-in is the upstream-supported path.
 
 ## Why This Matters
 
-This is a cross-repo blocker that only surfaces at browser-level acceptance: all install/bundle/factory smokes pass while the settings wire silently refuses. Knowing the boundary + the patch mechanism saves a future plugin a full QC-tri + escalation cycle. The R# (R1 in this repo's status.json (harness process artifact)) tracks the operator action.
+This is a cross-repo boundary that only surfaces at browser-level acceptance: all install/bundle/factory smokes pass while the settings wire silently refuses. Knowing that the boundary is joined by a registration flag (not by patching the host) saves a future plugin both a failed patch lifecycle and a full QC-tri + escalation cycle. The unexposed-namespace notice remains the correct fallback for older hosts that lack the opt-in.
 
 ## When to Apply
 
-- Before promising a web Settings page for ANY third-party dsh plugin namespace.
+- Before promising a web Settings page for ANY third-party dsh plugin namespace: register with `exposeToWebClients: true` and verify against the running host.
 - When diagnosing a rendered-but-never-saving Settings section.
-- When deciding whether a host change is in-repo or cross-repo (it is cross-repo here).
+- When deciding whether a host change is needed for a third-party feature (it is not, on dsh ≥ 20da39e).
 
 ## Examples
 
-- `dsh-advisor` n2: C-1 QC2 Critical → user decision (option A + patch mechanism) → `patches/` + 4 scripts + tests/host-patch.test.ts (read-only `--check` vs real tree; full apply/verify/revert cycle on a scratch clone) → R1 open (blocker-defer).
+- The `advisor` settings namespace: registered with `exposeToWebClients: true`; runtime-verified exposed via the upstream opt-in with the shipped host patch reverted. The former plugin-shipped host patch (the shipped patch directory + scripts + host-patch tests) was retired in the same change.
