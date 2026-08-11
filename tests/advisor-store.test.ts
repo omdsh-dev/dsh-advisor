@@ -1,9 +1,10 @@
 /**
- * Advisor settings store (plan dsh-advisor-settings-n2, task 3) — store unit
- * tests over a scripted wire face (fake `settings`/`llm` api mirroring the
- * dsh-client-connection stub shapes).
+ * Advisor settings store (plan dsh-advisor-settings-gateway-n5, task 2) —
+ * store unit tests over a scripted wire face (fake `settings`/`llm` api for
+ * the provider directory + a fake connection RPC caller for the `advisor`
+ * gateway channel).
  *
- * Contract under test (brief Step 1):
+ * Contract under test (brief Step 1 + 4):
  * ① providers join: a provider whose profile resolves (namespace exists +
  *    profile path resolves) enters the option list; an unconfigured one
  *    (missing profile or missing namespace) does not.
@@ -11,32 +12,54 @@
  *    catalog group for that provider; neither → empty options + a reason.
  * ③ Apply gate (KD-S4): enabled + missing provider/model → blocked with the
  *    gate failure; disabled → provider/model may be empty and the apply lands.
- * ④ mutate ops: set/unset paths against the stored user section and
- *    `expectedRevision` from the last describe; a `settings-conflict` result
- *    surfaces the conflict failure and re-syncs.
- * ⑤ invalidations: `refreshIfLoaded` refetches a loaded store and skips an
+ * ④ gateway patch semantics: the advisor config is read/written over
+ *    `rpc.call('/api', 'advisor/get'|'advisor/set')` — a minimal patch
+ *    (changed keys only) against the last-read config; a cleared
+ *    provider/model the seed pins becomes an explicit '' override; a cleared
+ *    number field is omitted; an empty patch reports saved without a call; a
+ *    plain rpc failure surfaces the message (no conflict branch — the gateway
+ *    merge has no revision guard).
+ * ⑤ gateway availability (KD-G5): get success → advisorPresent; get failure
+ *    (ok:false or transport throw) → advisorPresent=false with status 'ready'
+ *    (the section shows the config-channel notice — never a hard load error).
+ * ⑥ invalidations: `refreshIfLoaded` refetches a loaded store and skips an
  *    idle (never-loaded) one.
  */
 
 import { describe, expect, it, vi } from 'vitest'
 import type {
-  ConfigurableProviderView, IApiClient, ModelProviderGroup, RpcResponse,
-  SettingsNamespaceView, SettingsPathOpView,
+  ClientConnectionRpc, ConfigurableProviderView, IApiClient, ModelProviderGroup,
+  RpcResponse, RpcResult, SettingsNamespaceView,
 } from '@deepseek-ai/dsh-client-connection/client'
 import { AdvisorSettingsStore, refreshIfLoaded } from '../src/client/advisor-store'
-import type { AdvisorDraft } from '../src/client/advisor-store'
+import type { AdvisorConfigView, AdvisorDraft } from '../src/client/advisor-store'
 
-/** One unary wire response. */
+/** One unary wire response (provider directory calls). */
 function ok<T>(value: T): RpcResponse<T> {
   return { rpcId: 'r' as never, result: { ok: true, value } }
 }
 
-/** One unary wire failure (default code: a plain settings rejection). */
-function fail<T>(message: string, code: 'settings-rejected' | 'settings-conflict' = 'settings-rejected'): RpcResponse<T> {
-  const error = code === 'settings-conflict'
-    ? { code, message, details: { ns: 'advisor' as string, expected: 1, actual: 2 } }
-    : { code, message, details: { ns: 'advisor' as string } }
-  return { rpcId: 'r' as never, result: { ok: false, error } }
+/** One unary wire failure (provider directory calls). */
+function fail<T>(message: string): RpcResponse<T> {
+  return {
+    rpcId: 'r' as never,
+    result: { ok: false, error: { code: 'settings-rejected', message, details: { ns: 'advisor' as string } } },
+  }
+}
+
+/** One gateway RPC success (the channel returns the unwrapped result). */
+function okResult<T>(value: T): RpcResult<T> {
+  return { ok: true, value }
+}
+
+/** One gateway RPC failure. */
+function failResult(message: string): RpcResult<unknown> {
+  return { ok: false, error: { code: 'internal', message, details: {} } }
+}
+
+/** The wire config the gateway returns when nothing is configured. */
+function defaultConfig(): AdvisorConfigView {
+  return { enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 }
 }
 
 const DEEPSEEK: ConfigurableProviderView = {
@@ -102,88 +125,69 @@ function emptylistNs(): SettingsNamespaceView {
   return { ns: 'llm-emptylist', schema: {}, value: { models: [] }, applies: 'live', secrets: [], revision: 0 }
 }
 
-/** The advisor namespace view; user layer is optional (absent = no user section). */
-function advisorView(overrides: {
-  user?: Record<string, unknown>
-  base?: Record<string, unknown>
-  value?: Record<string, unknown>
-  revision?: number
-} = {}): SettingsNamespaceView {
-  const user = overrides.user
-  const value = overrides.value ?? {
-    ...(user !== undefined ? { ...user } : {}),
-    enabled: user?.enabled ?? false,
-    systemPrompt: user?.systemPrompt ?? '',
-    immuneTurns: user?.immuneTurns ?? 3,
-    maxDeltaMessages: user?.maxDeltaMessages ?? 60,
-  }
-  return {
-    ns: 'advisor',
-    schema: {},
-    value,
-    ...(overrides.base !== undefined ? { base: overrides.base } : {}),
-    ...(user !== undefined ? { user } : {}),
-    applies: 'live',
-    secrets: [],
-    revision: overrides.revision ?? 0,
-  }
-}
-
 const CATALOG: ModelProviderGroup[] = [
   { id: 'openai', name: 'openai', models: [{ id: 'gpt-4o', name: 'GPT-4o' }] },
   { id: 'empty', name: 'empty', models: [] },
 ]
 
-/** A scripted wire face whose advisor user section mutates with each mutate. */
+/** A scripted wire face: provider directory via api, advisor config via rpc. */
 interface Scripted {
   api: Pick<IApiClient, 'settings' | 'llm'>
+  rpc: ClientConnectionRpc
+  call: ReturnType<typeof vi.fn>
+  get: ReturnType<typeof vi.fn>
+  set: ReturnType<typeof vi.fn>
   describe: ReturnType<typeof vi.fn>
-  mutate: ReturnType<typeof vi.fn>
   providers: ReturnType<typeof vi.fn>
   models: ReturnType<typeof vi.fn>
 }
 
+/**
+ * Build the scripted wire. `config: null` = the gateway channel is down (get
+ * fails) — the C-1/KD-G5 notice path. The fake `set` merges the patch into
+ * the effective config exactly like the host gateway (merge → new composed
+ * config), so a follow-up get/seed reflects the write.
+ */
 function scriptedApi(options: {
-  advisor: SettingsNamespaceView | null
+  config?: AdvisorConfigView | null
   namespaces?: SettingsNamespaceView[]
   entries?: ConfigurableProviderView[]
   groups?: ModelProviderGroup[]
   writable?: boolean
-}): Scripted {
+} = {}): Scripted {
   const others = options.namespaces ?? [deepseekNs(), piAiNs()]
   const entries = options.entries ?? [DEEPSEEK, OPENAI, ZOMBIE, ORPHAN, EMPTY, EMPTYLIST]
-  // `advisor: null` = the host describe does not expose the namespace (the
-  // C-1 exposure boundary) — absent from the namespaces list entirely.
-  let currentAdvisor = options.advisor
+  let current = options.config === undefined ? defaultConfig() : options.config
   const describe = vi.fn(() => Promise.resolve(ok({
     writable: options.writable ?? true,
     hasDocument: false,
-    namespaces: currentAdvisor === null ? others : [...others, currentAdvisor],
+    namespaces: others,
   })))
   const providers = vi.fn(() => Promise.resolve(ok({ providers: entries })))
   const models = vi.fn(() => Promise.resolve(ok({ groups: options.groups ?? CATALOG, failures: [] })))
-  const mutate = vi.fn((payload: { ns: string; ops: SettingsPathOpView[]; expectedRevision?: number }) => {
-    if (currentAdvisor === null) throw new Error('test: mutate on an absent advisor namespace')
-    const user: Record<string, unknown> = { ...(currentAdvisor.user as Record<string, unknown> | undefined) }
-    for (const op of payload.ops) {
-      if (op.op === 'set') user[op.path[0]] = op.value
-      else delete user[op.path[0]]
-    }
-    const next: SettingsNamespaceView = {
-      ...currentAdvisor,
-      user,
-      value: { ...currentAdvisor.value as Record<string, unknown>, ...user },
-      revision: currentAdvisor.revision + 1,
-    }
-    currentAdvisor = next
-    return Promise.resolve(ok(next))
+  const get = vi.fn(() => Promise.resolve(
+    current === null
+      ? failResult('advisor gateway is not ready')
+      : okResult({ config: current }),
+  ))
+  const set = vi.fn((payload: { args: { patch: Record<string, unknown> } }) => {
+    if (current === null) throw new Error('test: set on an unavailable gateway')
+    current = { ...current, ...payload.args.patch }
+    return Promise.resolve(okResult({ config: current }))
+  })
+  const call = vi.fn((channel: string, endpoint: string, payload: unknown) => {
+    if (channel !== '/api') throw new Error(`test: unexpected channel ${channel}`)
+    if (endpoint === 'advisor/get') return get()
+    if (endpoint === 'advisor/set') return set(payload as { args: { patch: Record<string, unknown> } })
+    throw new Error(`test: unexpected endpoint ${endpoint}`)
   })
   return {
     api: {
-      settings: { describe, update: vi.fn(), replace: vi.fn(), mutate },
+      settings: { describe, update: vi.fn(), replace: vi.fn(), mutate: vi.fn() },
       llm: { providers, models, discoverModels: vi.fn() },
     } as unknown as Pick<IApiClient, 'settings' | 'llm'>,
-    describe, mutate, providers, models,
+    rpc: { call } as unknown as ClientConnectionRpc,
+    call, get, set, describe, providers, models,
   }
 }
 
@@ -193,8 +197,8 @@ function draftOf(store: AdvisorSettingsStore): AdvisorDraft {
 
 describe('providers join (KD-S2 configured determination)', () => {
   it('lists only providers whose profile resolves; excludes missing profiles and missing namespaces', async () => {
-    const { api } = scriptedApi({ advisor: advisorView() })
-    const store = new AdvisorSettingsStore(api)
+    const { api, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     const { providers: options } = store.store.getSnapshot()
     const routes = options.map(option => option.provider)
@@ -206,13 +210,10 @@ describe('providers join (KD-S2 configured determination)', () => {
   })
 
   it('seeds the draft from the resolved advisor config on first load', async () => {
-    const { api } = scriptedApi({
-      advisor: advisorView({
-        user: { enabled: true, provider: 'deepseek-official', model: 'ds-a' },
-        revision: 3,
-      }),
+    const { api, rpc } = scriptedApi({
+      config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api)
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     expect(draftOf(store)).toEqual({
       enabled: true,
@@ -224,31 +225,41 @@ describe('providers join (KD-S2 configured determination)', () => {
     })
   })
 
-  it('seeds the draft from the composition base when the user layer is absent', async () => {
-    // The plugin-row config is the namespace base; without a user section the
-    // form must still show the effective (base) values so the toggle is not
-    // off while the advisor is actually running.
-    const { api } = scriptedApi({
-      advisor: advisorView({
-        base: { enabled: true, provider: 'deepseek-official', model: 'ds-a' },
-        value: {
-          enabled: true, provider: 'deepseek-official', model: 'ds-a',
-          systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60,
-        },
-      }),
+  it('seeds the draft from the effective config regardless of layer origin (base+user already folded by the host)', async () => {
+    // The gateway returns the RESOLVED config — the composition base / user
+    // layer split is host-side and invisible here: the form shows the
+    // effective values so the toggle is not off while the advisor is running.
+    const { api, rpc } = scriptedApi({
+      config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20 },
     })
-    const store = new AdvisorSettingsStore(api)
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     expect(draftOf(store).enabled).toBe(true)
     expect(draftOf(store).provider).toBe('deepseek-official')
     expect(draftOf(store).model).toBe('ds-a')
+    expect(draftOf(store).systemPrompt).toBe('entry')
+    expect(draftOf(store).immuneTurns).toBe(7)
+    expect(draftOf(store).maxDeltaMessages).toBe(20)
+  })
+
+  it('treats absent provider/model keys as missing (wire normalization)', async () => {
+    // The wire omits absent keys (never present-as-undefined): the seed must
+    // read them as missing, not invent defaults that would trip the gate.
+    const { api, rpc } = scriptedApi({
+      config: { enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    expect(draftOf(store).provider).toBeUndefined()
+    expect(draftOf(store).model).toBeUndefined()
+    expect(draftOf(store).enabled).toBe(false)
   })
 })
 
 describe('model options (KD-S2 profile-first, catalog fallback)', () => {
   it('uses the provider profile models and never calls the catalog', async () => {
-    const { api, models } = scriptedApi({ advisor: advisorView() })
-    const store = new AdvisorSettingsStore(api)
+    const { api, rpc, models } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     await store.ensureModels('deepseek-official')
     const { modelsByProvider } = store.store.getSnapshot()
@@ -257,8 +268,8 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
   })
 
   it('falls back to the llm.models catalog group when the profile declares none', async () => {
-    const { api, models } = scriptedApi({ advisor: advisorView() })
-    const store = new AdvisorSettingsStore(api)
+    const { api, rpc, models } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     await store.ensureModels('openai')
     const { modelsByProvider } = store.store.getSnapshot()
@@ -267,12 +278,11 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
   })
 
   it('caches the catalog: a second provider needs no second llm.models call', async () => {
-    const { api, models } = scriptedApi({
-      advisor: advisorView(),
+    const { api, rpc, models } = scriptedApi({
       namespaces: [piAiNs(), emptyNs()],
       entries: [OPENAI, EMPTY],
     })
-    const store = new AdvisorSettingsStore(api)
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     await store.ensureModels('openai')
     await store.ensureModels('empty')
@@ -285,13 +295,12 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
     const deferred = new Promise<RpcResponse<CatalogPayload>>((resolve) => {
       deferredResolve = resolve
     })
-    const { api, models } = scriptedApi({
-      advisor: advisorView(),
+    const { api, rpc, models } = scriptedApi({
       namespaces: [piAiNs(), emptyNs()],
       entries: [OPENAI, EMPTY],
     })
     models.mockReturnValueOnce(deferred)
-    const store = new AdvisorSettingsStore(api)
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     const first = store.ensureModels('openai')
     const second = store.ensureModels('empty')
@@ -302,13 +311,12 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
   })
 
   it('does not cache a transient catalog failure: a later provider refetches', async () => {
-    const { api, models } = scriptedApi({
-      advisor: advisorView(),
+    const { api, rpc, models } = scriptedApi({
       namespaces: [piAiNs(), emptyNs()],
       entries: [OPENAI, EMPTY],
     })
     models.mockReturnValueOnce(Promise.resolve(fail('catalog down')))
-    const store = new AdvisorSettingsStore(api)
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     // First resolution hits a failing catalog fetch: the provider gets the
     // empty-options reason, but the failure is NOT cached at catalog level.
@@ -321,11 +329,10 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
   })
 
   it('marks empty options with a reason when neither source has models', async () => {
-    const { api } = scriptedApi({
-      advisor: advisorView(),
+    const { api, rpc } = scriptedApi({
       namespaces: [deepseekNs(), piAiNs(), emptyNs(), emptylistNs()],
     })
-    const store = new AdvisorSettingsStore(api)
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     await store.ensureModels('empty')     // profile has no models field; catalog group empty
     await store.ensureModels('emptylist') // profile declares an empty models list (profile wins)
@@ -342,8 +349,8 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
 
 describe('apply gate (KD-S4 required-when-enabled)', () => {
   it('blocks Apply when enabled with no provider, naming the gate failure', async () => {
-    const { api, mutate } = scriptedApi({ advisor: advisorView() })
-    const store = new AdvisorSettingsStore(api)
+    const { api, rpc, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     store.setEnabled(true)
     await store.apply()
@@ -353,12 +360,12 @@ describe('apply gate (KD-S4 required-when-enabled)', () => {
       expect(applyState.failure.kind).toBe('gate')
       if (applyState.failure.kind === 'gate') expect(applyState.failure.reason).toBe('provider')
     }
-    expect(mutate).not.toHaveBeenCalled()
+    expect(set).not.toHaveBeenCalled()
   })
 
   it('blocks Apply when enabled with a provider but no model', async () => {
-    const { api, mutate } = scriptedApi({ advisor: advisorView() })
-    const store = new AdvisorSettingsStore(api)
+    const { api, rpc, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     store.setEnabled(true)
     store.setProvider('deepseek-official')
@@ -368,54 +375,43 @@ describe('apply gate (KD-S4 required-when-enabled)', () => {
     if (applyState.kind === 'error' && applyState.failure.kind === 'gate') {
       expect(applyState.failure.reason).toBe('model')
     }
-    expect(mutate).not.toHaveBeenCalled()
+    expect(set).not.toHaveBeenCalled()
   })
 
   it('allows empty provider/model while disabled and lands the apply', async () => {
-    const { api, mutate } = scriptedApi({ advisor: advisorView() })
-    const store = new AdvisorSettingsStore(api)
+    const { api, rpc, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     store.setImmuneTurns(5)
     await store.apply()
-    expect(mutate).toHaveBeenCalledTimes(1)
+    expect(set).toHaveBeenCalledTimes(1)
     const { applyState } = store.store.getSnapshot()
     expect(applyState.kind).toBe('saved')
   })
 })
 
-describe('apply ops + expectedRevision (mutate path ops)', () => {
-  it('writes only the changed keys as set/unset path ops with the describe revision', async () => {
-    const { api, mutate } = scriptedApi({
-      advisor: advisorView({
-        user: {
-          enabled: true, provider: 'deepseek-official', model: 'ds-a',
-          systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60,
-        },
-        revision: 7,
-      }),
+describe('apply patch + seed (gateway channel semantics)', () => {
+  it('writes only the changed keys as a patch against the last-read config', async () => {
+    const { api, rpc, call } = scriptedApi({
+      config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api)
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     store.setModel('ds-b')
     await store.apply()
-    expect(mutate).toHaveBeenCalledWith({
-      ns: 'advisor',
-      ops: [{ op: 'set', path: ['model'], value: 'ds-b' }],
-      expectedRevision: 7,
+    expect(call).toHaveBeenCalledWith('/api', 'advisor/set', {
+      args: { patch: { model: 'ds-b' } },
     })
   })
 
-  it('overrides a stored (user-pinned) provider/model with explicit empty values when cleared', async () => {
-    // The seed pins the values through the user layer; the explicit '' override
-    // is used instead of an `unset` so the clear stays stable regardless of
-    // what the composition base pins underneath.
-    const { api, mutate } = scriptedApi({
-      advisor: advisorView({
-        user: { enabled: true, provider: 'x', model: 'y' },
-        revision: 2,
-      }),
+  it('overrides a config-pinned provider/model with explicit empty values when cleared', async () => {
+    // The seed pins the values through the effective config; the explicit ''
+    // override is used because the gateway merge cannot express an unset (the
+    // host resolver treats '' as absent — the clear stays stable).
+    const { api, rpc, call } = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api)
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     // The KD-S4 gate forbids Apply while enabled with empty provider/model,
     // so the clear path is exercised with the switch off (values are then
@@ -423,167 +419,95 @@ describe('apply ops + expectedRevision (mutate path ops)', () => {
     store.setEnabled(false)
     store.setProvider('')
     await store.apply()
-    const payload = mutate.mock.calls[0]?.[0] as { ops: SettingsPathOpView[] }
-    expect(payload.ops).toContainEqual({ op: 'set', path: ['enabled'], value: false })
-    expect(payload.ops).toContainEqual({ op: 'set', path: ['provider'], value: '' })
-    expect(payload.ops).toContainEqual({ op: 'set', path: ['model'], value: '' })
-    expect(payload.ops.some(op => op.op === 'unset' && op.path[0] === 'provider')).toBe(false)
-    expect(payload.ops.some(op => op.op === 'set' && op.path[0] === 'provider' && op.value !== '')).toBe(false)
+    const payload = call.mock.calls.find(callArgs => callArgs[1] === 'advisor/set')?.[2] as { args: { patch: Record<string, unknown> } }
+    expect(payload.args.patch).toEqual({ enabled: false, provider: '', model: '' })
   })
 
-  it('clears a double-pinned provider/model (base and user both hold it) with an explicit empty override', async () => {
-    // Both the composition base and the stored user layer pin 'x': an `unset`
-    // would only remove the user layer and restore the base pin, so clearing
-    // must store the explicit '' override (review Important-1 case B).
-    const { api, mutate } = scriptedApi({
-      advisor: advisorView({
-        base: { enabled: true, provider: 'x', model: 'y' },
-        user: { enabled: true, provider: 'x', model: 'y' },
-        value: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
-        revision: 3,
-      }),
-    })
-    const store = new AdvisorSettingsStore(api)
-    await store.load()
-    store.setEnabled(false)
-    store.setProvider('')
-    await store.apply()
-    const payload = mutate.mock.calls[0]?.[0] as { ops: SettingsPathOpView[] }
-    expect(payload.ops).toContainEqual({ op: 'set', path: ['provider'], value: '' })
-    expect(payload.ops).toContainEqual({ op: 'set', path: ['model'], value: '' })
-    expect(payload.ops.some(op => op.op === 'unset' && op.path[0] === 'provider')).toBe(false)
-  })
-
-  it('keeps a base-clearing override stable across a second apply (no unset churn)', async () => {
+  it('keeps a base-clearing override stable across a second apply (no churn)', async () => {
     // Apply 1 stores the explicit '' override; a later apply with a DIFFERENT
-    // edit must not emit an `unset` for the cleared key (which would restore
-    // the base pin and re-oscillate) nor re-emit the '' set (review
-    // Important-1 case A).
-    const { api, mutate } = scriptedApi({
-      advisor: advisorView({
-        base: { enabled: true, provider: 'x', model: 'y' },
-        value: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
-        revision: 1,
-      }),
+    // edit must not re-emit the cleared keys — after the reload the get omits
+    // the '' override (the resolver treats it as absent), so the seed no
+    // longer pins provider/model and the second patch carries neither.
+    const { api, rpc, call } = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api)
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     store.setEnabled(false)
     store.setProvider('')
     await store.apply() // Apply 1: stores the provider '' / model '' overrides
-    let payload = mutate.mock.calls[0]?.[0] as { ops: SettingsPathOpView[] }
-    expect(payload.ops).toContainEqual({ op: 'set', path: ['provider'], value: '' })
+    let payload = call.mock.calls.find(callArgs => callArgs[1] === 'advisor/set')?.[2] as { args: { patch: Record<string, unknown> } }
+    expect(payload.args.patch.provider).toBe('')
 
     // Apply 2 with a different edit (immuneTurns) carries no provider/model
-    // op: the override is already stored and must not be torn down.
+    // key: nothing pins them anymore, so nothing is written.
     store.setImmuneTurns(9)
     await store.apply()
-    payload = mutate.mock.calls[1]?.[0] as { ops: SettingsPathOpView[] }
-    expect(payload.ops).toContainEqual({ op: 'set', path: ['immuneTurns'], value: 9 })
-    expect(payload.ops.some(op => op.path[0] === 'provider')).toBe(false)
-    expect(payload.ops.some(op => op.path[0] === 'model')).toBe(false)
+    const setCalls = call.mock.calls.filter(callArgs => callArgs[1] === 'advisor/set')
+    payload = setCalls[1]?.[2] as { args: { patch: Record<string, unknown> } }
+    expect(payload.args.patch).toEqual({ immuneTurns: 9 })
   })
 
-  it('unsets a stored provider/model the resolved view does not pin (defensive branch)', async () => {
-    // A user-layer value the resolved view drops (host projection) means the
-    // seed does not pin it, so clearing emits an `unset` — nothing would
-    // restore the value afterwards.
-    const { api, mutate } = scriptedApi({
-      advisor: advisorView({
-        user: { enabled: false, provider: 'x', model: 'y' },
-        value: { enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
-        revision: 2,
-      }),
-    })
-    const store = new AdvisorSettingsStore(api)
+  it('omits the patch for a cleared provider/model nothing pins (nothing stored → no op)', async () => {
+    // The config does not pin provider/model at all: clearing them writes
+    // nothing — there is no stored value to remove (the old unset branch is
+    // unreachable through the gateway: the returned config IS the effective
+    // view).
+    const { api, rpc, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     store.setProvider('')
     await store.apply()
-    const payload = mutate.mock.calls[0]?.[0] as { ops: SettingsPathOpView[] }
-    expect(payload.ops).toContainEqual({ op: 'unset', path: ['provider'] })
-    expect(payload.ops).toContainEqual({ op: 'unset', path: ['model'] })
-    expect(payload.ops.some(op => op.op === 'set' && op.path[0] === 'provider')).toBe(false)
+    expect(set).not.toHaveBeenCalled()
+    expect(store.store.getSnapshot().applyState.kind).toBe('saved')
   })
 
-  it('omits a cleared number field from the ops (empty input = leave unchanged)', async () => {
-    const { api, mutate } = scriptedApi({
-      advisor: advisorView({
-        user: { enabled: false, immuneTurns: 5, maxDeltaMessages: 60, systemPrompt: '' },
-        revision: 1,
-      }),
+  it('omits a cleared number field from the patch (empty input = leave unchanged)', async () => {
+    const { api, rpc, call } = scriptedApi({
+      config: { enabled: false, systemPrompt: '', immuneTurns: 5, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api)
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     store.setImmuneTurns(undefined)
     store.setSystemPrompt('edited')
     await store.apply()
-    const payload = mutate.mock.calls[0]?.[0] as { ops: SettingsPathOpView[] }
-    expect(payload.ops).toContainEqual({ op: 'set', path: ['systemPrompt'], value: 'edited' })
-    expect(payload.ops.some(op => op.path[0] === 'immuneTurns')).toBe(false)
-    expect(payload.ops.some(op => op.path[0] === 'maxDeltaMessages')).toBe(false)
+    const payload = call.mock.calls.find(callArgs => callArgs[1] === 'advisor/set')?.[2] as { args: { patch: Record<string, unknown> } }
+    expect(payload.args.patch).toEqual({ systemPrompt: 'edited' })
   })
 
-  it('overrides a base-pinned provider/model with explicit empty values when cleared', async () => {
-    // The values come from the composition base (no user layer): an `unset`
-    // would restore them, so clearing stores an explicit '' override that the
-    // host gate treats as empty.
-    const { api, mutate } = scriptedApi({
-      advisor: advisorView({
-        base: { enabled: true, provider: 'x', model: 'y' },
-        value: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
-        revision: 5,
-      }),
-    })
-    const store = new AdvisorSettingsStore(api)
+  it('reports saved without a gateway call when the patch is empty', async () => {
+    const { api, rpc, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
-    store.setEnabled(false)
-    store.setProvider('')
-    await store.apply()
-    const payload = mutate.mock.calls[0]?.[0] as { ops: SettingsPathOpView[] }
-    expect(payload.ops).toContainEqual({ op: 'set', path: ['provider'], value: '' })
-    expect(payload.ops).toContainEqual({ op: 'set', path: ['model'], value: '' })
-    expect(payload.ops.some(op => op.op === 'unset' && op.path[0] === 'provider')).toBe(false)
+    await store.apply() // no edits at all → nothing to write
+    expect(set).not.toHaveBeenCalled()
+    expect(store.store.getSnapshot().applyState.kind).toBe('saved')
   })
 
-  it('advances the revision after a successful apply and re-syncs the draft', async () => {
-    const { api, mutate } = scriptedApi({
-      advisor: advisorView({
-        user: { enabled: true, provider: 'deepseek-official', model: 'ds-a' },
-        revision: 1,
-      }),
+  it('adopts the returned config as the new seed after a successful apply', async () => {
+    const { api, rpc, call } = scriptedApi({
+      config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api)
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     store.setModel('ds-b')
     await store.apply()
     expect(store.store.getSnapshot().applyState.kind).toBe('saved')
     expect(store.store.getSnapshot().draft.model).toBe('ds-b')
-    // A second apply carries the revision the first mutate returned.
+    // A second apply diff-cleans against the returned config (the reload
+    // re-seeds from the same effective config).
     store.setModel('ds-a')
     await store.apply()
-    const payload = mutate.mock.calls[1]?.[0] as { expectedRevision?: number }
-    expect(payload.expectedRevision).toBe(2)
+    const setCalls = call.mock.calls.filter(callArgs => callArgs[1] === 'advisor/set')
+    expect(setCalls).toHaveLength(2)
+    const payload = setCalls[1]?.[2] as { args: { patch: Record<string, unknown> } }
+    expect(payload.args.patch).toEqual({ model: 'ds-a' })
   })
 
-  it('surfaces a settings-conflict result and re-syncs via a reload', async () => {
-    const { api, describe, mutate } = scriptedApi({ advisor: advisorView({ revision: 4 }) })
-    mutate.mockReturnValueOnce(Promise.resolve(fail('stale revision', 'settings-conflict')))
-    const store = new AdvisorSettingsStore(api)
-    await store.load()
-    store.setEnabled(true)
-    store.setProvider('deepseek-official')
-    store.setModel('ds-a')
-    await store.apply()
-    const { applyState } = store.store.getSnapshot()
-    expect(applyState.kind).toBe('error')
-    if (applyState.kind === 'error') expect(applyState.failure.kind).toBe('conflict')
-    expect(describe).toHaveBeenCalledTimes(2) // initial load + conflict re-sync
-  })
-
-  it('surfaces a plain wire rejection without re-syncing', async () => {
-    const { api, describe, mutate } = scriptedApi({ advisor: advisorView() })
-    mutate.mockReturnValueOnce(Promise.resolve(fail('host refused')))
-    const store = new AdvisorSettingsStore(api)
+  it('surfaces a plain rpc rejection without re-syncing', async () => {
+    const { api, rpc, describe, set } = scriptedApi()
+    set.mockReturnValueOnce(Promise.resolve(failResult('host refused')))
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     store.setEnabled(true)
     store.setProvider('deepseek-official')
@@ -594,14 +518,16 @@ describe('apply ops + expectedRevision (mutate path ops)', () => {
     if (applyState.kind === 'error' && applyState.failure.kind === 'message') {
       expect(applyState.failure.message).toBe('host refused')
     }
+    // The gateway merge has no revision guard: a failure is a plain message,
+    // the form stays for retry, and no reload re-syncs (describe stays at 1).
     expect(describe).toHaveBeenCalledTimes(1)
   })
 })
 
 describe('invalidations (refreshIfLoaded)', () => {
   it('refetches a loaded store', async () => {
-    const { api, describe } = scriptedApi({ advisor: advisorView() })
-    const store = new AdvisorSettingsStore(api)
+    const { api, rpc, describe } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     expect(describe).toHaveBeenCalledTimes(1)
     refreshIfLoaded(store)
@@ -609,15 +535,15 @@ describe('invalidations (refreshIfLoaded)', () => {
   })
 
   it('skips a never-loaded (idle) store', async () => {
-    const { api, describe } = scriptedApi({ advisor: advisorView() })
-    const store = new AdvisorSettingsStore(api)
+    const { api, rpc, describe } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
     refreshIfLoaded(store)
     expect(describe).not.toHaveBeenCalled()
   })
 
   it('keeps an in-progress draft across a refresh (no re-seed)', async () => {
-    const { api } = scriptedApi({ advisor: advisorView() })
-    const store = new AdvisorSettingsStore(api)
+    const { api, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     store.setImmuneTurns(9)
     refreshIfLoaded(store)
@@ -627,9 +553,11 @@ describe('invalidations (refreshIfLoaded)', () => {
 })
 
 describe('resetDraft (Cancel)', () => {
-  it('re-seeds the draft from the latest view', async () => {
-    const { api } = scriptedApi({ advisor: advisorView({ user: { enabled: true, provider: 'x' }, revision: 1 }) })
-    const store = new AdvisorSettingsStore(api)
+  it('re-seeds the draft from the latest config', async () => {
+    const { api, rpc } = scriptedApi({
+      config: { enabled: true, provider: 'x', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     store.setProvider('')
     store.setSystemPrompt('changed')
@@ -641,8 +569,8 @@ describe('resetDraft (Cancel)', () => {
 
 describe('model option refresh on invalidation (qc1 W-1 / qc3 S-1)', () => {
   it('a reload after models/changed re-resolves a previously-resolved provider with the NEW options', async () => {
-    const { api, models } = scriptedApi({ advisor: advisorView() })
-    const store = new AdvisorSettingsStore(api)
+    const { api, rpc, models } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     await store.ensureModels('openai')
     expect(store.store.getSnapshot().modelsByProvider['openai']?.map(model => model.id)).toEqual(['gpt-4o'])
@@ -663,8 +591,8 @@ describe('model option refresh on invalidation (qc1 W-1 / qc3 S-1)', () => {
   })
 
   it('clears the per-provider caches on every load, even when the stored provider did not change', async () => {
-    const { api } = scriptedApi({ advisor: advisorView() })
-    const store = new AdvisorSettingsStore(api)
+    const { api, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     store.setProvider('openai')
     await vi.waitFor(() => {
@@ -682,8 +610,7 @@ describe('model option refresh on invalidation (qc1 W-1 / qc3 S-1)', () => {
     type CatalogPayload = { groups: ModelProviderGroup[]; failures: unknown[] }
     let deferredResolve!: (value: RpcResponse<CatalogPayload>) => void
     const deferred = new Promise<RpcResponse<CatalogPayload>>((resolve) => { deferredResolve = resolve })
-    const { api, models } = scriptedApi({
-      advisor: advisorView(),
+    const { api, rpc, models } = scriptedApi({
       namespaces: [piAiNs()],
       entries: [OPENAI],
     })
@@ -693,7 +620,7 @@ describe('model option refresh on invalidation (qc1 W-1 / qc3 S-1)', () => {
       groups: [{ id: 'openai', name: 'openai', models: [{ id: 'gpt-5', name: 'GPT-5' }] }],
       failures: [],
     })))
-    const store = new AdvisorSettingsStore(api)
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     const first = store.ensureModels('openai')
     // The models/changed invalidation arrives while fetch A is in flight.
@@ -710,41 +637,54 @@ describe('model option refresh on invalidation (qc1 W-1 / qc3 S-1)', () => {
   })
 })
 
-describe('advisor namespace presence (qc2 W-2 / qc1 S-4 — C-1 mitigation)', () => {
-  it('tracks advisorPresent false when the describe carries no advisor namespace view', async () => {
-    const { api } = scriptedApi({ advisor: null })
-    const store = new AdvisorSettingsStore(api)
+describe('gateway availability (KD-G5 — advisorPresent)', () => {
+  it('tracks advisorPresent true when the advisor/get endpoint succeeds', async () => {
+    const { api, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     const state = store.store.getSnapshot()
-    expect(state.advisorPresent).toBe(false)
-    expect(state.advisorView).toBeUndefined()
+    expect(state.advisorPresent).toBe(true)
     expect(state.status).toBe('ready')
   })
 
-  it('tracks advisorPresent true when the namespace view is present', async () => {
-    const { api } = scriptedApi({ advisor: advisorView() })
-    const store = new AdvisorSettingsStore(api)
+  it('tracks advisorPresent false when the gateway get fails (ok:false) without failing the page', async () => {
+    // Gateway down (no settings service / channel unreachable): the provider
+    // directory still loads — the section shows the config-channel notice.
+    const { api, rpc } = scriptedApi({ config: null })
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
-    expect(store.store.getSnapshot().advisorPresent).toBe(true)
+    const state = store.store.getSnapshot()
+    expect(state.advisorPresent).toBe(false)
+    expect(state.status).toBe('ready')
+  })
+
+  it('tracks advisorPresent false when the gateway get throws (transport down) without failing the page', async () => {
+    const { api, rpc, get } = scriptedApi()
+    get.mockRejectedValueOnce(new Error('transport down'))
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    const state = store.store.getSnapshot()
+    expect(state.advisorPresent).toBe(false)
+    expect(state.status).toBe('ready')
+    expect(state.providers.length).toBeGreaterThan(0) // directory survived
   })
 })
 
 describe('post-apply reload failure (qc3 N-1)', () => {
-  it('keeps the saved feedback when the reload after a successful mutate fails', async () => {
-    const view = advisorView()
-    const { api, describe, mutate } = scriptedApi({ advisor: view })
+  it('keeps the saved feedback when the reload after a successful set fails', async () => {
+    const { api, rpc, describe, set } = scriptedApi()
     // First describe (initial load) resolves; the post-apply reload fails.
     describe.mockReturnValueOnce(Promise.resolve(ok({
       writable: true,
       hasDocument: false,
-      namespaces: [deepseekNs(), piAiNs(), view],
+      namespaces: [deepseekNs(), piAiNs()],
     })))
     describe.mockReturnValueOnce(Promise.resolve(fail('transport down')))
-    const store = new AdvisorSettingsStore(api)
+    const store = new AdvisorSettingsStore(api, rpc)
     await store.load()
     store.setImmuneTurns(5)
     await store.apply()
-    expect(mutate).toHaveBeenCalledTimes(1)
+    expect(set).toHaveBeenCalledTimes(1)
     const state = store.store.getSnapshot()
     // The write landed and the saved feedback is set BEFORE the reload — the
     // failed reload must not mask it (the section renders it alongside the
