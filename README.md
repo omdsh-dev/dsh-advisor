@@ -79,8 +79,8 @@ ones; every surface uses the same key set):
    optional fields) saves into the `advisor` settings namespace and overrides
    the plugin-row config without editing it. Saving applies to new sessions
    immediately — no restart (the runtime reads the composed value live).
-   Requires a current dsh web build whose shell loads `dshClient` packages and
-   renders `settings.section` slots.
+   Requires a current dsh web build whose shell loads packages that declare
+   `dsh.client` and renders `settings.section` slots.
 3. **`/advisor` command** — per-session and ephemeral: it flips a session
    override, never the persisted config (see [Usage](#usage)).
 

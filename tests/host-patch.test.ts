@@ -72,12 +72,13 @@ describe('host exposure patch artifact (C-1)', () => {
     expect(patch.startsWith('diff --git a/packages/host/apiproxy/src/api-proxy.ts'), 'git-diff format').toBe(true)
     expect(patch).toContain('--- a/packages/host/apiproxy/src/api-proxy.ts')
     expect(patch).toContain('+++ b/packages/host/apiproxy/src/api-proxy.ts')
-    // The allowlist change itself: ui-onboarding stays, advisor is added.
-    expect(patch).toContain("-const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding'])")
-    expect(patch).toContain("+const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding', 'advisor'])")
+    // The allowlist change itself: ui-onboarding stays, advisor is added (the
+    // baseline const already carries AGENT_PRESET_SETTINGS_NAMESPACE upstream).
+    expect(patch).toContain("-const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding', AGENT_PRESET_SETTINGS_NAMESPACE])")
+    expect(patch).toContain("+const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding', 'advisor', AGENT_PRESET_SETTINGS_NAMESPACE])")
     // The comment above the allowlist is updated in the same hunk.
-    expect(patch).toContain('-/** Product settings intentionally exposed beside model-provider namespaces. */')
-    expect(patch).toContain('+/** Product settings intentionally exposed beside model-provider namespaces (ui-onboarding, advisor). */')
+    expect(patch).toContain('- * Product settings intentionally exposed beside model-provider namespaces.')
+    expect(patch).toContain('+ * Product settings intentionally exposed beside model-provider namespaces (ui-onboarding, advisor, agent-preset).')
   })
 
   it('ships the apply/revert/verify scripts and the autopatch opt-out', () => {
@@ -108,11 +109,28 @@ describe('host exposure patch artifact (C-1)', () => {
     expect(probes, 'bundle probe entry for the tsdown bundle (package main)').toContain(
       'packages/host/apiproxy/lib/index.js',
     )
-    // The bundle probe is quote-agnostic: it greps the PRODUCT_SETTINGS_NAMESPACES
-    // assignment context for `advisor` (tsdown emits double-quoted literals, so
-    // the single-quoted source marker never appears there).
-    expect(probes, 'bundle probe greps the assignment context, quote-agnostic').toContain(
-      'PRODUCT_SETTINGS_NAMESPACES[^;]*advisor',
+    // The bundle probe is split into two line-based probes: the new tsdown
+    // (rolldown) emits the Set multi-line, so no single context regex can span
+    // the newlines. The two probes pin the constant declaration line (a
+    // fixed-string `grep -F` probe — shape-agnostic: no regex metacharacters,
+    // so it matches whatever ordering/whitespace the bundle uses) and the
+    // advisor allowlist entry line (a quote-agnostic entry-line regex)
+    // separately.
+    expect(probes, 'bundle probe pins the allowlist constant declaration line').toContain(
+      'PRODUCT_SETTINGS_NAMESPACES = new Set(',
+    )
+    expect(probes, 'bundle probe pins the quoted advisor allowlist entry line').toContain(
+      '^[[:space:]]*[\\"\']advisor[\\"\']',
+    )
+    // The constant declaration exists in the unpatched bundle too, so the
+    // constant probe is present-only (|P): --absent mode must SKIP it and key
+    // on the advisor entry probe alone. The advisor entry probe stays
+    // both-mode — its entry ends with `|E"`, no |P scope.
+    expect(probes, 'bundle constant probe is present-only (skipped with --absent)').toContain(
+      'allowlist constant)|F|P',
+    )
+    expect(probes, 'advisor entry probe stays both-mode (absent keys on it)').toContain(
+      'advisor allowlist entry)|E"',
     )
     // The source / tsc-emit probes keep the single-quoted source form.
     expect(probes, 'source/build probes keep the single-quoted marker').toContain(MARKER)
@@ -314,7 +332,7 @@ describe('host exposure patch artifact (C-1)', () => {
       expect(after, 'tree status unchanged by --check').toBe(before)
     })
 
-    describe.skipIf(patched)('pinned unpatched baseline (b8343cb)', () => {
+    describe.skipIf(patched)('pinned unpatched baseline (20da39e)', () => {
       it('git apply --check succeeds and --reverse --check fails (not yet applied)', () => {
         const forward = run(['git', '-C', tree, 'apply', '--check', PATCH_FILE])
         expect(forward.status, `forward apply --check exit 0 — stderr:\n${forward.stderr}`).toBe(0)

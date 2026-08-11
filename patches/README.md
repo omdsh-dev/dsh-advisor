@@ -1,12 +1,13 @@
 # Host exposure patch (`patches/`)
 
 The dsh host's apiproxy only exposes **model-provider namespaces** plus
-`permission` and `ui-onboarding` to web configuration clients. The plugin's
-`advisor` settings namespace is therefore refused by the configuration client
-with `settings-not-exposed` — the web Settings page cannot read or write it
-(C-1, the host-side blocker of the Settings page round-trip). dsh itself is
-not shipped in this repo; this directory carries the minimal git patch + the
-companion scripts (`scripts/apply-dsh-patch.sh` / `revert-dsh-patch.sh` /
+`permission`, `ui-onboarding`, and the agent-preset setting namespace to web
+configuration clients. The plugin's `advisor` settings namespace is therefore
+refused by the configuration client with `settings-not-exposed` — the web
+Settings page cannot read or write it (C-1, the host-side blocker of the
+Settings page round-trip). dsh itself is not shipped in this repo; this
+directory carries the minimal git patch + the companion scripts
+(`scripts/apply-dsh-patch.sh` / `revert-dsh-patch.sh` /
 `verify-dsh-patch.sh`) that apply the change to the **local dsh source tree**
 (the same mechanism `dsh-llm-fallbacks` ships for its role patch).
 
@@ -29,20 +30,37 @@ companion scripts (`scripts/apply-dsh-patch.sh` / `revert-dsh-patch.sh` /
 
 The dsh host's `exposedNamespaces()` is the union of the model-provider
 namespaces, `permission`, and `PRODUCT_SETTINGS_NAMESPACES`. At the pinned
-baseline (dsh-private b8343cb) that allowlist is:
+baseline (dsh snapshot 20da39e, after the upstream refactor) that allowlist is:
 
 ```ts
-/** Product settings intentionally exposed beside model-provider namespaces. */
-const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding'])
+/**
+ * Product settings intentionally exposed beside model-provider namespaces.
+ *
+ * The agent-preset namespace carries one field — which preset a session with
+ * no explicit choice is composed from — and both browser surfaces that offer
+ * that choice write it through `settings.update`, so it has to cross the
+ * configuration boundary or the pickers silently fail to persist.
+ */
+const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding', AGENT_PRESET_SETTINGS_NAMESPACE])
 ```
+
+(`AGENT_PRESET_SETTINGS_NAMESPACE` is imported from
+`@deepseek-ai/dsh-agent-presets`; the 8-line JSDoc above the constant is the
+patch's hunk context.)
 
 The patch adds `'advisor'` (and mentions the advisor section in the comment):
 
 ```diff
--/** Product settings intentionally exposed beside model-provider namespaces. */
--const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding'])
-+/** Product settings intentionally exposed beside model-provider namespaces (ui-onboarding, advisor). */
-+const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding', 'advisor'])
+- * Product settings intentionally exposed beside model-provider namespaces.
++ * Product settings intentionally exposed beside model-provider namespaces (ui-onboarding, advisor, agent-preset).
+  *
+  * The agent-preset namespace carries one field — which preset a session with
+  * no explicit choice is composed from — and both browser surfaces that offer
+  * that choice write it through `settings.update`, so it has to cross the
+  * configuration boundary or the pickers silently fail to persist.
+  */
+-const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding', AGENT_PRESET_SETTINGS_NAMESPACE])
++const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding', 'advisor', AGENT_PRESET_SETTINGS_NAMESPACE])
 ```
 
 That is the entire change: a one-element allowlist addition with no behavior
@@ -128,10 +146,19 @@ SKIP):
   `'ui-onboarding', 'advisor'`
 - build: `packages/host/apiproxy/lib/types/api-proxy.js` contains
   `'ui-onboarding', 'advisor'`
-- bundle: `packages/host/apiproxy/lib/index.js` contains
-  `"ui-onboarding", "advisor"` (the tsdown bundle — the package `main`, the
-  runtime entry for consumers outside the tsx-from-source install; tsdown
-  emits double-quoted string literals, hence the bundle-form marker)
+- bundle: `packages/host/apiproxy/lib/index.js` is probed with TWO line-based
+  probes — the new tsdown (rolldown) emits the `Set` multi-line, so a single
+  context regex cannot span the newlines. Present mode checks the constant
+  declaration line (`PRODUCT_SETTINGS_NAMESPACES = new Set(` — a fixed-string
+  `grep -F` probe, **shape-agnostic**: its marker contains no regex
+  metacharacters, so it matches the declaration regardless of the Set body's
+  ordering or whitespace) **and** the advisor allowlist-entry line
+  (`^[[:space:]]*["']advisor["']` — an **entry-line-based, quote-agnostic**
+  regex: anchored at line start and accepting either quote character, since
+  the tsdown printer's quote choice is not contractual). Absent
+  mode keys on the advisor entry probe only: the constant declaration exists
+  in the unpatched bundle too, so that probe is marked present-only and
+  skipped — the advisor entry is the discriminator of the reverted state.
 
 > The constant is module-private, so it never reaches the `.d.ts`; the compiled
 > JS (`lib/types/api-proxy.js`, the tsc emit under `outDir: lib/types`) and the
@@ -185,8 +212,15 @@ patch needs re-applying depends on where the snapshot came from:
 
 If the upgrade moved the context so the patch no longer applies, the script
 reports the conflict; the patch may need regenerating against the new source
-lines (the change itself is a one-line allowlist entry, so regeneration is
-trivial).
+lines (the change itself is a one-element allowlist entry, so regeneration is
+trivial). Note that upstream refactored `PRODUCT_SETTINGS_NAMESPACES` to also
+carry `AGENT_PRESET_SETTINGS_NAMESPACE` (imported from
+`@deepseek-ai/dsh-agent-presets`) with an 8-line JSDoc above it; this patch was
+**regenerated for that refactored baseline** — its hunk context is that JSDoc
+plus the constant line, taken verbatim from the current upstream source. When
+regenerating, keep the agent-preset namespace in the allowlist and preserve the
+JSDoc body (only the first JSDoc line gains the `(ui-onboarding, advisor,
+agent-preset)` mention alongside the `'advisor'` addition).
 
 Either way, file probes passing does not prove the running server has the
 change: after (re-)applying, **restart `dsh web`** and prove the runtime state

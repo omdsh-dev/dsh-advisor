@@ -104,4 +104,63 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     )
     expect(bundle, 'no free-global React.createElement in the bundle').not.toMatch(/React\.createElement/)
   })
+
+  it('inlines CSS Modules: style-injection wiring and hashed class-map export reach the bundle', () => {
+    // plan dsh-advisor-settings-ui-n3, task 1: the dsh-css-modules-inline
+    // plugin compiles `*.module.css` (the advisor section imports
+    // src/client/advisor-section.module.css) with lightningcss ([hash]_[local]
+    // pattern, minified) and emits a guarded `<style data-plugin>` injection
+    // stub that runs at factory execution. The loader cleans up plugin-owned
+    // tags by `style[data-plugin=<id>]` + per-module `data-plugin-css`, so
+    // the bundle MUST carry that wiring or the section renders unstyled.
+    const bundle = readFileSync(resolve(repo, 'lib/client.js'), 'utf8')
+    // F-1 regression (QC consolidated): the artifact must carry neither a raw
+    // NUL byte nor the builder's absolute machine path — esbuild's virtual
+    // CSS-module comment (`// dsh-css-modules:\0<abs path>.mjs`) leaks both and
+    // the build script strips it before writing the artifact.
+    expect(bundle, 'no raw NUL byte in the artifact (virtual-module comment stripped)').not.toContain('\u0000')
+    expect(bundle, 'no builder machine path leak in the artifact').not.toContain('/Users/')
+    // Idempotent injection: one <style> per module file, guarded by a
+    // data-plugin-css presence check. Quote-agnostic: esbuild's printer
+    // normalizes JS string quotes, so accept both.
+    expect(bundle).toMatch(/document\.createElement\(['"]style['"]\)/)
+    expect(bundle).toContain('data-plugin')
+    expect(bundle).toContain('document.head.appendChild')
+    // F-2 (QC consolidated): pin the attribution the loader cleanup keys on —
+    // the web shell removes plugin-owned tags by `style[data-plugin=<id>]`, so
+    // the stub must actually assign tag.dataset.plugin, not merely contain the
+    // literal "data-plugin". Quote/whitespace-normalized assignment form.
+    expect(bundle, 'tag.dataset.plugin attribution (loader cleanup key)').toMatch(/tag\.dataset\.plugin\s*=/)
+    // tagId wiring: dsh-advisor/<basename>.
+    expect(bundle).toContain('dsh-advisor/advisor-section.module.css')
+    // Hashed class-map export ([hash]_[local]): the section classes reach the
+    // bundle as hashed names, and the map keys preserve the local names.
+    expect(bundle).toMatch(/_section/)
+    expect(bundle).toMatch(/_(section|title|intro|field|input|selectInput)/)
+    expect(bundle).toMatch(/"section": "[A-Za-z0-9]+_section"/)
+    expect(bundle).toContain('"section"')
+    expect(bundle).toContain('"title"')
+  })
+
+  it('declares the dsh.client client-bundle contract', () => {
+    // plan dsh-advisor-settings-ui-n3, task 3 (T3-1.5): the upstream host
+    // reads the client-bundle declaration from `pkg.dsh.client` with NO
+    // `dshClient` backward-compat fallback — the legacy top-level field must
+    // stay gone or the advisor client half would not load after restart.
+    const pkg = JSON.parse(readFileSync(resolve(repo, 'package.json'), 'utf8')) as {
+      dsh?: { client?: { inject?: string[]; platform?: string } }
+      dshClient?: unknown
+    }
+    expect(pkg.dsh?.client, 'pkg.dsh.client exists').toBeTruthy()
+    expect(typeof pkg.dsh?.client, 'pkg.dsh.client is an object').toBe('object')
+    expect(pkg.dsh?.client?.platform).toBe('web')
+    expect(pkg.dsh?.client?.inject).toEqual(
+      expect.arrayContaining([
+        '@deepseek-ai/dsh-client-runtime',
+        '@deepseek-ai/dsh-client-ui-settings',
+        '@deepseek-ai/dsh-client-locale',
+      ]),
+    )
+    expect(pkg.dshClient, 'legacy top-level dshClient field is gone').toBeUndefined()
+  })
 })
