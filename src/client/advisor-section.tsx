@@ -191,6 +191,7 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
           <textarea
             id="advisor-system-prompt"
             aria-label={t('systemPrompt')}
+            placeholder={t('systemPromptPlaceholder')}
             className={styles['textarea']}
             value={draft.systemPrompt}
             disabled={busy}

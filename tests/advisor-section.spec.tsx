@@ -326,6 +326,12 @@ describe('AdvisorSection', () => {
     expect((screen.getByRole('button', { name: en.apply }) as HTMLButtonElement).disabled).toBe(false)
   })
 
+  it('shows the system-prompt placeholder telling the user empty means default', async () => {
+    await mountSection()
+    const prompt = screen.getByLabelText(en.systemPrompt) as HTMLTextAreaElement
+    expect(prompt.placeholder).toBe(en.systemPromptPlaceholder)
+  })
+
   it('resets the draft on Cancel', async () => {
     const { view, controller, injected } = await mountSection({
       advisor: advisorView({ user: { enabled: true, provider: 'deepseek-official', model: 'ds-a' } }),
