@@ -35,15 +35,15 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
     }
-  },
-  "dshClient": {
-    "inject": [
-      "@deepseek-ai/dsh-client-runtime",
-      "@deepseek-ai/dsh-client-ui-settings",
-      "@deepseek-ai/dsh-client-locale"
-    ],
-    "platform": "web"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-agent": "^0.0.1",

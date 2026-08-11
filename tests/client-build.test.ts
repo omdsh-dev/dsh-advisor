@@ -130,4 +130,26 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     expect(bundle).toContain('"section"')
     expect(bundle).toContain('"title"')
   })
+
+  it('declares the dsh.client client-bundle contract', () => {
+    // plan dsh-advisor-settings-ui-n3, task 3 (T3-1.5): the upstream host
+    // reads the client-bundle declaration from `pkg.dsh.client` with NO
+    // `dshClient` backward-compat fallback — the legacy top-level field must
+    // stay gone or the advisor client half would not load after restart.
+    const pkg = JSON.parse(readFileSync(resolve(repo, 'package.json'), 'utf8')) as {
+      dsh?: { client?: { inject?: string[]; platform?: string } }
+      dshClient?: unknown
+    }
+    expect(pkg.dsh?.client, 'pkg.dsh.client exists').toBeTruthy()
+    expect(typeof pkg.dsh?.client, 'pkg.dsh.client is an object').toBe('object')
+    expect(pkg.dsh?.client?.platform).toBe('web')
+    expect(pkg.dsh?.client?.inject).toEqual(
+      expect.arrayContaining([
+        '@deepseek-ai/dsh-client-runtime',
+        '@deepseek-ai/dsh-client-ui-settings',
+        '@deepseek-ai/dsh-client-locale',
+      ]),
+    )
+    expect(pkg.dshClient, 'legacy top-level dshClient field is gone').toBeUndefined()
+  })
 })
