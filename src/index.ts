@@ -238,9 +238,20 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     },
   })
 
+  // `session/event` is scope-filtered: the dsh scope carrier sets a
+  // `[Context.filter]` on emitted events — untagged listeners pass, but a
+  // tagged listener only receives events whose carrier key is on its own
+  // key's ancestor chain (see `packages/core/scope/src/index.ts` scopeTarget).
+  // Cordis dispatch skips the filter for global hooks
+  // (`hook.global || !filter || filter.call(...)` — `cordis/src/events.ts`
+  // dispatch), and the plugin's instances may be composed in isolated scopes
+  // (dsh-advisor appears as multiple active fibers, e.g. 3), so `{ global:
+  // true }` is required for the observer to receive every session's events
+  // regardless of scope placement. Q2=grill-me-locked fix; verified by host
+  // test (PM operator step, evidence in iteration guides).
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
     observer.handleEvent(session.id, session.events, event)
-  })
+  }, { global: true })
   // Per-session runtime lifecycle. Spec KD-5(c) pins `agent/disposed`;
   // `session/disposed` is the store-level pair (both are idempotent — a
   // runtime is disposed at most once, whichever signal lands first). `agent/created`
