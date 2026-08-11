@@ -33,17 +33,27 @@
  * appended event delivered once against the growing live log).
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from 'cordis'
-import { CallId, LlmAdapter, LlmService, MessageId } from '@deepseek-ai/dsh-llm'
+import { CallId, LlmAdapter, LlmService, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, StreamChunk, UserMessage } from '@deepseek-ai/dsh-llm'
+import type { LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent, SurfaceOp } from '@deepseek-ai/dsh-session'
 import type { CommandDefinition, CommandResult } from '@deepseek-ai/dsh-commands'
 import { CommandId } from '@deepseek-ai/dsh-commands'
 import * as advisorPlugin from '../src/index'
 import type { AdvisorConfig } from '../src/config'
+import { ADVISOR_MAX_TOKENS } from '../src/advisor-runtime'
 import { ADVISOR_SOURCE_KIND } from '../src/kinds'
+
+// n4 QC F-6: the single-reviewer guard is process-global; each test case
+// composes a fresh harness, so the flag must reset between cases (production
+// keeps the first-claim-wins behavior).
+beforeEach(() => {
+  delete (globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']
+})
+
 
 // ---------------------------------------------------------------------------
 // Stub adapter (T4 pattern: real LlmService + ctx.llm.registerAdapter)
@@ -79,6 +89,15 @@ const permanentFailure = (): { message: string; code: string } => ({
  * suffices (id/name = provider).
  */
 class StubAdapter extends LlmAdapter {
+  override resolveModel(provider: string, model: string, _signal?: undefined): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({
+      provider,
+      id: model,
+      name: model,
+      reasoning: { efforts: [{ id: ReasoningEffortId('off'), name: 'Off' }, { id: ReasoningEffortId('high'), name: 'High' }], defaultEffort: ReasoningEffortId('off') },
+    })
+  }
+
   readonly requests: GenerateOptions[] = []
 
   constructor(private readonly script: ReadonlyArray<readonly StreamChunk[]>) {
@@ -113,6 +132,8 @@ function fullConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
 interface Harness {
   ctx: Context
   adapter: StubAdapter
+  /** Dispose the advisor plugin fiber (the single-reviewer guard's release path, qc1 W-4). */
+  dispose: () => Promise<void>
 }
 
 /**
@@ -134,8 +155,8 @@ async function composeHarness(
   // registry fallback (the primary path is the agent/created map).
   ctx.provide('sessions', {} as never)
   ctx.provide('agents', { get: () => undefined } as never)
-  await ctx.plugin(advisorPlugin, fullConfig(config))
-  return { ctx, adapter }
+  const fiber = await ctx.plugin(advisorPlugin, fullConfig(config))
+  return { ctx, adapter, dispose: () => fiber.dispose() }
 }
 
 /** Fake Agent with inject/steer spies; published via `agent/created`. */
@@ -153,6 +174,20 @@ function makeFakeAgent(id = 's1'): {
 function makeSession(id = 's1'): { session: Session; log: SessionEvent[] } {
   const log: SessionEvent[] = []
   return { session: { id, events: log } as unknown as Session, log }
+}
+
+/**
+ * Feed one completed stepped round through a harness: publish the agent
+ * (KD-4 map), append user / assistant / step-start / turn-end events to the
+ * live log, and emit the turn-end that triggers the standard review path.
+ */
+function feedSteppedRound(ctx: Context, session: Session, log: SessionEvent[], agent: ReturnType<typeof makeFakeAgent>): void {
+  ctx.emit('agent/created', { agent: agent.agent })
+  log.push({ type: 'user/message', seq: 0, time: 0, data: { id: 'u0', role: 'user', content: [], source: { kind: 'user' } } } as never)
+  log.push({ type: 'assistant/message', seq: 1, time: 0, data: { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'wrote a test' }], source: { kind: 'model', provider: 'stub', model: 'stub-model' } } }, surfaceOp: 'append' } as never)
+  log.push({ type: 'step/start', seq: 2, time: 0, data: { turn: 1, step: 1 } } as never)
+  log.push({ type: 'turn/end', seq: 3, time: 0, data: { turn: 1, reason: { kind: 'completed' } } } as never)
+  ctx.emit('session/event', session, log[3] as never)
 }
 
 /** Text of the single user delta message the runtime sends the model. */
@@ -250,6 +285,23 @@ const turnEnd = (turn: number, reason = 'completed'): EventSpec => ({
   type: 'turn/end',
   data: { turn, reason: { kind: reason } },
 })
+
+/** A human input committed to the inbox (`agent/inbox/spliced` — log-only, never on the surface). */
+function inboxSpliced(value: string): EventSpec {
+  return {
+    type: 'agent/inbox/spliced',
+    data: {
+      target: 'next-turn',
+      start: 0,
+      inserted: [{
+        id: MessageId(`inbox-${value}`),
+        role: 'user',
+        content: [text(value)],
+        source: { kind: 'user' },
+      }],
+    },
+  }
+}
 
 const compactStart = (): EventSpec => ({ type: 'compact/start', data: { compactionId: 'c1', turn: null } })
 const compactSummary = (): EventSpec => ({
@@ -363,7 +415,7 @@ describe('integration — full advisor loop (spec §7)', () => {
     const options = adapter.requests[0]!
     expect(options.provider).toBe('stub')
     expect(options.model).toBe('stub-model')
-    expect(options.maxTokens).toBe(256)
+    expect(options.maxTokens).toBe(ADVISOR_MAX_TOKENS)
     expect('purpose' in options).toBe(false) // KD-5: purpose left unset
     const delta = deltaTextOf(options)
     expect(delta).toContain('### Session update')
@@ -417,6 +469,242 @@ describe('integration — full advisor loop (spec §7)', () => {
     expect(adapter.requests).toEqual([])
   })
 })
+
+// ---------------------------------------------------------------------------
+// 5. Agentic reply-complete gate in the composed harness (KD-N4-5)
+//
+// A harness/agentic session emits NO turn/end: human input arrives as
+// `agent/inbox/spliced` and is later committed to the surface as a
+// `user/message` append, and the agent replies with `assistant/message` /
+// `tool/result` inside one long turn. The new observer gate fires on human-
+// input arrival (when an unreviewed assistant increment exists), so the full
+// user → reply → delta → advisor call → guard → delivery chain must run
+// WITHOUT any turn/end — including the immuneTurns fence decrementing across
+// rounds (otherwise a concern steer would permanently downgrade later notes
+// to inject).
+// ---------------------------------------------------------------------------
+
+describe('integration — agentic reply-complete gate drives the loop without turn/end (KD-N4-5)', () => {
+  it('harness stream → advisor calls per round, nit→inject / concern→steer, immuneTurns fence decays', async () => {
+    const { ctx, adapter } = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model', immuneTurns: 3 },
+      [
+        [...textReply('{"note":"concern one","severity":"concern"}')],
+        [...textReply('{"note":"concern two","severity":"concern"}')],
+        [...textReply('{"note":"concern three","severity":"concern"}')],
+        [...textReply('{"note":"concern four","severity":"concern"}')],
+        [...textReply('{"note":"concern five","severity":"concern"}')],
+      ],
+    )
+    const { agent, steer, inject } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+
+    // Five completed agentic rounds, each input entering the inbox and then
+    // committing as a user/message (the realistic dsh agentic flow). No
+    // turn/end anywhere. Each round is fed and awaited SEPARATELY, mirroring
+    // production timing: the previous review's delivery (and fence arming)
+    // settles before the next human input decrements the fence.
+    feed(ctx, session, log, [
+      inboxSpliced('prompt one'), userMessage('prompt one'),
+      assistantMessage('reply one'),
+    ])
+    // Round 2 input → the first review (round 1 completed): concern → STEER, fence arms (3).
+    feed(ctx, session, log, [inboxSpliced('prompt two'), userMessage('prompt two')])
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
+    feed(ctx, session, log, [assistantMessage('reply two')])
+
+    // Round 3 input → review 2: fence 3→2, still armed → INJECT.
+    feed(ctx, session, log, [inboxSpliced('prompt three'), userMessage('prompt three')])
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
+    feed(ctx, session, log, [assistantMessage('reply three')])
+
+    // Round 4 input → review 3: fence 2→1 → INJECT.
+    feed(ctx, session, log, [inboxSpliced('prompt four'), userMessage('prompt four')])
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(2))
+    feed(ctx, session, log, [assistantMessage('reply four')])
+
+    // Round 5 input → review 4: the 3rd completion exhausts the fence and the
+    // note after it steers — which RE-ARMS the fence (delivery.test.ts
+    // semantics: every real steer delivery arms it).
+    feed(ctx, session, log, [inboxSpliced('prompt five'), userMessage('prompt five')])
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(2))
+    feed(ctx, session, log, [assistantMessage('reply five')])
+
+    // Round 6 input → review 5: the re-armed fence (3) decrements to 2 →
+    // INJECT again. The key point: the fence DECAYS across rounds instead of
+    // staying permanently armed after the first steer.
+    feed(ctx, session, log, [inboxSpliced('prompt six'), userMessage('prompt six')])
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(3))
+    expect(steer).toHaveBeenCalledTimes(2)
+
+    // One advisor model call per completed round.
+    expect(adapter.requests).toHaveLength(5)
+
+    // Round 1's delta carries the completed prior round and NOT the trigger.
+    const first = deltaTextOf(adapter.requests[0]!)
+    expect(first).toContain('### Session update')
+    expect(first).toContain('**user**: prompt one')
+    expect(first).toContain('**agent**: reply one')
+    expect(first).not.toContain('prompt two')
+
+    // Each later delta is the increment since the previous review (cursor dedupe).
+    const second = deltaTextOf(adapter.requests[1]!)
+    expect(second).toContain('**user**: prompt two')
+    expect(second).toContain('**agent**: reply two')
+    expect(second).not.toContain('prompt one')
+    const third = deltaTextOf(adapter.requests[2]!)
+    expect(third).toContain('**user**: prompt three')
+    expect(third).toContain('**agent**: reply three')
+    const fifth = deltaTextOf(adapter.requests[4]!)
+    expect(fifth).toContain('**user**: prompt five')
+    expect(fifth).toContain('**agent**: reply five')
+    expect(fifth).not.toContain('prompt six')
+
+    // immuneTurns fence (3): the first concern steers and arms the fence; the
+    // next two rounds decrement it (inject downgrade); the 3rd completion
+    // exhausts it and the note after it steers again (re-arming the fence) —
+    // the fence decays across rounds instead of staying armed forever.
+    const steerMessages = steer.mock.calls.map((call) => (call[0] as UserMessage).content)
+    expect(steerMessages[0]).toEqual([{ type: 'text', text: '[advisor:concern] concern one' }])
+    expect(steerMessages[1]).toEqual([{ type: 'text', text: '[advisor:concern] concern four' }])
+    const injectMessages = inject.mock.calls.map((call) => (call[0] as UserMessage).content)
+    expect(injectMessages).toEqual([
+      [{ type: 'text', text: '[advisor:concern] concern two' }],
+      [{ type: 'text', text: '[advisor:concern] concern three' }],
+      [{ type: 'text', text: '[advisor:concern] concern five' }],
+    ])
+    // Every delivered note carries the advisor source kind.
+    for (const call of [...steer.mock.calls, ...inject.mock.calls]) {
+      expect((call[0] as UserMessage).source.kind).toBe(ADVISOR_SOURCE_KIND)
+    }
+  })
+
+  it('routes a nit note to agent.inject in a harness stream', async () => {
+    const { ctx, adapter } = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [[...textReply('{"note":"add a unit test","severity":"nit"}')]],
+    )
+    const { agent, steer, inject } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+
+    feed(ctx, session, log, [
+      userMessage('prompt one'),
+      assistantMessage('reply one'),
+      userMessage('prompt two'),   // review 1 → nit → inject
+    ])
+
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
+    expect(steer).not.toHaveBeenCalled()
+    const message = inject.mock.calls[0]![0] as UserMessage
+    expect(message.source.kind).toBe(ADVISOR_SOURCE_KIND)
+    expect(message.content).toEqual([{ type: 'text', text: '[advisor:nit] add a unit test' }])
+    expect(adapter.requests).toHaveLength(1)
+  })
+
+  it('mode latch: after a reviewable turn/end the new gate stays dormant', async () => {
+    const { ctx, adapter } = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [[...textReply('{"note":"extract the helper","severity":"concern"}')]],
+    )
+    const { agent, steer } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+
+    // A standard turn-driven session completes one turn → reviewed via turn/end.
+    feed(ctx, session, log, simpleTurn(1, 'do the thing', 'done'))
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
+    expect(adapter.requests).toHaveLength(1)
+
+    // Later harness-style input (no turn/end) with unreviewed assistant
+    // increments must NOT fire the new gate for this latched session.
+    feed(ctx, session, log, [
+      userMessage('second'),
+      assistantMessage('reply two'),
+      userMessage('third'),
+    ])
+    await flush()
+    expect(adapter.requests).toHaveLength(1)
+    expect(steer).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 6. C-1 self-trigger fix in the composed harness: the advisor's OWN delivery
+// re-emits `agent/inbox/spliced` (the dsh host's inject/steer → inbox.splice
+// → session.append path), and that splice must NOT re-trigger the review gate.
+// Exactly one review (and one model call) per completed round.
+// ---------------------------------------------------------------------------
+
+describe('integration — advisor self-delivery never re-triggers the review gate (C-1)', () => {
+  it('a re-emitted advisor inbox splice during delivery produces exactly one review per round', async () => {
+    const { ctx, adapter } = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [
+        [...textReply('{"note":"nit one","severity":"nit"}')],
+        [...textReply('{"note":"nit two","severity":"nit"}')],
+      ],
+    )
+    const { session, log } = makeSession('s1')
+    const inject = vi.fn()
+    const steer = vi.fn()
+    // The fake agent mirrors the dsh host: inject/steer deliver through the
+    // inbox, which re-emits `agent/inbox/spliced` carrying the advisor's own
+    // message (source.kind 'advisor' — NOT a user input). Without the C-1
+    // payload discrimination this splice would self-trigger a second review.
+    const emitAdvisorSplice = (): void => {
+      const event = {
+        type: 'agent/inbox/spliced',
+        seq: log.length,
+        time: 1_000 + log.length,
+        data: {
+          target: 'next-turn',
+          start: 0,
+          inserted: [{
+            id: MessageId(`advisor-${log.length}`),
+            role: 'user',
+            content: [text('[advisor:nit] delivered note')],
+            source: { kind: ADVISOR_SOURCE_KIND },
+          }],
+        },
+      } as unknown as SessionEvent
+      log.push(event)
+      ctx.emit('session/event', session, event)
+    }
+    inject.mockImplementation(emitAdvisorSplice)
+    steer.mockImplementation(emitAdvisorSplice)
+    const agent = { id: 's1', inject, steer } as unknown as Agent
+    ctx.emit('agent/created', { agent })
+
+    // Round 1 completes.
+    feed(ctx, session, log, [
+      inboxSpliced('prompt one'), userMessage('prompt one'),
+      assistantMessage('reply one'),
+    ])
+    // Round 2 input → review 1 → the delivery re-emits the advisor splice,
+    // which must NOT start a second review of the still-current round.
+    feed(ctx, session, log, [inboxSpliced('prompt two'), userMessage('prompt two')])
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
+    // Let any would-be self-trigger drain settle: exactly one model call.
+    await flush()
+    expect(adapter.requests).toHaveLength(1)
+    const first = deltaTextOf(adapter.requests[0]!)
+    expect(first).toContain('**agent**: reply one')
+    expect(first).not.toContain('prompt two')
+
+    // Round 2 reply + round 3 input → review 2: still one review per round.
+    feed(ctx, session, log, [assistantMessage('reply two')])
+    feed(ctx, session, log, [inboxSpliced('prompt three'), userMessage('prompt three')])
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(2))
+    expect(adapter.requests).toHaveLength(2)
+    const second = deltaTextOf(adapter.requests[1]!)
+    expect(second).toContain('**user**: prompt two')
+    expect(second).toContain('**agent**: reply two')
+    expect(second).not.toContain('prompt three')
+  })
+})
+
 
 // ---------------------------------------------------------------------------
 // 2. Conditional command activation (T7 ⚠️)
@@ -671,5 +959,148 @@ describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix w
       role: 'user',
       source: { kind: ADVISOR_SOURCE_KIND },
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 7. Root-llm resolution on an isolated child scope (qc1 W-3 / qc2 S-4)
+//
+// The NO_ADAPTER root cause: a plugin fiber composed in an isolated scope
+// resolves a LOCAL `llm` service that lacks the provider adapters (they live
+// on the application ROOT's LlmService). `ensureRuntime` resolves the llm
+// from `ctx.root.get('llm')` first, so the advisor call must reach the root
+// adapter while the child's own llm is never touched. This is the automated
+// regression test for the host-verified fix — the previously missing
+// isolate-scope coverage.
+// ---------------------------------------------------------------------------
+
+describe('integration — root-llm resolution from an isolated child scope (qc1 W-3)', () => {
+  it('a plugin on a child whose local llm has no adapters still reaches the ROOT adapter', async () => {
+    const root = new Context()
+    await root.plugin(LlmService)
+    const adapter = new StubAdapter([[...textReply('{"note":"root adapter reached","severity":"concern"}')]])
+    root.llm.registerAdapter(['stub'], adapter)
+
+    // Child scope with an ISOLATED llm: the child's own llm service is a bare
+    // stub that throws if ever called (no adapter registrations — the exact
+    // deployment scenario behind NO_ADAPTER). Only the root LlmService carries
+    // the registered adapter, and `ensureRuntime` must reach it.
+    const child = root.isolate('llm')
+    child.provide('llm', {
+      stream: (): AsyncIterable<StreamChunk> => {
+        throw new Error('the child-local llm must never be called — the root llm resolves the adapter')
+      },
+    } as never)
+    child.provide('sessions', {} as never)
+    child.provide('agents', { get: () => undefined } as never)
+    await child.plugin(advisorPlugin, fullConfig({ enabled: true, provider: 'stub', model: 'stub-model' }))
+
+    const { agent, steer } = makeFakeAgent('s1')
+    child.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+    feed(child, session, log, simpleTurn(1, 'do the thing', 'done'))
+
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
+    // The ROOT adapter received the call — the child-local llm (which would
+    // throw) was never used.
+    expect(adapter.requests).toHaveLength(1)
+    expect(adapter.requests[0]!.provider).toBe('stub')
+    expect(adapter.requests[0]!.model).toBe('stub-model')
+    const message = steer.mock.calls[0]![0] as UserMessage
+    expect(message.source.kind).toBe(ADVISOR_SOURCE_KIND)
+    expect(message.content).toEqual([{ type: 'text', text: '[advisor:concern] root adapter reached' }])
+  })
+})
+
+
+// ---------------------------------------------------------------------------
+// n4 QC F-6 — single-reviewer guard
+// ---------------------------------------------------------------------------
+
+describe('single-reviewer guard (n4 QC F-6)', () => {
+  it('a second apply on the same process does not wire a second reviewer (one model call per round)', async () => {
+    const first = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [textReply('{"note":"first round"}')],
+    )
+    const { session, log } = makeSession()
+    const fake = makeFakeAgent()
+    first.ctx.emit('agent/created', { agent: fake.agent })
+    first.ctx.emit('session/event', session, {
+      type: 'user/message', seq: 0, time: 0, data: { id: 'u0', role: 'user', content: [], source: { kind: 'user' } },
+    } as never)
+    log.push({ type: 'user/message', seq: 0, time: 0, data: { id: 'u0', role: 'user', content: [], source: { kind: 'user' } } } as never)
+    log.push({ type: 'assistant/message', seq: 1, time: 0, data: { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'wrote a test' }], source: { kind: 'model', provider: 'stub', model: 'stub-model' } } }, surfaceOp: 'append' } as never)
+    log.push({ type: 'step/start', seq: 2, time: 0, data: { turn: 1, step: 1 } } as never)
+    // Complete the round: turn/end triggers the standard review path.
+    log.push({ type: 'turn/end', seq: 3, time: 0, data: { turn: 1, reason: { kind: 'completed' } } } as never)
+    first.ctx.emit('session/event', session, log[3] as never)
+
+    // Now compose a SECOND instance of the same plugin module in the same process.
+    const second = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [textReply('{"note":"second round"}')],
+    )
+    // The guard is process-global: the second apply must not have claimed the
+    // reviewer role. Feed the same round shape through the second harness.
+    const session2 = makeSession()
+    const fake2 = makeFakeAgent('s2')
+    second.ctx.emit('agent/created', { agent: fake2.agent })
+    session2.log.push({ type: 'user/message', seq: 0, time: 0, data: { id: 'u0', role: 'user', content: [], source: { kind: 'user' } } } as never)
+    session2.log.push({ type: 'assistant/message', seq: 1, time: 0, data: { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'wrote a test' }], source: { kind: 'model', provider: 'stub', model: 'stub-model' } } }, surfaceOp: 'append' } as never)
+    session2.log.push({ type: 'step/start', seq: 2, time: 0, data: { turn: 1, step: 1 } } as never)
+    session2.log.push({ type: 'turn/end', seq: 3, time: 0, data: { turn: 1, reason: { kind: 'completed' } } } as never)
+    second.ctx.emit('session/event', session2.session, session2.log[3] as never)
+
+    // The second harness has no reviewer: its adapter must never be called and
+    // its fake agent must never receive an injection.
+    expect(second.adapter.requests).toHaveLength(0)
+    expect(fake2.inject).not.toHaveBeenCalled()
+    expect(fake2.steer).not.toHaveBeenCalled()
+    // The first harness keeps working (single reviewer).
+    expect(first.adapter.requests.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('releases the reviewer claim when the reviewer fiber is disposed — a later instance wires (qc1 W-4)', async () => {
+    const first = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [textReply('{"note":"first round"}')],
+    )
+    const { session, log } = makeSession()
+    const fake = makeFakeAgent()
+    feedSteppedRound(first.ctx, session, log, fake)
+    await vi.waitFor(() => expect(first.adapter.requests.length).toBeGreaterThanOrEqual(1))
+
+    // Dispose the reviewer fiber: the guard's disposer effect must clear the
+    // claim (no beforeEach reset runs inside this test).
+    await first.dispose()
+    expect((globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']).toBeUndefined()
+
+    // A later instance in the same process can now claim the role and wire.
+    const second = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [textReply('{"note":"second round"}')],
+    )
+    expect((globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']).toBe(true)
+    const session2 = makeSession()
+    const fake2 = makeFakeAgent()
+    feedSteppedRound(second.ctx, session2.session, session2.log, fake2)
+    await vi.waitFor(() => expect(second.adapter.requests.length).toBeGreaterThanOrEqual(1))
+    // The note (severity defaults to nit) routes to inject — the second
+    // instance is a fully wired reviewer, not an inert non-reviewer.
+    expect(fake2.inject).toHaveBeenCalled()
+  })
+
+  it('a rejected config never leaves the reviewer claim taken (qc1 W-4)', () => {
+    // Call apply DIRECTLY (bypassing the Loader's strict schema validation)
+    // with a config `resolveAdvisorConfig` rejects at construction — the
+    // delivery latch's `resolved()` throws. The claim is taken only AFTER
+    // that throwing read, so the flag must stay free for a later valid row.
+    const ctx = new Context()
+    ctx.provide('sessions', {} as never)
+    ctx.provide('agents', { get: () => undefined } as never)
+    expect(() => advisorPlugin.apply(ctx, { enabled: true, bogus: 1 } as never))
+      .toThrow(/unknown config key "bogus"/)
+    expect((globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']).toBeUndefined()
   })
 })

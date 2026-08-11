@@ -206,6 +206,35 @@ describe('DeltaRenderer — cursor advance on append', () => {
     const events = buildEvents([...simpleTurn(1, 'hi', 'hello'), turnStart(2), turnEnd(2)])
     expect(renderer.update(events)).toBeUndefined()
   })
+
+  it('update(events, true) excludes the last event from the delta without copying (qc3 F1)', () => {
+    const renderer = new DeltaRenderer()
+    const turn1 = buildEvents(simpleTurn(1, 'fix the bug', 'I will fix it.'))
+    renderer.update(turn1)
+    // A new reply since the cursor, then the arriving human input as the
+    // trailing event: skipLast treats the trigger as excluded — the delta is
+    // the completed prior round, never the arriving input.
+    const events = buildEvents([
+      ...simpleTurn(1, 'fix the bug', 'I will fix it.'),
+      assistantMessage('round two reply'),
+      userMessage('next prompt'),
+    ])
+    const delta = renderer.update(events, true)
+    expect(delta).toBeDefined()
+    expect(delta!.markdown).toContain('**agent**: round two reply')
+    expect(delta!.markdown).not.toContain('next prompt')
+    // The skipped trigger is consumed by the cursor: the next update is
+    // incremental (only the content after the trigger).
+    const more = buildEvents([
+      ...simpleTurn(1, 'fix the bug', 'I will fix it.'),
+      assistantMessage('round two reply'),
+      userMessage('next prompt'),
+      assistantMessage('round three reply'),
+    ])
+    const second = renderer.update(more)
+    expect(second!.markdown).toContain('**agent**: round three reply')
+    expect(second!.markdown).not.toContain('round two reply')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -427,6 +456,402 @@ describe('DeltaRenderer — seedTo (KD-5)', () => {
     const renderer = new DeltaRenderer()
     expect(() => renderer.seedTo(-1)).toThrow()
     expect(() => renderer.seedTo(1.5)).toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SessionTranscriptObserver — the "agent reply complete" gate (KD-N4-5)
+//
+// Harness-shaped streams: an agentic session (mstar workflow) never emits
+// turn/end — user input arrives as `agent/inbox/spliced` (and may or may not
+// later commit as a `user/message` append), and the agent replies with
+// `assistant/message` / `tool/result` events inside one long turn. The new
+// gate fires on human-input arrival: if an unreviewed non-advisor assistant
+// increment exists since the renderer cursor, the completed prior round is
+// rendered (the trigger itself excluded) and `onSteppedTurnEnd` fires once
+// per round. Sessions that ever produce a `turn/end` (reviewable or not) are
+// latched as standard and the new gate sleeps (spec §4 skip-aborted).
+// ---------------------------------------------------------------------------
+
+/** A human input committed to the inbox (`agent/inbox/spliced` — log-only, never on the surface). */
+function inboxSpliced(value: string): EventSpec {
+  return {
+    type: 'agent/inbox/spliced',
+    data: {
+      target: 'next-turn',
+      start: 0,
+      inserted: [{
+        id: MessageId(`inbox-${value}`),
+        role: 'user',
+        content: [text(value)],
+        source: { kind: 'user' },
+      }],
+    },
+  }
+}
+
+/** An `agent/inbox/spliced` whose single inserted message carries an arbitrary source kind (C-1). */
+function inboxSplicedWith(value: string, source: { kind: string; [key: string]: unknown }): EventSpec {
+  return {
+    type: 'agent/inbox/spliced',
+    data: {
+      target: 'next-turn',
+      start: 0,
+      inserted: [{
+        id: MessageId(`inbox-${value}`),
+        role: 'user',
+        content: [text(value)],
+        source,
+      }],
+    },
+  }
+}
+
+/** An `agent/inbox/spliced` with no inserted messages (claim/clear — C-1). */
+function inboxClear(): EventSpec {
+  return {
+    type: 'agent/inbox/spliced',
+    data: { target: 'next-turn', start: 0, inserted: [] },
+  }
+}
+
+/** A no-turn/end harness round: one human input + the reply that completes it. */
+function agenticRound(userText: string, agentText: string): EventSpec[] {
+  return [userMessage(userText), assistantMessage(agentText)]
+}
+
+describe('SessionTranscriptObserver — agentic reply-complete gate (KD-N4-5)', () => {
+  it('fires exactly one delta per human-input arrival, delta = completed prior round, trigger excluded', () => {
+    const deltas: Array<{ sessionId: string; markdown: string }> = []
+    const stepped: string[] = []
+    const observer = new SessionTranscriptObserver({
+      maxDeltaMessages: 60,
+      onDelta: (sessionId, delta) => deltas.push({ sessionId, markdown: delta.markdown }),
+      onSteppedTurnEnd: (sessionId) => stepped.push(sessionId),
+    })
+    feed(observer, 's1', [
+      userMessage('prompt one'),                 // first human input — no unreviewed assistant → no delta
+      assistantMessage('reply one'),             // round 1 reply
+      toolResultMessage('3 passed'),             // tool result — not a human input → no delta
+      assistantMessage('reply two'),             // round 1 multi-step reply
+      userMessage('prompt two'),                 // human input 2 → delta = round 1
+      assistantMessage('reply three'),           // round 2 reply
+      userMessage('prompt three'),               // human input 3 → delta = round 2
+    ])
+    expect(deltas).toHaveLength(2)
+    expect(stepped).toHaveLength(2)
+    expect(deltas[0]!.sessionId).toBe('s1')
+    // delta 1 = the completed prior round (prompt one + the full reply), NOT the trigger.
+    expect(deltas[0]!.markdown).toContain('**user**: prompt one')
+    expect(deltas[0]!.markdown).toContain('**agent**: reply one')
+    expect(deltas[0]!.markdown).toContain('**user**: [tool result] 3 passed')
+    expect(deltas[0]!.markdown).toContain('**agent**: reply two')
+    expect(deltas[0]!.markdown).not.toContain('prompt two')
+    // delta 2 = only round 2's increment (cursor dedupe — no re-render of round 1).
+    expect(deltas[1]!.markdown).toContain('**agent**: reply three')
+    expect(deltas[1]!.markdown).not.toContain('reply one')
+    expect(deltas[1]!.markdown).not.toContain('prompt three')
+  })
+
+  it('the first user input neither triggers nor advances the cursor', () => {
+    const deltas: string[] = []
+    const observer = new SessionTranscriptObserver({
+      maxDeltaMessages: 60,
+      onDelta: (_sessionId, delta) => deltas.push(delta.markdown),
+    })
+    feed(observer, 's1', [userMessage('first prompt')])
+    expect(deltas).toHaveLength(0)
+    // The cursor must still point at the start: the completed round's delta
+    // carries the user prompt when the second input arrives.
+    feed(observer, 's1', [...agenticRound('first prompt', 'first reply')])
+    feed(observer, 's1', [...agenticRound('first prompt', 'first reply'), userMessage('second prompt')])
+    expect(deltas).toHaveLength(1)
+    expect(deltas[0]).toContain('**user**: first prompt')
+    expect(deltas[0]).toContain('**agent**: first reply')
+    expect(deltas[0]).not.toContain('second prompt')
+  })
+
+  it('a tool/result event never triggers, even with an unreviewed assistant increment', () => {
+    const deltas: string[] = []
+    const stepped: string[] = []
+    const observer = new SessionTranscriptObserver({
+      maxDeltaMessages: 60,
+      onDelta: (_sessionId, delta) => deltas.push(delta.markdown),
+      onSteppedTurnEnd: (sessionId) => stepped.push(sessionId),
+    })
+    feed(observer, 's1', [
+      userMessage('prompt one'),
+      assistantMessage('reply one'),
+      toolResultMessage('3 passed'),   // unreviewed assistant exists — but tool results are not human input
+      toolResultMessage('2 failed'),   // nor is a second one
+      userMessage('prompt two'),       // only a real human input fires
+    ])
+    expect(deltas).toHaveLength(1)
+    expect(stepped).toHaveLength(1)
+    expect(deltas[0]).toContain('**user**: prompt one')
+    expect(deltas[0]).toContain('**agent**: reply one')
+  })
+
+  it('covers human input that arrives only as agent/inbox/spliced (never re-emitted as user/message)', () => {
+    const deltas: string[] = []
+    const stepped: string[] = []
+    const observer = new SessionTranscriptObserver({
+      maxDeltaMessages: 60,
+      onDelta: (_sessionId, delta) => deltas.push(delta.markdown),
+      onSteppedTurnEnd: (_sessionId) => stepped.push('x'),
+    })
+    feed(observer, 's1', [
+      inboxSpliced('prompt one'),      // first input — no assistant increment → no delta
+      assistantMessage('reply one'),   // round 1 reply
+      inboxSpliced('prompt two'),      // input 2 → delta = round 1 (assistant increment)
+      assistantMessage('reply two'),   // round 2 reply
+      inboxSpliced('prompt three'),    // input 3 → delta = round 2
+    ])
+    expect(deltas).toHaveLength(2)
+    expect(stepped).toHaveLength(2)
+    expect(deltas[0]).toContain('**agent**: reply one')
+    expect(deltas[0]).not.toContain('prompt two')   // the arriving input never enters its own delta
+    expect(deltas[1]).toContain('**agent**: reply two')
+    expect(deltas[1]).not.toContain('prompt three')
+  })
+
+  it('dedupes the inbox-spliced trigger against the later user/message commit of the same input', () => {
+    const deltas: string[] = []
+    const stepped: string[] = []
+    const observer = new SessionTranscriptObserver({
+      maxDeltaMessages: 60,
+      onDelta: (_sessionId, delta) => deltas.push(delta.markdown),
+      onSteppedTurnEnd: (_sessionId) => stepped.push('x'),
+    })
+    // Realistic dsh agentic flow: the input enters the inbox (agent/inbox/spliced)
+    // and the loop later commits it to the surface (user/message append). The
+    // splice fires the review; the commit must NOT re-trigger (cursor dedupe).
+    feed(observer, 's1', [
+      inboxSpliced('prompt one'), userMessage('prompt one'),
+      assistantMessage('reply one'),
+      inboxSpliced('prompt two'),
+      userMessage('prompt two'),
+      assistantMessage('reply two'),
+      inboxSpliced('prompt three'),
+      userMessage('prompt three'),
+    ])
+    expect(deltas).toHaveLength(2)
+    expect(stepped).toHaveLength(2)
+    expect(deltas[0]).toContain('**user**: prompt one')
+    expect(deltas[0]).toContain('**agent**: reply one')
+    expect(deltas[0]).not.toContain('prompt two')
+    expect(deltas[1]).toContain('**user**: prompt two')
+    expect(deltas[1]).toContain('**agent**: reply two')
+    expect(deltas[1]).not.toContain('prompt three')
+  })
+
+  it('a compact summary replace with an unreviewed assistant replays the full post-rewrite surface', () => {
+    const deltas: string[] = []
+    const stepped: string[] = []
+    const observer = new SessionTranscriptObserver({
+      maxDeltaMessages: 60,
+      onDelta: (_sessionId, delta) => deltas.push(delta.markdown),
+      onSteppedTurnEnd: (_sessionId) => stepped.push('x'),
+    })
+    // The compaction lands while round 2's reply is unreviewed. The summary
+    // user/message is a rewrite-type human input: the gate passes the FULL log
+    // (trigger included) so `update()` detects the rewrite and replays the
+    // post-rewrite surface — the summary replaces the shadowed round 1.
+    feed(observer, 's1', [
+      userMessage('prompt one'), assistantMessage('reply one'),   // round 1
+      userMessage('prompt two'),                                  // input 2 → delta 1 (round 1)
+      assistantMessage('reply two'),                              // round 2 reply (unreviewed)
+      compactStart(),
+      compactSummary(),
+      userMessage('Summary of earlier work.', { kind: 'user' }, { op: 'replace', start: 0, end: 3 }, [0, 1, 2, 3]),
+      compactEnd(),
+      userMessage('prompt three'),                                // no unreviewed assistant → no delta
+      assistantMessage('reply three'),                            // round 3 reply
+      userMessage('prompt four'),                                 // input 4 → delta 3 (round 3)
+    ])
+    // The replace fired exactly one delta; compactEnd and the input 3 commit
+    // produced none (dedupe). Note: the round-3 delta re-renders the summary
+    // too — `compact/end` is itself a rewrite event, so the renderer's
+    // pre-existing replay semantics (any unconsumed compact/* → full replay)
+    // apply; that is renderer behavior, not a second gate review.
+    expect(deltas).toHaveLength(3)
+    expect(stepped).toHaveLength(3)
+    expect(deltas[0]).toContain('**user**: prompt one')
+    expect(deltas[0]).toContain('**agent**: reply one')
+    expect(deltas[0]).not.toContain('prompt two')
+    // The rewrite-type trigger passed the full log → the post-rewrite surface
+    // (summary only — the shadowed round is gone).
+    expect(deltas[1]).toContain('Summary of earlier work.')
+    expect(deltas[1]).not.toContain('reply one')
+    expect(deltas[1]).not.toContain('reply two')
+    expect(deltas[1]).not.toContain('prompt three')
+    // Round 3 is still reviewed after the compaction.
+    expect(deltas[2]).toContain('**user**: prompt three')
+    expect(deltas[2]).toContain('**agent**: reply three')
+    expect(deltas[2]).not.toContain('prompt four')
+  })
+
+  it('a compact sequence with nothing unreviewed replays exactly once at the next round', () => {
+    const deltas: string[] = []
+    const stepped: string[] = []
+    const observer = new SessionTranscriptObserver({
+      maxDeltaMessages: 60,
+      onDelta: (_sessionId, delta) => deltas.push(delta.markdown),
+      onSteppedTurnEnd: (_sessionId) => stepped.push('x'),
+    })
+    // The compaction lands after round 1 was already reviewed: the summary
+    // replace passes the read-only predicate (no unreviewed assistant) and the
+    // cursor stays put. The ONE replay fires at the next human input, which
+    // consumes the whole compact bracket (start/summary/replace/end) — the
+    // summary is reviewed exactly once and later rounds stay incremental.
+    feed(observer, 's1', [
+      userMessage('prompt one'), assistantMessage('reply one'),   // round 1
+      userMessage('prompt two'),                                  // input 2 → delta 1 (round 1)
+      compactStart(),
+      compactSummary(),
+      userMessage('Summary of earlier work.', { kind: 'user' }, { op: 'replace', start: 0, end: 1 }, [0, 1]),
+      compactEnd(),
+      assistantMessage('reply two'),                              // round 2 reply
+      userMessage('prompt three'),                                // input 3 → the ONE replay (delta 2)
+      assistantMessage('reply three'),                            // round 3 reply
+      userMessage('prompt four'),                                 // input 4 → delta 3, incremental
+    ])
+    expect(deltas).toHaveLength(3)
+    expect(stepped).toHaveLength(3)
+    expect(deltas[0]).toContain('**user**: prompt one')
+    expect(deltas[0]).toContain('**agent**: reply one')
+    // One full replay: the surviving pre-compact message, the summary, and the
+    // round-2 reply — with the shadowed round 1 gone.
+    expect(deltas[1]).toContain('**user**: prompt two')
+    expect(deltas[1]).toContain('Summary of earlier work.')
+    expect(deltas[1]).toContain('**agent**: reply two')
+    expect(deltas[1]).not.toContain('reply one')
+    // The next round renders incrementally — the summary is NOT re-reviewed.
+    expect(deltas[2]).toContain('**agent**: reply three')
+    expect(deltas[2]).not.toContain('Summary of earlier work.')
+    expect(deltas[2]).not.toContain('prompt four')
+  })
+
+  it('mode latch: a session that produced a reviewable turn/end sleeps the new gate', () => {
+    const deltas: string[] = []
+    const stepped: string[] = []
+    const observer = new SessionTranscriptObserver({
+      maxDeltaMessages: 60,
+      onDelta: (_sessionId, delta) => deltas.push(delta.markdown),
+      onSteppedTurnEnd: (_sessionId) => stepped.push('x'),
+    })
+    feed(observer, 's1', [
+      ...simpleTurn(1, 'first', 'reply one'),   // reviewable turn/end → the standard delta + latch
+      userMessage('second'),                    // human input — the new gate is DORMANT
+      assistantMessage('reply two'),            // unreviewed assistant increment — still no new-gate review
+      userMessage('third'),
+    ])
+    expect(deltas).toHaveLength(1)   // only the turn/end path rendered
+    expect(stepped).toHaveLength(1)  // only the turn/end counted a completed round
+  })
+
+  it('mode latch: a non-reviewable turn/end (aborted) also latches — spec §4 skip-aborted preserved', () => {
+    const deltas: string[] = []
+    const stepped: string[] = []
+    const observer = new SessionTranscriptObserver({
+      maxDeltaMessages: 60,
+      onDelta: (_sessionId, delta) => deltas.push(delta.markdown),
+      onSteppedTurnEnd: (_sessionId) => stepped.push('x'),
+    })
+    // The session's first turn is cut short (aborted → not reviewable, no delta).
+    // Its unreviewed assistant increment must NOT be supplementarily reviewed by
+    // the new gate when the next human input arrives (the session emits turn/end
+    // events, so it is a standard session; the new gate sleeps from the first
+    // turn/end on).
+    feed(observer, 's1', [
+      turnStart(1), userMessage('first'), stepStart(1, 1),
+      assistantMessage('partial reply'), stepEnd(1, 1), turnEnd(1, 'aborted'),
+      userMessage('second'),
+    ])
+    expect(deltas).toHaveLength(0)
+    expect(stepped).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SessionTranscriptObserver — inbox-spliced payload discrimination (C-1)
+//
+// `agent/inbox/spliced` fires on EVERY inbox mutation, including the advisor's
+// own inject/steer deliveries (source.kind 'advisor'), workspace-context sync
+// ('workspace-instructions'), tool-result splicing ('tool'), and claim/clear
+// (empty `inserted`). Only an inserted message with `source.kind === 'user'`
+// is a human input — anything else must not self-trigger the review gate.
+// ---------------------------------------------------------------------------
+
+describe('SessionTranscriptObserver — inbox-spliced payload discrimination (C-1 self-trigger fix)', () => {
+  const observe = (): { deltas: string[]; stepped: string[]; observer: SessionTranscriptObserver } => {
+    const deltas: string[] = []
+    const stepped: string[] = []
+    const observer = new SessionTranscriptObserver({
+      maxDeltaMessages: 60,
+      onDelta: (_sessionId, delta) => deltas.push(delta.markdown),
+      onSteppedTurnEnd: (_sessionId) => stepped.push('x'),
+    })
+    return { deltas, stepped, observer }
+  }
+  /** One completed agentic round with an unreviewed assistant increment in place. */
+  const round = (): EventSpec[] => [userMessage('prompt one'), assistantMessage('reply one')]
+
+  it('the advisor\'s own note delivery (inserted source.kind advisor) never triggers', () => {
+    const { deltas, stepped, observer } = observe()
+    feed(observer, 's1', [
+      ...round(),
+      inboxSplicedWith('[advisor:nit] consider extracting a helper', { kind: ADVISOR_SOURCE_KIND }),
+    ])
+    expect(deltas).toHaveLength(0)
+    expect(stepped).toHaveLength(0)
+  })
+
+  it('a workspace-context sync (inserted source.kind workspace-instructions) never triggers', () => {
+    const { deltas, stepped, observer } = observe()
+    feed(observer, 's1', [
+      ...round(),
+      inboxSplicedWith('the repo is at /repo', { kind: 'workspace-instructions' }),
+    ])
+    expect(deltas).toHaveLength(0)
+    expect(stepped).toHaveLength(0)
+  })
+
+  it('a tool-result splice (inserted source.kind tool) never triggers', () => {
+    const { deltas, stepped, observer } = observe()
+    feed(observer, 's1', [
+      ...round(),
+      inboxSplicedWith('3 passed', { kind: 'tool', callId: CallId('call-0') }),
+    ])
+    expect(deltas).toHaveLength(0)
+    expect(stepped).toHaveLength(0)
+  })
+
+  it('an empty-clear splice (no inserted messages) never triggers', () => {
+    const { deltas, stepped, observer } = observe()
+    feed(observer, 's1', [...round(), inboxClear()])
+    expect(deltas).toHaveLength(0)
+    expect(stepped).toHaveLength(0)
+  })
+
+  it('excluded splices never advance the cursor: a later genuine user splice triggers exactly one review', () => {
+    const { deltas, stepped, observer } = observe()
+    feed(observer, 's1', [
+      ...round(),
+      inboxSplicedWith('[advisor:nit] a note', { kind: ADVISOR_SOURCE_KIND }),
+      inboxSplicedWith('workspace sync', { kind: 'workspace-instructions' }),
+      inboxSplicedWith('2 failed', { kind: 'tool', callId: CallId('call-0') }),
+      inboxClear(),
+      inboxSpliced('prompt two'),           // the one genuine human splice
+    ])
+    expect(deltas).toHaveLength(1)
+    expect(stepped).toHaveLength(1)
+    // The delta is the completed prior round; none of the excluded splices
+    // entered it, and the genuine trigger did not either.
+    expect(deltas[0]).toContain('**user**: prompt one')
+    expect(deltas[0]).toContain('**agent**: reply one')
+    expect(deltas[0]).not.toContain('prompt two')
+    expect(deltas[0]).not.toContain('advisor')
   })
 })
 

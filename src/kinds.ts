@@ -16,16 +16,18 @@
  * @module dsh-advisor/kinds
  */
 
-import type { Message } from '@deepseek-ai/dsh-llm'
+import type { ContextFormed, Message } from '@deepseek-ai/dsh-llm'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     /**
      * An advisor-injected message (user-role, self-describing
      * `[advisor:{severity}] {note}` content). Never derived into advisor
-     * deltas (self-review guard, spec §6).
+     * deltas (self-review guard, spec §6). Extends {@link ContextFormed} so
+     * the plugin can declare the `notice` form + one-line `summary` the web
+     * shell renders on a collapsed context row.
      */
-    advisor: { readonly kind: 'advisor' }
+    advisor: { readonly kind: 'advisor' } & ContextFormed
   }
 }
 

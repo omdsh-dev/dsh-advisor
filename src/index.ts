@@ -60,6 +60,27 @@ export const inject = ['sessions', 'agents', 'llm']
 export { Config } from './config'
 export type { AdvisorConfig, ResolvedAdvisorConfig } from './config'
 
+/** n4 QC F-6: single-reviewer guard. The host composes multiple dsh-advisor
+ * fibers (observed: 3 active); with the global session/event subscription every
+ * instance would observe every session and N×-review/N×-call per round. The
+ * FIRST apply to claim the reviewer role wires the observer/runtime/delivery
+ * and the /advisor commands; later instances attempt the settings registration
+ * only (qc1 W-5: it is NOT idempotent — dsh-settings register throws on a
+ * duplicate; installAdvisorSettings dedupes it and falls back to the entry
+ * source, so the first registration owns the live namespace) and stay inert
+ * otherwise. The claim is taken only AFTER the construction-time config gate
+ * (qc1 W-4: a rejected first row never leaves the flag claimed) and is
+ * released when the claiming fiber is disposed, so a later re-apply/re-mount
+ * can take over. The flag rides globalThis so it survives even module-copy
+ * divergence. */
+const REVIEWER_KEY = '__dshAdvisorReviewer__'
+function claimReviewer(): boolean {
+  const g = globalThis as Record<string, unknown>
+  if (g[REVIEWER_KEY] === true) return false
+  g[REVIEWER_KEY] = true
+  return true
+}
+
 export function apply(ctx: Context, config: AdvisorConfig) {
   // T2: the explicit provider/model gate — no model call without both
   // (spec §5.2). Unknown keys / malformed config throw here, rejecting the
@@ -187,7 +208,12 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       provider: effective.provider!,
       model: effective.model!,
       systemPrompt: safeResolved().systemPrompt || DEFAULT_ADVISOR_SYSTEM_PROMPT,
-      llm: ctx.llm,
+      // n4 root-cause (host-observed NO_ADAPTER): this plugin's ctx may live in
+      // an isolated scope whose local llm service lacks the provider adapters
+      // (adapter registrations live on the application root's LlmService). Resolve
+      // the llm service from the APPLICATION ROOT so the advisor's model calls
+      // reach the registered deepseek-official adapter.
+      llm: ((ctx as unknown as { root?: { get?: (k: string) => unknown } }).root?.get?.('llm') as typeof ctx.llm) ?? ctx.llm,
       onNote: (note: AdviceNote) => {
         // Accepted notes only — the runtime's emission guard (T5) already
         // filtered suppressed ones. T6 routes the accepted note to the primary
@@ -213,6 +239,26 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     runtime.dispose()
   }
 
+  // n4 QC F-6: claim the single-reviewer role HERE — after every
+  // construction-time throwing read (the delivery latch above resolves the
+  // config and can throw on a rejected row), so a first fiber whose config
+  // fails the gate never leaves the flag claimed (qc1 W-4). Non-reviewer
+  // instances stop here — observer/runtime/delivery and the /advisor commands
+  // are wired only by the single claimed reviewer. The settings registration
+  // (installAdvisorSettings above) already ran deduped (qc1 W-5): the first
+  // registration owns the live namespace on every composition.
+  const reviewer = claimReviewer()
+  if (!reviewer) {
+    ctx.logger('advisor').debug('non-reviewer instance — observer/runtime/commands skipped (single-reviewer guard)')
+    return
+  }
+  // qc1 W-4: release the claim when THIS (reviewer) fiber is disposed, so a
+  // later re-apply/re-mount (plugin-row removal, composition reload, host hot
+  // reload) can take over instead of leaving the advisor silently inert for
+  // the process lifetime. Registered only on the claiming fiber.
+  ctx.effect(() => () => {
+    delete (globalThis as Record<string, unknown>)[REVIEWER_KEY]
+  }, 'advisor: release reviewer claim')
   const observer = new SessionTranscriptObserver({
     maxDeltaMessages: resolved().maxDeltaMessages,
     onSteppedTurnEnd: (sessionId: string) => {
@@ -238,9 +284,30 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     },
   })
 
+  // `session/event` is scope-filtered: the dsh scope carrier sets a
+  // `[Context.filter]` on emitted events — untagged listeners pass, but a
+  // tagged listener only receives events whose carrier key is on its own
+  // key's ancestor chain (see `packages/core/scope/src/index.ts` scopeTarget).
+  // Cordis dispatch skips the filter for global hooks
+  // (`hook.global || !filter || filter.call(...)` — `cordis/src/events.ts`
+  // dispatch), and the plugin's instances may be composed in isolated scopes
+  // (dsh-advisor appears as multiple active fibers, e.g. 3), so `{ global:
+  // true }` is required for the observer to receive every session's events
+  // regardless of scope placement. Q2=grill-me-locked fix; verified by host
+  // test (PM operator step, evidence in iteration guides).
+  //
+  // The three lifecycle listeners below dispatch through the SAME
+  // scope-filtered carrier as `session/event` (dsh-session/dsh-agent
+  // `announce`/`emitDisposed`), so they must be `{ global: true }` too (qc3
+  // F4): a scoped fiber that observes out-of-scope sessions via the global
+  // session/event listener would otherwise create per-session state —
+  // renderers, runtimes, cooldowns, overrides — whose dispose events are
+  // filtered out, a per-session leak for the host's lifetime. Create/dispose
+  // symmetry restored; both dispose listeners are documented idempotent
+  // (a runtime is disposed at most once, whichever signal lands first).
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
     observer.handleEvent(session.id, session.events, event)
-  })
+  }, { global: true })
   // Per-session runtime lifecycle. Spec KD-5(c) pins `agent/disposed`;
   // `session/disposed` is the store-level pair (both are idempotent — a
   // runtime is disposed at most once, whichever signal lands first). `agent/created`
@@ -250,19 +317,19 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
     ensureRuntime(agent.id)
     delivery.registerAgent(agent)
-  })
+  }, { global: true })
   ctx.on('agent/disposed', ({ agent }: { agent: Agent }) => {
     observer.disposeSession(agent.id)
     disposeRuntime(agent.id)
     delivery.unregisterAgent(agent.id)
     overrides.clear(agent.id)
-  })
+  }, { global: true })
   ctx.on('session/disposed', (session: Session) => {
     observer.disposeSession(session.id)
     disposeRuntime(session.id)
     delivery.unregisterAgent(session.id)
     overrides.clear(session.id)
-  })
+  }, { global: true })
 
   // T1-settings live re-apply: construction-time latches (immuneTurns on the
   // delivery, maxDeltaMessages on the observer, systemPrompt + provider/model

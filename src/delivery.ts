@@ -34,7 +34,7 @@
  * @module dsh-advisor/delivery
  */
 
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { ADVISOR_SOURCE_KIND } from './kinds'
 import type { AdviceNote, AdviceSeverity } from './advisor-runtime'
@@ -75,11 +75,31 @@ export interface AdvisorDeliveryOptions {
  * Build the advisor message for one note (spec §6): a user-role message whose
  * source carries the distinct advisor kind and whose content is self-describing
  * `[advisor:{severity}] {note}`.
+ *
+ * Bounds (qc3 F-2 / qc2 S-1): the note itself is already capped at
+ * `ADVISOR_NOTE_MAX_CHARS` by extraction; the collapsed-row summary is
+ * additionally bounded via `boundContextSummary` (120 chars — the platform
+ * `CONTEXT_SUMMARY_MAX_CHARS` convention), so the durable log and the
+ * collapsed context row never carry an unbounded account.
  */
 export function buildAdvisorMessage(note: AdviceNote): UserMessage {
+  // One formatter for content and summary: the summary is derived from the
+  // same string as the content via a fixed slice of the `[advisor:` marker
+  // (`[` + everything after it), so the severity formatting can never drift
+  // between the two — and note text mentioning "advisor:" cannot affect it.
+  const text = `[advisor:${note.severity}] ${note.note}`
+  const summary = `[${text.slice('[advisor:'.length)}`
   return createUserMessage({
-    content: [{ type: 'text', text: `[advisor:${note.severity}] ${note.note}` }],
-    source: { kind: ADVISOR_SOURCE_KIND },
+    content: [{ type: 'text', text }],
+    // n4 (user direction): declare the notice form + a collapsed-row summary so
+    // the web shell's ContextInjectionRow shows "… · advisor · [nit] <note>"
+    // instead of a bare producer label. The severity tag is part of the summary
+    // text; per-severity COLOR needs the shell UI (out of plugin reach).
+    source: {
+      kind: ADVISOR_SOURCE_KIND,
+      form: 'notice' as const,
+      summary: boundContextSummary(summary),
+    },
   })
 }
 

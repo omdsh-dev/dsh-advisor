@@ -112,6 +112,14 @@ Plugin-row config:
 | `immuneTurns` | int ≥ 0, `3` | After a concern/blocker is actually steered, the next N stepped primary turns must complete before another interrupting note may steer; notes inside the window downgrade to inject. |
 | `maxDeltaMessages` | int ≥ 0, `60` | Bounded advisor input window. Deltas beyond N are truncated with a `… <earlier messages omitted>` marker; `0` = unbounded. |
 
+**Model capability & budget**: the advisor call runs with `reasoningEffort:
+'off'` — sent only when the configured model's adapter declares that effort
+(deepseek models do; any other model gets the option omitted automatically, so
+non-reasoning providers keep working) — and a **5120-token** output cap (a
+user-directed 20× supersession of the original 256). Extracted notes are
+bounded (1000 chars) and the notice summary to 120 chars, so the raised budget
+cannot translate into an unbounded injection into the primary session.
+
 ## Usage
 
 Once installed and enabled, the advisor observes every session. Control it per
@@ -135,9 +143,17 @@ quota/rate-limit (`quota_exhausted` — KD-5 has no auto-resume timer) resumes i
 place, and a halted advisor (permanent model error, e.g. invalid credentials)
 is rebuilt fresh for the session.
 
-After each stepped primary turn that ends normally (`completed`, `max-tokens`,
-or `error`), the advisor reviews the incremental transcript delta and emits at
-most one note, ranked by severity:
+The advisor reviews on a dual-mode trigger, depending on the session shape:
+
+- **Standard stepped sessions** — after each stepped primary turn that ends
+  normally (`completed`, `max-tokens`, or `error`), the advisor reviews the
+  incremental transcript delta.
+- **Agentic / harness sessions** (never emit `turn/end`) — after each completed
+  agent reply round: when a new human input arrives (inbox-spliced input
+  included) after an unreviewed assistant increment, the advisor reviews that
+  increment.
+
+Either way the advisor emits at most one note per review, ranked by severity:
 
 - **nit** — a minor style, clarity, or quality suggestion; delivered via
   `agent.inject` (non-waking, consumed at the next pre-step boundary).
@@ -162,14 +178,19 @@ its own advice back.
 
 ## How it works
 
-The plugin subscribes to `session/event`; after each stepped `turn/end` it
-renders an incremental markdown delta of the primary transcript (own
-advisor messages excluded) and queues it on a per-session runtime. The runtime
-calls a separately configured model via `ctx.llm.stream`, extracts one
+The plugin subscribes to `session/event`. Two triggers render an incremental
+markdown delta of the primary transcript (own advisor messages excluded) and
+queue it on a per-session runtime: after each stepped `turn/end` in standard
+stepped sessions, and — in agentic/harness sessions that never emit `turn/end`
+— when a new human input arrives (inbox-spliced input included) after an
+unreviewed assistant increment, i.e. at each completed agent reply round. The
+runtime calls a separately configured model via `ctx.llm.stream`, extracts one
 `{note, severity}` from the JSON-framed reply, gates it through an emission
 guard (normalize / dedupe / content-free suppression / one-note-per-update),
-and routes it: nit → inject, concern/blocker → steer. Compaction and surface
-rewrites reset the observer, the emission guard, and the immuneTurns latch
+and routes it: nit → inject, concern/blocker → steer. The advisor call runs
+with reasoning off and a 20x token budget so the JSON note is never starved by
+reasoning output. Compaction and surface rewrites reset the observer, the
+emission guard, and the immuneTurns latch
 (KD-5); the drain is fully async with a bounded backlog, so a failing or
 quota'd advisor can only drop its own backlog — never park the primary loop.
 

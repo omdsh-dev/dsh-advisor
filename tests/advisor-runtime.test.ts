@@ -5,7 +5,7 @@
  * Contract under test:
  * - `AdvisorRuntime` (per-session): `enqueue(delta)` queues a rendered transcript
  *   delta and asynchronously drains it — one `llm.stream` call per delta with
- *   `{ provider, model, system, messages: [user delta], maxTokens: 256 }` and
+ *   `{ provider, model, system, messages: [user delta], maxTokens: 5120 }` and
  *   `purpose` left UNSET (KD-5). Extracted `{note, severity}` is handed to the
  *   `onNote` hook (the T5 emission guard wraps it).
  * - JSON-frame extraction (KD-2): first balanced `{…}` parsed, tolerant of
@@ -25,20 +25,28 @@
  * `LlmService` to prove the registration/dispatch path.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from 'cordis'
 // The overlay shim (`export *`) forwards named exports but not the package
 // default, so `LlmService` (named export of @deepseek-ai/dsh-llm) is imported
 // by name, not as the default.
-import { LlmService, LlmAdapter } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, LlmFailure, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { LlmService, LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, LlmFailure, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import { AdvisorRuntime, extractAdviceNote } from '../src/advisor-runtime'
+import { AdvisorRuntime, ADVISOR_MAX_TOKENS, ADVISOR_NOTE_MAX_CHARS, extractAdviceNote } from '../src/advisor-runtime'
 import type { AdvisorLlm, AdvisorRuntimeOptions, AdvisorRuntimeStatus, AdviceNote } from '../src/advisor-runtime'
 import type { Delta } from '../src/transcript'
 import { apply } from '../src/index'
 import type { AdvisorConfig } from '../src/config'
 import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from '../src/prompts'
+
+// n4 QC F-6: the single-reviewer guard is process-global; each test case
+// composes a fresh harness, so the flag must reset between cases (production
+// keeps the first-claim-wins behavior).
+beforeEach(() => {
+  delete (globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']
+})
+
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -52,10 +60,34 @@ const delta = (markdown: string): Delta => ({ markdown, willContinue: false })
 /** Scripted fake for the runtime's `llm` option: records calls, replays responses. */
 type FakeResponse = { readonly chunks: readonly StreamChunk[] } | { readonly throw: Error } | { readonly hang: true }
 
+/** Simulated model capability for {@link FakeLlm.resolveModelInfo}. */
+type FakeCapability = 'off' | 'none' | 'throw'
+
 class FakeLlm {
   readonly calls: GenerateOptions[] = []
 
-  constructor(private readonly responses: readonly FakeResponse[]) {}
+  constructor(
+    private readonly responses: readonly FakeResponse[],
+    /** 'off' = deepseek-style declared efforts (default); 'none' = base adapter, no reasoning metadata; 'throw' = resolution failure. */
+    private readonly capability: FakeCapability = 'off',
+  ) {}
+
+  resolveModelInfo(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+    if (this.capability === 'throw') return Promise.reject(new Error('capability resolution failed'))
+    return Promise.resolve(
+      this.capability === 'off'
+        ? {
+            provider,
+            id: model,
+            name: model,
+            reasoning: {
+              efforts: [{ id: ReasoningEffortId('off'), name: 'Off' }, { id: ReasoningEffortId('high'), name: 'High' }],
+              defaultEffort: ReasoningEffortId('off'),
+            },
+          }
+        : { provider, id: model, name: model },
+    )
+  }
 
   stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     this.calls.push(options)
@@ -78,6 +110,37 @@ class FakeLlm {
 
 async function* streamOf(chunks: readonly StreamChunk[]): AsyncIterable<StreamChunk> {
   yield * chunks
+}
+
+/**
+ * Fake whose `resolveModelInfo` honors the abort signal (dsh-llm's contract —
+ * "signal - optional cancellation for adapter-owned asynchronous lookup") but
+ * is otherwise slow: it never resolves on its own, only rejects when the
+ * passed signal aborts. With NO signal (the pre-fix n4 QC N-5 behavior) it
+ * hangs forever — exactly the wedged-drain failure the fix removes.
+ */
+class SignalBoundLlm {
+  readonly resolveSignals: Array<AbortSignal | undefined> = []
+  readonly calls: GenerateOptions[] = []
+
+  constructor(private readonly reply: readonly StreamChunk[]) {}
+
+  resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
+    this.resolveSignals.push(signal)
+    if (signal === undefined) return new Promise(() => {}) // no signal → hang forever
+    return new Promise((_resolve, reject) => {
+      if (signal.aborted) {
+        reject(new DOMException('aborted', 'AbortError'))
+        return
+      }
+      signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+    })
+  }
+
+  stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    this.calls.push(options)
+    return streamOf(this.reply)
+  }
 }
 
 /** Chunk script for a successful text reply. */
@@ -137,7 +200,8 @@ describe('AdvisorRuntime — drain calls llm.stream once per delta with expected
       provider: 'test-provider',
       model: 'test-model',
       system: TEST_SYSTEM_PROMPT,
-      maxTokens: 256,
+      maxTokens: ADVISOR_MAX_TOKENS,
+      reasoningEffort: 'off',
     })
     // KD-5: purpose is a closed union and must be left unset for an advisor call.
     expect(options.purpose).toBeUndefined()
@@ -179,6 +243,41 @@ describe('AdvisorRuntime — drain calls llm.stream once per delta with expected
     for (const token of ['nit', 'concern', 'blocker', '{"note"', '"severity"']) {
       expect(DEFAULT_ADVISOR_SYSTEM_PROMPT).toContain(token)
     }
+  })
+
+  it('omits reasoningEffort when the model declares no reasoning capability (W-1 fallback — no UNSUPPORTED_REASONING_EFFORT)', async () => {
+    // Base-adapter shape: resolveModel returns { provider, id, name } with NO
+    // reasoning metadata (the pre-n4 non-deepseek path). The advisor call must
+    // still succeed — the option is omitted and resolveCallFor materializes
+    // the adapter default instead of throwing.
+    const llm = new FakeLlm([{ chunks: textReply('{"note":"plain model works"}') }], 'none')
+    const { runtime, notes } = makeRuntime(llm)
+
+    runtime.enqueue(delta('### Session update\n\n**user**: fix the bug'))
+    await runtime.waitForDrain()
+
+    expect(notes).toEqual([{ note: 'plain model works', severity: 'nit' }])
+    expect(llm.calls).toHaveLength(1)
+    const options = llm.calls[0]!
+    expect(options).toMatchObject({
+      provider: 'test-provider',
+      model: 'test-model',
+      system: TEST_SYSTEM_PROMPT,
+      maxTokens: ADVISOR_MAX_TOKENS,
+    })
+    expect('reasoningEffort' in options).toBe(false)
+  })
+
+  it('a capability-resolution failure also omits reasoningEffort and never fails the call', async () => {
+    const llm = new FakeLlm([{ chunks: textReply('{"note":"resilient"}') }], 'throw')
+    const { runtime, notes } = makeRuntime(llm)
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(notes).toEqual([{ note: 'resilient', severity: 'nit' }])
+    expect(llm.calls).toHaveLength(1)
+    expect('reasoningEffort' in llm.calls[0]!).toBe(false)
   })
 })
 
@@ -255,6 +354,20 @@ describe('extractAdviceNote — JSON frame parsing (KD-2)', () => {
     expect(extract('{"note":')).toBeUndefined()
     expect(extract('[]')).toBeUndefined()
   })
+
+  it('caps an over-long note at ADVISOR_NOTE_MAX_CHARS with a truncation marker (qc3 F-2)', () => {
+    const longNote = 'x'.repeat(ADVISOR_NOTE_MAX_CHARS + 500)
+    const result = extract(`{"note":"${longNote}","severity":"concern"}`)
+    expect(result).toBeDefined()
+    expect(result!.severity).toBe('concern')
+    expect(result!.note.length).toBe(ADVISOR_NOTE_MAX_CHARS)
+    expect(result!.note.endsWith('…')).toBe(true)
+    expect(result!.note.slice(0, ADVISOR_NOTE_MAX_CHARS - 1)).toBe('x'.repeat(ADVISOR_NOTE_MAX_CHARS - 1))
+  })
+
+  it('keeps a note within the cap untouched', () => {
+    expect(extract('{"note":"short note"}')).toEqual({ note: 'short note', severity: 'nit' })
+  })
 })
 
 /** Local alias so the extraction tests read naturally. */
@@ -274,8 +387,9 @@ describe('AdvisorRuntime — failure policy (KD-5)', () => {
       const { runtime, notes } = makeRuntime(llm, { retryBackoffMs: 1_000 })
 
       runtime.enqueue(delta('first update'))
-      // First attempt runs synchronously; the retry waits on the backoff timer.
-      expect(llm.calls).toHaveLength(1)
+      // The capability resolution (resolveModelInfo) is an async pre-step, so
+      // the first attempt lands after a microtask hop rather than synchronously.
+      await vi.waitFor(() => expect(llm.calls).toHaveLength(1))
       await vi.advanceTimersByTimeAsync(1_000)
       expect(llm.calls).toHaveLength(2)
       expect(notes).toEqual([])
@@ -344,6 +458,26 @@ describe('AdvisorRuntime — failure policy (KD-5)', () => {
     expect(notes).toEqual([{ note: 'recovered', severity: 'concern' }])
     expect(runtime.status()).toBe('running')
     expect(runtime.pendingCount).toBe(0)
+  })
+
+  it('bounds the capability resolution by the call deadline — a signal-honoring hung lookup times out transiently and the retry delivers (n4 QC N-5)', async () => {
+    const llm = new SignalBoundLlm(textReply('{"note":"resolution bounded"}'))
+    const { runtime, notes } = makeRuntime(llm, { callTimeoutMs: 20 })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    // The deadline signal reached the capability resolution (threaded through,
+    // N-5) and aborted it — the first attempt times out (transient) instead of
+    // wedging the drain ahead of the deadline-guarded stream loop.
+    expect(llm.resolveSignals).toHaveLength(1) // the resolution runs once (cached after the abort)
+    expect(llm.resolveSignals[0]).toBeInstanceOf(AbortSignal)
+    expect(llm.resolveSignals[0]!.aborted).toBe(true)
+    // Attempt 1 timed out → the single KD-5 retry (fresh deadline, cached
+    // resolution) delivers the note.
+    expect(llm.calls).toHaveLength(2)
+    expect(notes).toEqual([{ note: 'resolution bounded', severity: 'nit' }])
+    expect(runtime.status()).toBe('running')
   })
 
   it('a timeout is a transient failure: the single retry gets a fresh deadline and can succeed', async () => {
@@ -442,7 +576,9 @@ describe('AdvisorRuntime — dispose (KD-5 in-flight abort)', () => {
 
     runtime.enqueue(delta('in flight'))
     runtime.enqueue(delta('queued'))
-    expect(llm.calls).toBe(1) // first delta in flight, second still queued
+    // Capability resolution is an async pre-step; the first delta's stream
+    // call lands after a microtask hop, the second stays queued.
+    await vi.waitFor(() => expect(llm.calls).toBe(1)) // first delta in flight, second still queued
 
     runtime.dispose()
     await runtime.waitForDrain()
@@ -462,6 +598,15 @@ describe('AdvisorRuntime — dispose (KD-5 in-flight abort)', () => {
 // ---------------------------------------------------------------------------
 
 class RecordingAdapter extends LlmAdapter {
+  override resolveModel(provider: string, model: string, _signal?: undefined): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({
+      provider,
+      id: model,
+      name: model,
+      reasoning: { efforts: [{ id: ReasoningEffortId('off'), name: 'Off' }, { id: ReasoningEffortId('high'), name: 'High' }], defaultEffort: ReasoningEffortId('off') },
+    })
+  }
+
   readonly requests: GenerateOptions[] = []
 
   constructor(private readonly script: readonly StreamChunk[]) {
@@ -498,7 +643,8 @@ describe('AdvisorRuntime — composed with a real LlmService + registered adapte
       provider: 'test-provider',
       model: 'test-model',
       system: TEST_SYSTEM_PROMPT,
-      maxTokens: 256,
+      maxTokens: ADVISOR_MAX_TOKENS,
+      reasoningEffort: 'off',
     })
     expect(adapter.requests[0]!.purpose).toBeUndefined()
     expect('purpose' in adapter.requests[0]!).toBe(false)
@@ -519,6 +665,53 @@ describe('AdvisorRuntime — composed with a real LlmService + registered adapte
       ctx.emit('session/event', session, event)
     }
     expect(adapter.requests).toEqual([])
+  })
+})
+
+/** Base-adapter stub: `resolveModel` returns NO reasoning metadata (W-1 path). */
+class NoReasoningAdapter extends LlmAdapter {
+  readonly requests: GenerateOptions[] = []
+
+  constructor(private readonly script: readonly StreamChunk[]) {
+    super()
+  }
+
+  override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    this.requests.push(options)
+    yield * this.script
+  }
+}
+
+describe('AdvisorRuntime — capability-gated reasoningEffort against a real LlmService (W-1)', () => {
+  it('a registered adapter WITHOUT reasoning metadata yields a note with no reasoningEffort sent', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmService)
+    const adapter = new NoReasoningAdapter([...textReply('{"note":"plain model works","severity":"nit"}')])
+    ctx.llm.registerAdapter(['plain'], adapter)
+
+    const notes: AdviceNote[] = []
+    const runtime = new AdvisorRuntime({
+      provider: 'plain',
+      model: 'plain-model',
+      systemPrompt: TEST_SYSTEM_PROMPT,
+      llm: ctx.llm,
+      onNote: (note) => notes.push(note),
+    })
+    runtime.enqueue(delta('### Session update\n\n**agent**: wrote the tests'))
+    await runtime.waitForDrain()
+
+    // The real LlmService would throw UNSUPPORTED_REASONING_EFFORT if the
+    // runtime sent an explicit effort for this model — the capability gate
+    // omits it, resolveCallFor materializes nothing, and the note arrives.
+    expect(notes).toEqual([{ note: 'plain model works', severity: 'nit' }])
+    expect(adapter.requests).toHaveLength(1)
+    expect(adapter.requests[0]).toMatchObject({
+      provider: 'plain',
+      model: 'plain-model',
+      system: TEST_SYSTEM_PROMPT,
+      maxTokens: ADVISOR_MAX_TOKENS,
+    })
+    expect('reasoningEffort' in adapter.requests[0]!).toBe(false)
   })
 })
 

@@ -107,6 +107,42 @@ describe('with a settings service (namespace registration)', () => {
     expect(() => ctx.settings.register(ADVISOR_SETTINGS_NAMESPACE, Config, { base: entry }))
       .toThrow(/already registered/)
   })
+
+  it('a second install on the same context is deduped: no loud error, entry-source fallback (qc1 W-5)', async () => {
+    const ctx = new Context()
+    const errors: unknown[] = []
+    const debugs: unknown[] = []
+    const levels = {
+      error: (message: unknown) => { errors.push(message) },
+      warn: () => {},
+      info: () => {},
+      debug: (message: unknown) => { debugs.push(message) },
+    }
+    // Callable logger: `ctx.logger('advisor')` returns a named logger object,
+    // while cordis logs a failed inject-child activation through the direct
+    // `ctx.logger.error(...)` method — both must be captured.
+    ctx.logger = Object.assign(() => ({ ...levels }), levels) as never
+    await ctx.plugin(MemorySettings)
+    const entry = entryConfig({ enabled: true, provider: 'deepseek', model: 'deepseek-chat' })
+    const first = installAdvisorSettings(ctx, entry)
+    await waitRegistered(ctx)
+
+    // Second install on the SAME context — the namespace is already
+    // registered. dsh-settings register fails loud on duplicates, so
+    // installAdvisorSettings must dedupe: the register error surfaces inside
+    // the conditional inject child (async — an outer try/catch cannot see
+    // it); the child catches it, logs (debug), and the second bridge keeps
+    // the entry-source fallback while the first owns the live scope.
+    const second = installAdvisorSettings(ctx, entryConfig())
+    await vi.waitFor(() => {
+      expect(debugs.some((message) => String(message).includes('already registered'))).toBe(true)
+    })
+
+    expect(errors).toEqual([]) // no loud `settings namespace "advisor" is already registered` error
+    expect(second.source()).toEqual(entryConfig())
+    expect(first.source()).toEqual(entry)
+    expect(ctx.settings.describe().filter((d) => d.ns === ADVISOR_SETTINGS_NAMESPACE)).toHaveLength(1)
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -38,11 +38,12 @@
  * T8 integration suite); `feed` mirrors the cordis `session/event` listener.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from 'cordis'
 import { MemorySettings } from './support/memory-settings'
-import { LlmAdapter, LlmService, MessageId } from '@deepseek-ai/dsh-llm'
+import { LlmAdapter, LlmService, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent, SurfaceOp } from '@deepseek-ai/dsh-session'
 import type { CommandDefinition, CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
@@ -51,6 +52,14 @@ import type { AdvisorConfig } from '../src/config'
 import { ADVISOR_SETTINGS_NAMESPACE } from '../src/settings'
 import { TRUNCATION_MARKER } from '../src/transcript'
 import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from '../src/prompts'
+
+// n4 QC F-6: the single-reviewer guard is process-global; each test case
+// composes a fresh harness, so the flag must reset between cases (production
+// keeps the first-claim-wins behavior).
+beforeEach(() => {
+  delete (globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']
+})
+
 
 // ---------------------------------------------------------------------------
 // Stub adapter (T4/T8 pattern: real LlmService + ctx.llm.registerAdapter)
@@ -70,6 +79,15 @@ const textReply = (text: string): readonly StreamChunk[] => [
  * must observe a call actually routed to the new provider.
  */
 class StubAdapter extends LlmAdapter {
+  override resolveModel(provider: string, model: string, _signal?: undefined): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({
+      provider,
+      id: model,
+      name: model,
+      reasoning: { efforts: [{ id: ReasoningEffortId('off'), name: 'Off' }, { id: ReasoningEffortId('high'), name: 'High' }], defaultEffort: ReasoningEffortId('off') },
+    })
+  }
+
   readonly requests: GenerateOptions[] = []
 
   constructor(private readonly script: ReadonlyArray<readonly StreamChunk[]>) {
@@ -93,6 +111,15 @@ class StubAdapter extends LlmAdapter {
  * at that point would abort the in-flight call AND drop the queued delta.
  */
 class GatedAdapter extends LlmAdapter {
+  override resolveModel(provider: string, model: string, _signal?: undefined): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({
+      provider,
+      id: model,
+      name: model,
+      reasoning: { efforts: [{ id: ReasoningEffortId('off'), name: 'Off' }, { id: ReasoningEffortId('high'), name: 'High' }], defaultEffort: ReasoningEffortId('off') },
+    })
+  }
+
   readonly requests: GenerateOptions[] = []
   private gate: Promise<void> | undefined
   private releaseGate: (() => void) | undefined

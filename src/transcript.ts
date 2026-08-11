@@ -13,14 +13,43 @@
  *
  * `SessionTranscriptObserver` is the per-session wiring unit: it owns one
  * `DeltaRenderer` per session id and dispatches `session/event` tuples to
- * them, rendering only on stepped `turn/end` whose `reason.kind` is
- * reviewable (`completed` | `max-tokens` | `error`; spec §4 — skip
- * `aborted`/`blocked`/`interrupted`, i.e. do not critique user-cut-short
- * turns). It also exposes the T6 delivery hooks: `onSteppedTurnEnd` (one
- * completed stepped primary turn — the immuneTurns countdown) and `onRewrite`
- * (a compact/replace event — the KD-5 latch reset). `index.ts` binds the
- * cordis `session/event` / `session/disposed` / `agent/disposed` listeners
- * into an instance of this class.
+ * them. It has TWO trigger modes (KD-N4-5):
+ *
+ * 1. **turn/end** (standard turn-driven sessions): renders only on a stepped
+ *    `turn/end` whose `reason.kind` is reviewable (`completed` | `max-tokens`
+ *    | `error`; spec §4 — skip `aborted`/`blocked`/`interrupted`, i.e. do not
+ *    critique user-cut-short turns). Byte-identical behavior — the original
+ *    single-trigger path.
+ * 2. **agent reply complete** (harness/agentic sessions, which never emit
+ *    `turn/end`): fires on human-input arrival (`user/message` with
+ *    `source.kind === 'user'`, or `agent/inbox/spliced` whose `inserted`
+ *    carries a message with `source.kind === 'user'` — inbox-spliced input
+ *    may commit as that event first and never re-emit as `user/message`).
+ *    Non-user inbox splices (the advisor's own inject/steer deliveries,
+ *    workspace/tool/empty splices) never trigger (C-1 self-trigger fix).
+ *    Before rendering,
+ *    a read-only predicate checks for an unreviewed non-advisor
+ *    `assistant/message` since the renderer cursor; on a miss the cursor is
+ *    untouched (the first user input of a session neither triggers nor
+ *    advances). Append-type triggers pass `events` minus the trigger itself
+ *    (the arriving input opens the next round); rewrite-type triggers
+ *    (compact summary replace) pass the full log to trigger the KD-5 replay.
+ *    Both modes share the same renderer/cursor, so the cursor advance dedupes
+ *    (one delta per completed round), and both call `onSteppedTurnEnd` (the
+ *    immuneTurns countdown — T6) before rendering.
+ *
+ * **Mode latch**: once a session has produced ANY `turn/end` event
+ * (reviewable or not), the new gate sleeps for it — the session is a
+ * standard turn-driven one and keeps verbatim behavior, including spec §4
+ * skip-aborted (a cut-short first turn's unreviewed increment must not be
+ * supplementarily reviewed by the new gate). Harness/agentic sessions never
+ * emit `turn/end`, so their latch never arms.
+ *
+ * It also exposes the T6 delivery hooks: `onSteppedTurnEnd` (one completed
+ * stepped primary turn — the immuneTurns countdown) and `onRewrite` (a
+ * compact/replace event — the KD-5 latch reset). `index.ts` binds the cordis
+ * `session/event` / `session/disposed` / `agent/disposed` listeners into an
+ * instance of this class.
  *
  * @module dsh-advisor/transcript
  */
@@ -203,6 +232,12 @@ export class DeltaRenderer {
    * Process a session event log snapshot and return the next delta, or
    * `undefined` when no new (renderable) content was appended.
    *
+   * `skipLast` treats the final log event as excluded — the arriving trigger
+   * of an append-type review (qc3 F1): equivalent to the caller slicing
+   * `events.slice(0, events.length - 1)` WITHOUT the O(full-log) shallow copy
+   * the reply-complete gate used to pay on every review. The excluded event
+   * must be the last log entry (the wiring guarantees it).
+   *
    * - Detects a reset: a rewrite event (`compact/*`, replace surface op) in
    *   the unconsumed portion, a shorter log than the cursor, or a delivered
    *   prefix whose fingerprint changed. On reset the cursor rewinds to 0 and
@@ -210,10 +245,11 @@ export class DeltaRenderer {
    * - Otherwise appends the new events, extracts their messages (advisor
    *   excluded), and renders only those (incremental delta).
    */
-  update(events: readonly SessionEvent[]): Delta | undefined {
-    let replay = events.length < this.cursor
+  update(events: readonly SessionEvent[], skipLast = false): Delta | undefined {
+    const effectiveLength = skipLast ? events.length - 1 : events.length
+    let replay = effectiveLength < this.cursor
     if (!replay) {
-      const fresh = events.slice(this.cursor)
+      const fresh = events.slice(this.cursor, effectiveLength)
       replay = fresh.some(isRewriteEvent)
     }
     if (!replay && this.cursor > 0 && this.deliveredFingerprint !== undefined) {
@@ -222,11 +258,11 @@ export class DeltaRenderer {
     let added: Message[] = []
     if (replay) {
       this.reset()
-      this.rebuild(events)
+      this.rebuild(events, effectiveLength)
     } else {
-      added = this.append(events.slice(this.cursor))
+      added = this.append(events, this.cursor, effectiveLength)
     }
-    this.cursor = events.length
+    this.cursor = effectiveLength
     this.deliveredFingerprint = fingerprintOf(events, this.cursor)
     return replay ? this.renderSurface() : this.renderTail(added)
   }
@@ -258,9 +294,30 @@ export class DeltaRenderer {
     this.cursor = length
   }
 
-  /** Rebuild the fold from a full log (post-reset replay). */
-  private rebuild(events: readonly SessionEvent[]): void {
-    const folded = foldSurface(events)
+  /**
+   * Read-only predicate for the agentic reply-complete gate (KD-N4-5): does an
+   * unreviewed non-advisor `assistant/message` increment exist since the
+   * cursor? Scans the unconsumed log tail with the same derivation the
+   * renderer uses (an empty-content `assistant/message` derives no message, so
+   * it does not count) and excludes advisor-source messages (self-review
+   * guard, spec §6). NEVER mutates state — a blind `update()` here would
+   * pre-advance the cursor and lose the user prompt from the first
+   * standard-session turn/end delta, so the caller only calls `update()` when
+   * this returns true.
+   */
+  hasUnreviewedAssistant(events: readonly SessionEvent[]): boolean {
+    for (let index = this.cursor; index < events.length; index++) {
+      const event = events[index]!
+      if (event.type !== 'assistant/message') continue
+      const message = deriveEventMessage(event)
+      if (message !== null && !isAdvisorMessage(message)) return true
+    }
+    return false
+  }
+
+  /** Rebuild the fold from a full log (post-reset replay, bounded to `length`). */
+  private rebuild(events: readonly SessionEvent[], length: number): void {
+    const folded = foldSurface(events.slice(0, length))
     for (const seq of folded.nodes) {
       const message = deriveEventMessage(events[seq]!)
       if (message === null || isAdvisorMessage(message)) continue
@@ -274,10 +331,11 @@ export class DeltaRenderer {
     }
   }
 
-  /** Incrementally fold new events (guaranteed append-only) and return added messages. */
-  private append(events: readonly SessionEvent[]): Message[] {
+  /** Incrementally fold new events in `[start, end)` (guaranteed append-only) and return added messages. */
+  private append(events: readonly SessionEvent[], start: number, end: number): Message[] {
     const added: Message[] = []
-    for (const event of events) {
+    for (let index = start; index < end; index++) {
+      const event = events[index]!
       const message = deriveEventMessage(event)
       if (message === null || isAdvisorMessage(message)) continue
       this.surface.push(event.seq)
@@ -353,6 +411,34 @@ export function isReviewableTurnEnd(event: SessionEvent): boolean {
 }
 
 /**
+ * True when an event is a human-input arrival — the trigger of the agentic
+ * reply-complete gate (KD-N4-5).
+ *
+ * - `user/message` with `source.kind === 'user'` — the primary signal: a
+ *   direct human prompt (the queued message claimed for a step).
+ * - `agent/inbox/spliced` — the fallback: inbox-spliced input commits as
+ *   this log-only event first and may never re-emit as `user/message`
+ *   (the merged `SessionEventMap` entry comes from the dsh-agent peer, per
+ *   the `compact/*` precedent). Payload-discriminated (C-1 fix): the event
+ *   only triggers when `inserted` is non-empty and carries at least one
+ *   message whose `source.kind === 'user'`. Every other inbox mutation is
+ *   excluded — the advisor's OWN inject/steer deliveries (source.kind
+ *   `advisor`), workspace-context sync (`workspace-instructions`),
+ *   tool-result splicing (`tool`), and claim/clear splices (empty
+ *   `inserted`) must not self-trigger the review gate.
+ *
+ * Synthetic/injected user-role messages (tool results, advisor notes,
+ * workspace context) carry other `source.kind` values and never trigger.
+ */
+export function isHumanInputEvent(event: SessionEvent): boolean {
+  if (event.type === 'user/message') return event.data.source.kind === 'user'
+  if (event.type === 'agent/inbox/spliced') {
+    return event.data.inserted.some((message) => message.source.kind === 'user')
+  }
+  return false
+}
+
+/**
  * One renderer per session id, driven by `session/event` tuples. Cordis-free,
  * so the wiring logic is unit-testable; `index.ts` binds the cordis listeners
  * into an instance and forwards `session.events` (the live log).
@@ -361,6 +447,16 @@ export class SessionTranscriptObserver {
   private readonly renderers = new Map<string, DeltaRenderer>()
   /** seedTo lengths issued before a session's renderer existed (KD-5 enable). */
   private readonly pendingSeeds = new Map<string, number>()
+  /**
+   * Mode latch (KD-N4-5): sessions that have produced ANY `turn/end` event.
+   * Once a session emits `turn/end` it is a standard turn-driven session —
+   * the new agentic reply-complete gate sleeps for it (verbatim behavior,
+   * including spec §4 skip-aborted: a cut-short first turn's unreviewed
+   * increment must not be supplementarily reviewed). Agentic/harness
+   * sessions never emit `turn/end`, so they never latch and the new gate
+   * stays active. Per-session; cleared on dispose.
+   */
+  private readonly turnEndSessions = new Set<string>()
   /** Bounded delta window (KD-3); forwarded to every per-session renderer. */
   private maxDeltaMessages: number
 
@@ -382,24 +478,64 @@ export class SessionTranscriptObserver {
   /**
    * Feed one session event (mirroring the cordis `session/event` listener:
    * `(session, event)` — `events` is the session's live log, `event` the
-   * appended event). Renders (and emits via `onDelta`) only on a stepped
-   * `turn/end` with a reviewable reason.
+   * appended event). Renders (and emits via `onDelta`) on either trigger:
+   * a stepped `turn/end` with a reviewable reason (standard sessions), or a
+   * human-input arrival with an unreviewed assistant increment (agentic
+   * sessions — the reply-complete gate, KD-N4-5). The mode latch keeps the
+   * second gate dormant for any session that emits `turn/end`.
    */
   handleEvent(sessionId: string, events: readonly SessionEvent[], event: SessionEvent): void {
     // KD-5 reset surface: a rewrite event (compact/*, non-append surface op)
     // clears the delivery immuneTurns latch immediately (T6) — before the turn
     // gate, since a rewrite can arrive outside a turn/end.
     if (isRewriteEvent(event)) this.options.onRewrite?.(sessionId)
-    if (!isReviewableTurnEnd(event)) return
-    // Stepped-turn gate: the arriving turn/end must be the latest closed turn
-    // that entered at least one model step (dsh semantics — no-step turns from
-    // rejection / empty input / cancellation are not reviewed).
-    const latest = findLastMessageTurnEnd(events)
-    if (latest === undefined || latest.seq !== event.seq) return
-    // One completed stepped primary turn — the delivery module (T6) counts
-    // these to decrement its immuneTurns cooldown. Fires before the render so
-    // the note produced by this very turn routes with the decremented value.
+    // Mode latch: ANY turn/end marks the session as standard turn-driven. Set
+    // before the reviewable check — a non-reviewable (aborted/blocked) end
+    // still latches, so the new gate never supplementarily reviews a cut-short
+    // round (spec §4).
+    if (event.type === 'turn/end') this.turnEndSessions.add(sessionId)
+    if (isReviewableTurnEnd(event)) {
+      // Stepped-turn gate: the arriving turn/end must be the latest closed turn
+      // that entered at least one model step (dsh semantics — no-step turns from
+      // rejection / empty input / cancellation are not reviewed).
+      const latest = findLastMessageTurnEnd(events)
+      if (latest === undefined || latest.seq !== event.seq) return
+      // One completed stepped primary turn — the delivery module (T6) counts
+      // these to decrement its immuneTurns cooldown. Fires before the render so
+      // the note produced by this very turn routes with the decremented value.
+      this.options.onSteppedTurnEnd?.(sessionId)
+      const delta = this.rendererFor(sessionId).update(events)
+      if (delta !== undefined) this.options.onDelta(sessionId, delta)
+      return
+    }
+    // KD-N4-5 reply-complete gate (agentic sessions, no turn/end): fire only
+    // on human-input arrival for a session that never latched as standard.
+    if (this.turnEndSessions.has(sessionId)) return
+    if (!isHumanInputEvent(event)) return
+    const renderer = this.rendererFor(sessionId)
+    // Read-only predicate — never advances the cursor on a miss: the first
+    // user input of a session must not trigger nor advance (a blind update()
+    // would pre-advance the cursor and lose the user prompt from the first
+    // standard-session turn/end delta).
+    if (!renderer.hasUnreviewedAssistant(events)) return
+    // One completed reply round — the immuneTurns countdown (T6) fires before
+    // the render, same ordering as the turn/end path.
     this.options.onSteppedTurnEnd?.(sessionId)
+    // Append-type trigger: the arriving input opens the next round — exclude
+    // the trigger event itself so it never enters the delta (the wiring
+    // guarantees `event` is the last log entry). skipLast does this WITHOUT
+    // the O(full-log) copy the previous `events.slice(0, -1)` paid on every
+    // review (qc3 F1). Rewrite-type trigger (compact summary replace): pass
+    // the full log so `update()` detects the rewrite and replays the
+    // post-rewrite surface (KD-5).
+    const delta = isRewriteEvent(event)
+      ? renderer.update(events)
+      : renderer.update(events, true)
+    if (delta !== undefined) this.options.onDelta(sessionId, delta)
+  }
+
+  /** Lazy per-session renderer creation, shared by both trigger modes. */
+  private rendererFor(sessionId: string): DeltaRenderer {
     let renderer = this.renderers.get(sessionId)
     if (renderer === undefined) {
       renderer = new DeltaRenderer({ maxDeltaMessages: this.maxDeltaMessages })
@@ -410,14 +546,14 @@ export class SessionTranscriptObserver {
       }
       this.renderers.set(sessionId, renderer)
     }
-    const delta = renderer.update(events)
-    if (delta !== undefined) this.options.onDelta(sessionId, delta)
+    return renderer
   }
 
   /** Drop a session's renderer (wiring: `session/disposed` / `agent/disposed`). */
   disposeSession(sessionId: string): void {
     this.renderers.delete(sessionId)
     this.pendingSeeds.delete(sessionId)
+    this.turnEndSessions.delete(sessionId)
   }
 
   /**
