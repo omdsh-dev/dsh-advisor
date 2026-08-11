@@ -5,7 +5,7 @@ problem_type: workflow_issue
 category: workflow-patterns
 severity: medium
 title: Adapting a dsh plugin bundle to an upstream dsh bump — contract migration, probe discriminators, restart verification
-description: Verified process for surviving a dsh staging-snapshot upgrade: key file/runtime probes on semantic discriminators with present/absent directions, migrate the dshClient → dsh.client declaration (no fallback, negative-verdict cache), restart + re-verify the runtime. The plugin-shipped host patch mechanism (which had to be regenerated per bump) is retired — the settings-exposure fix is the upstream exposeToWebClients opt-in.
+description: Verified process for surviving a dsh staging-snapshot upgrade: key file/runtime probes on semantic discriminators with present/absent directions, migrate the dshClient → dsh.client declaration (no fallback, negative-verdict cache), restart + re-verify the runtime. The plugin-shipped host patch mechanism (which had to be regenerated per bump) is retired; the settings exposure boundary has NO upstream opt-in (verified at pristine 20da39e) — the web section is notice-only and configuration flows through the plugin config row. Never verify host capabilities against a locally-modified host tree (circular verification).
 tags:
   - dsh
   - upstream-bump
@@ -23,7 +23,7 @@ applies_when:
 
 ## Context
 
-dsh upgrades stage a new `$DSH_HOME` staging snapshot (symlink → a `staging` snapshot directory). Plugin client halves (package.json declarations scanned by `ClientModuleHostService`) and runtime-facing contracts silently break on the new baseline: contract fields get renamed, and emit shapes drift. Symptom pattern observed at the 20da39e bump: the `dshClient` declaration was ignored by the new modules service, and the runtime `settings.describe` no longer exposed the `advisor` namespace until the exposure opt-in took effect.
+dsh upgrades stage a new `$DSH_HOME` staging snapshot (symlink → a `staging` snapshot directory). Plugin client halves (package.json declarations scanned by `ClientModuleHostService`) and runtime-facing contracts silently break on the new baseline: contract fields get renamed, and emit shapes drift. Symptom pattern observed at the 20da39e bump: the `dshClient` declaration was ignored by the new modules service. The `advisor` namespace is NOT exposed on the web configuration boundary on ANY current upstream dsh build (there is no registration-level opt-in upstream — see the settings exposure boundary knowledge doc); an apparent "exposure" observed against a locally-modified staging worktree is a circular-verification artifact, not an upstream capability.
 
 ## Guidance
 
@@ -41,15 +41,15 @@ dsh upgrades stage a new `$DSH_HOME` staging snapshot (symlink → a `staging` s
 
 ### 3. Restart + runtime verification sequence
 
-1. Restart `dsh web` (declaration changes and host-side exposure need it; the profile may auto-restart).
+1. Restart `dsh web` (declaration changes need it; the profile may auto-restart).
 2. Boot-graph row present (client half loaded under the new declaration).
-3. `settings.describe` exposes the namespace (the upstream `exposeToWebClients` opt-in path — see the settings exposure boundary knowledge doc).
-4. Wire-level settings round-trip (describe → mutate → describe → restore, tracking revisions) — read/write against the REAL host.
+3. `settings.describe` reflects the real host boundary: on current upstream builds the `advisor` namespace is ABSENT (expected — no opt-in exists; see the settings exposure boundary knowledge doc). Treat "namespace exposed" as a discriminating probe only when the host tree is pristine — a locally-modified staging worktree makes the probe circular.
+4. Wire-level plugin-command check (`/advisor status` matched) — the plugin runs fully from the plugin config row; the web section is notice-only.
 5. Served bundle hygiene (no NUL / no builder machine path) + browser-level visual check (human).
 
 ### 4. Retired: the plugin-shipped host patch mechanism
 
-The earlier fix shipped a host patch (git diff applied into the dsh source tree) plus apply/revert/verify shell scripts and an install-time auto-apply, and every upstream bump required regenerating the patch byte-exact against the refactored source (blob hashes, forward/reverse apply checks, present/absent probe splits). That mechanism was **retired** once the upstream `exposeToWebClients` registration opt-in was runtime-verified (dsh ≥ snapshot 20da39e): the patch, scripts, and host-patch tests were deleted, and no host source-tree modification is shipped anymore. Upstream bumps now touch only the plugin's own contracts (declaration shape, emit shape, probe targets).
+The earlier fix shipped a host patch (git diff applied into the dsh source tree) plus apply/revert/verify shell scripts and an install-time auto-apply, and every upstream bump required regenerating the patch byte-exact against the refactored source (blob hashes, forward/reverse apply checks, present/absent probe splits). That mechanism was **retired and deleted** — the patch, scripts, and host-patch tests are gone, and no host source-tree modification is shipped anymore. The SAME class of modification must not be reintroduced by editing the running host's $DSH_HOME/source/current worktree directly (uncommitted): that is indistinguishable from the retired patch (it silently regresses on the next snapshot rebuild) and it makes verification circular. Keep the host pristine; upstream bumps touch only the plugin's own contracts (declaration shape, emit shape, probe targets).
 
 ## Why This Matters
 
@@ -57,9 +57,9 @@ Every artifact that mirrors an upstream shape (the client declaration, verify pr
 
 ## When to Apply
 
-Any dsh plugin bundle that ships a client half, immediately after a `$DSH_HOME` staging snapshot upgrade. Host-side settings exposure no longer needs a patch (see the settings exposure boundary knowledge doc).
+Any dsh plugin bundle that ships a client half, immediately after a `$DSH_HOME` staging snapshot upgrade. Host-side settings exposure needs no patch and has no upstream opt-in — the web section is notice-only and configuration flows through the plugin config row (see the settings exposure boundary knowledge doc).
 
 ## Examples
 
-- 20da39e bump (this repo): the `dshClient` → nested `client` migration was pinned by test and verified post-restart (boot row, `settings.describe` round-trip). The old host-tree patch conflict at that bump was the trigger for the opt-in migration and the patch-mechanism retirement.
+- 20da39e bump (this repo): the `dshClient` → nested `client` migration was pinned by test and verified post-restart (boot row). The old host-tree patch conflict at that bump was the trigger for the patch-mechanism retirement. Note the settings-exposure lesson from the SAME bump: the `exposeToWebClients` capability existed only as uncommitted edits in the local staging worktree; verifying "namespace exposed" against that modified host produced a circular conclusion that upstream supported the opt-in — the pristine upstream tree has no such option (TS2353 on `SettingsRegisterOptions`), and clearing the staging worktree + restarting the host removed the namespace from `settings.describe` as expected.
 - "advisor enabled but never injects" host diagnosis: three live probes (session/event reachability via a mounted temp plugin, observer gate chain replica, direct `ctx.llm.stream`) pinned the REAL chain: delivery was never broken; (a) NO_ADAPTER because the plugin's ctx sits in an isolated scope whose local `llm` service lacks provider adapters (adapter registrations live on the application root's LlmService) → resolve `ctx.root.get('llm') ?? ctx.llm`; (b) "reply yielded no note" because deepseek-v4-flash's reasoning stream consumed the whole maxTokens=256 budget → text output empty (finish max-tokens) → `reasoningEffort: 'off'` (capability-gated via resolveModelInfo) + a 20× budget. Also: multi-fiber composition (3 active instances) needs a single-reviewer claim guard; self-trigger hazard when the trigger event class includes the advisor's own inbox splices (payload-discriminate on `source.kind === 'user'`). Host logs (`ctx.logger('advisor')` output) were the decisive evidence the operator supplied — keep them reachable during diagnosis.

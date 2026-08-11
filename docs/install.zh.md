@@ -40,7 +40,7 @@ pnpm install                  # 构建组合包（prepare 自建）
 dsh plugin --profile web add .   # <name> = 你的 profile 名
 ```
 
-`dsh plugin add` 会把组合包追加到 profile 的 `dsh.profile.bundles`（包声明了 `dsh.bundle`）；组合包插入一行插件配置 —— `id: advisor`，`name: dsh-advisor`（见 `cordis.patch.yml`）。本地 `add .` 走 pnpm 的 `link:` 依赖，pnpm **不会**为 `link:` 依赖运行 prepare/postinstall——请先用 `pnpm install`（或 `pnpm build`）构建好组合包再添加。无需任何宿主补丁：`advisor` 命名空间经上游 `exposeToWebClients` 注册 opt-in 加入 web 配置边界（见 [web Settings 暴露](#4-web-settings-暴露)）。
+`dsh plugin add` 会把组合包追加到 profile 的 `dsh.profile.bundles`（包声明了 `dsh.bundle`）；组合包插入一行插件配置 —— `id: advisor`，`name: dsh-advisor`（见 `cordis.patch.yml`）。本地 `add .` 走 pnpm 的 `link:` 依赖，pnpm **不会**为 `link:` 依赖运行 prepare/postinstall——请先用 `pnpm install`（或 `pnpm build`）构建好组合包再添加。无需任何宿主补丁：插件完全通过插件配置行运行（见 [web Settings 暴露](#4-web-settings-暴露)）。
 
 ## 3. tarball 安装
 
@@ -53,9 +53,7 @@ tarball 附带的是构建产物（`lib/` + `cordis.patch.yml`），因此不会
 
 ## 4. web Settings 暴露
 
-dsh web Settings 页通过 dsh 宿主的 apiproxy 读写 settings 命名空间，而 apiproxy 历史上只向配置客户端暴露一个 allowlist 命名空间集合。`advisor` 命名空间通过**上游注册 opt-in** 加入该边界——settings 注册上的 `exposeToWebClients: true`（见 `src/settings.ts`）。在 dsh ≥ snapshot 20da39e 上，宿主把这些命名空间并入暴露集合，因此 Advisor section 可以 live 读写往返——**无需任何宿主补丁**。
-
-在不具备该 opt-in 机制的旧版 dsh 构建上，section 会检测到未暴露的命名空间，显示明确的提示而非可写表单；此时请通过 profile 的 `cordis.patch.yml` 中的插件配置行（`- id: advisor` + `config:` 映射）配置顾问。
+dsh web Settings 页通过 dsh 宿主的 apiproxy 读写 settings 命名空间，而 apiproxy 只向配置客户端暴露一个 allowlist 命名空间集合：模型提供者命名空间 + 产品命名空间（locale / permission / ui-conversation / ui-theme / ui-onboarding / agent-presets）。**上游 dsh 没有注册级 opt-in**（`exposeToWebClients` 不存在于上游 `SettingsRegisterOptions`——已在 pristine 20da39e 快照上核实），因此 `advisor` 命名空间在当前 dsh 构建上**不在** web 配置边界内。web section 因此显示明确的配置行提示而非可写表单；请通过 profile 的 `cordis.patch.yml` 中的插件配置行（`- id: advisor` + `config:` 映射）配置顾问。无需也不施加任何宿主补丁。
 
 ## 5. 验证
 
@@ -64,7 +62,7 @@ dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-adv
 dsh --profile web
 ```
 
-启动后，web Settings 页会渲染 Advisor section；在暴露该命名空间的 dsh 构建（≥ snapshot 20da39e）上，section 即可 live 读写 `advisor` settings namespace——保存后新会话立即生效。
+启动后，web Settings 页会渲染 Advisor section；在当前 dsh 构建上它显示配置行提示（命名空间不在 web 配置边界内）。顾问完全通过插件配置行运行——该提示是说明信息，不是错误。
 
 ## 6. 卸载
 

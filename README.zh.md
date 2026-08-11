@@ -49,7 +49,7 @@ advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabl
 配置在**三个配置面**之间合成（后一层覆盖前一层；各处使用同一组键）：
 
 1. **插件行 config** —— `$DSH_HOME/profiles/web/cordis.patch.yml`（见下）。这是合成 base。
-2. **dsh web Settings 页** —— Advisor section（enabled 开关、只列出系统内已配置 provider 及其模型的 provider/model 选择框、可选字段）保存到 `advisor` settings namespace，覆盖插件行 config 而无需改动它。保存后新会话立即生效，无需重启（运行时 live 读取合成值）。需要当前版本的 dsh web 构建（其 web shell 能加载 `dsh.client` 声明包并渲染 `settings.section` slot）。`advisor` 命名空间通过上游注册 opt-in `exposeToWebClients`（dsh ≥ snapshot 20da39e）加入 web 配置边界 —— 无需任何宿主补丁。
+2. **dsh web Settings 页** —— Advisor section（enabled 开关、只列出系统内已配置 provider 及其模型的 provider/model 选择框、可选字段）保存到 `advisor` settings namespace，覆盖插件行 config 而无需改动它。保存后新会话立即生效，无需重启（运行时 live 读取合成值）。需要当前版本的 dsh web 构建（其 web shell 能加载 `dsh.client` 声明包并渲染 `settings.section` slot）。**在当前上游 dsh 构建上，`advisor` 命名空间不在 web 配置边界内**（宿主的 `exposedNamespaces()` 只联合模型提供者命名空间与产品命名空间——上游没有注册级 opt-in，已在 pristine 20da39e 快照核实）。此时 web section 显示配置行提示而非可写表单，配置通过插件行 config 完成；无需也不施加任何宿主补丁。
 3. **`/advisor` 指令** —— 按会话且临时：翻转的是会话级 override，从不修改持久化配置（见[用法](#用法)）。
 
 两个持久化配置面共享同一个硬门禁：`enabled: true` 而 `provider`/`model` 为空时绝不发起模型调用（disabled-with-reason）。Settings 页还会在 enabled 且必填字段为空时阻止保存；宿主侧硬门禁始终是所有路径上的最后防线。

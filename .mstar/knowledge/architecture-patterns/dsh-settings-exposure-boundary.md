@@ -4,14 +4,13 @@ date: 2026-08-11
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
-title: dsh host settings exposure boundary — third-party namespaces join via the upstream exposeToWebClients opt-in
-description: The dsh host apiproxy only exposes allowlisted settings namespaces to web clients; a third-party plugin's settings section is refused with settings-not-exposed unless the namespace joins the boundary. Current fix: the upstream registration opt-in `exposeToWebClients: true` (dsh ≥ snapshot 20da39e) unions the namespace into the configuration-client boundary — no host patch. Older hosts fall back to the unexposed-namespace notice + plugin config row.
+title: dsh host settings exposure boundary — no registration opt-in exists upstream; third-party namespaces stay off the web boundary
+description: The dsh host apiproxy only exposes allowlisted settings namespaces to web clients; a third-party plugin's settings section is refused with settings-not-exposed unless the namespace joins the boundary. Upstream dsh (verified at pristine snapshot 20da39e) has NO registration-level opt-in: `SettingsRegisterOptions` has no `exposeToWebClients` key and `exposedNamespaces()` unions only model-provider plus product namespaces. The advisor namespace therefore stays off the web configuration boundary on current dsh builds; the client section shows the config-row notice and configuration goes through the plugin config row. No host patch is applied or required.
 tags:
   - dsh
   - settings
   - exposure
   - apiproxy
-  - exposeToWebClients
   - settings-not-exposed
   - blocker
 applies_when:
@@ -26,10 +25,10 @@ applies_when:
 
 The dsh web Settings page's wire (`settings.describe` / `settings.mutate` / `settings.update` / `settings.replace`) is served by the host's apiproxy. **The host deliberately exposes only an allowlist of namespaces to web clients** — a future registration does NOT become remotely readable/writable by default (this is an explicit design comment in the apiproxy, not an oversight).
 
-## The boundary (historical allowlist, verified at b8343cb; superseded at 20da39e)
+## The boundary (verified at pristine snapshot 20da39e)
 
-- Pre-20da39e: `exposedNamespaces()` = `modelProviderNamespaces()` (settingsNs of llm configurable providers only) ∪ `WEB_SETTINGS_NAMESPACES ['permission']` ∪ `PRODUCT_SETTINGS_NAMESPACES ['ui-onboarding']` — **hardcoded module constants** in the host apiproxy source (packages/host/apiproxy). No registration flag existed; a third-party plugin CANNOT expose its namespace from inside the plugin repo.
-- At snapshot 20da39e the host gained the registration-level opt-in: a namespace registered with `exposeToWebClients: true` reports `exposed: true` on its descriptor, and `exposedNamespaces()` unions exactly those namespaces into the configuration-client boundary. The hardcoded allowlist is no longer the only gate.
+- `exposedNamespaces()` = `modelProviderNamespaces()` (settingsNs of llm configurable providers only) ∪ `WEB_SETTINGS_NAMESPACES ['locale', 'permission', 'ui-conversation', 'ui-theme']` ∪ `PRODUCT_SETTINGS_NAMESPACES ['ui-onboarding', AGENT_PRESET_SETTINGS_NAMESPACE]` — **hardcoded module constants** in the host apiproxy source (packages/host/apiproxy). No registration flag exists.
+- **There is NO `exposeToWebClients` registration option upstream**: `SettingsRegisterOptions` (packages/settings/settings) has no such key — verified twice: (1) `tsc` fails with TS2353 when the option is passed, (2) the pristine 20da39e tree's `exposedNamespaces()` has no descriptor-union logic. A previous belief that "upstream 20da39e natively supports the opt-in" was a **circular verification**: the capability had been implemented as uncommitted edits in a locally-modified staging tree, and the "runtime-verified exposed" probe was run against that modified host, not against pristine upstream.
 - `settings.describe` filters to the exposed set (the client never receives a non-exposed namespace's view); settings mutate/update/replace on a non-exposed namespace → settings-not-exposed refusal.
 
 ## Symptoms
@@ -39,20 +38,20 @@ The dsh web Settings page's wire (`settings.describe` / `settings.mutate` / `set
 
 ## Fix path (current mechanism, verified)
 
-1. **Registration opt-in (the fix, always)**: register the namespace with `exposeToWebClients: true` (the upstream registration-level opt-in, threaded through `installSettingsSection`'s hooks). On dsh ≥ snapshot 20da39e the namespace joins the web configuration boundary with **no host patching** — runtime-verified: `settings.describe` exposes the `advisor` namespace with the opt-in and no host-side change.
-2. **Plugin-side mitigation (always, covers older hosts)**: track namespace presence (`advisorPresent`) and render a distinct "advisor namespace unavailable/unexposed in this dsh build" notice with no Apply when the view is absent; point at the plugin config row in the profile's `cordis.patch.yml` (`- id: advisor` + `config:` map). `/advisor` is a per-session toggle only and cannot supply provider/model.
-3. **Retired: the plugin-shipped host patch mechanism**. The earlier fix shipped a git patch against the host source tree (a shipped patch directory + apply/revert/verify shell scripts with an install-time auto-apply, dsh-llm-fallbacks pattern) that added `'advisor'` to `PRODUCT_SETTINGS_NAMESPACES`. Once the upstream opt-in was runtime-verified, that entire mechanism (patch file, scripts, install-lifecycle automation, host-patch tests) was **retired and deleted** — it modified the operator's dsh source tree on install and had to be re-applied after every dsh upgrade. Do not re-introduce a host-tree patch: the opt-in is the upstream-supported path.
+1. **Plugin-side mitigation (always)**: track namespace presence (`advisorPresent`) and render a distinct "advisor namespace unavailable/unexposed in this dsh build" notice with no Apply when the view is absent; point at the plugin config row in the profile's `cordis.patch.yml` (`- id: advisor` + `config:` map). `/advisor` is a per-session toggle only and cannot supply provider/model. This is the shipping behavior on current dsh builds: the advisor runs fully from the plugin config row.
+2. **Registration with NO opt-in**: register the namespace plainly (`settings.register(ns, Config, { base: entry })`). Passing `exposeToWebClients` is a type error against upstream `SettingsRegisterOptions` and does not expose anything at runtime. Registration itself is all the runtime depends on (the live source/onChange bridge); web exposure is a separate host-side concern the plugin cannot influence from inside its repo.
+3. **Retired: the plugin-shipped host patch mechanism**. An earlier fix shipped a git patch against the host source tree (a shipped patch directory + apply/revert/verify shell scripts with an install-time auto-apply, dsh-llm-fallbacks pattern) that added `'advisor'` to `PRODUCT_SETTINGS_NAMESPACES`. That entire mechanism (patch file, scripts, install-lifecycle automation, host-patch tests) was **retired and deleted** — it modified the operator's dsh source tree on install and had to be re-applied after every dsh upgrade. Do not re-introduce a host-tree patch. Note the same trap applies to the staging tree: editing the running host's $DSH_HOME/source/current worktree (uncommitted) is the SAME class of host modification as the retired patch — it silently regresses on the next snapshot rebuild. Keep the host pristine.
 
 ## Why This Matters
 
-This is a cross-repo boundary that only surfaces at browser-level acceptance: all install/bundle/factory smokes pass while the settings wire silently refuses. Knowing that the boundary is joined by a registration flag (not by patching the host) saves a future plugin both a failed patch lifecycle and a full QC-tri + escalation cycle. The unexposed-namespace notice remains the correct fallback for older hosts that lack the opt-in.
+This is a cross-repo boundary that only surfaces at browser-level acceptance: all install/bundle/factory smokes pass while the settings wire silently refuses. The correct posture for a third-party plugin is: the web Settings section is a **best-effort informational surface**; the plugin config row is the authoritative configuration path. Do not verify host capabilities against a locally-modified host tree — verify against pristine upstream (or a clean snapshot) or the verification is circular.
 
 ## When to Apply
 
-- Before promising a web Settings page for ANY third-party dsh plugin namespace: register with `exposeToWebClients: true` and verify against the running host.
+- Before promising a writable web Settings page for ANY third-party dsh plugin namespace: upstream dsh currently provides no registration-level exposure opt-in, so the page will be notice-only on current builds.
 - When diagnosing a rendered-but-never-saving Settings section.
-- When deciding whether a host change is needed for a third-party feature (it is not, on dsh ≥ 20da39e).
+- When deciding whether a host change is needed for a third-party feature: none is applied or required — configuration flows through the plugin config row.
 
 ## Examples
 
-- The `advisor` settings namespace: registered with `exposeToWebClients: true`; runtime-verified exposed via the upstream opt-in with the shipped host patch reverted. The former plugin-shipped host patch (the shipped patch directory + scripts + host-patch tests) was retired in the same change.
+- The `advisor` settings namespace: registered plainly (no opt-in, no host change). On current dsh builds `settings.describe` does not include `advisor`; the web section shows the config-row notice, and the advisor runs fully from the plugin config row. The former plugin-shipped host patch (patch directory + scripts + host-patch tests) was retired, and the locally-edited staging worktree (which had carried the uncommitted `exposeToWebClients` implementation) was reverted to pristine.

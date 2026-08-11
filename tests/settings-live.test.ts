@@ -206,12 +206,13 @@ async function composeLiveHarness(
   }
   await ctx.plugin(advisorPlugin, fullConfig(config))
   await vi.waitFor(() => {
-    // Registration-level opt-in asserted on the live registration: the
-    // advisor descriptor must report `exposed: true` (the configuration-
-    // client boundary the host's `exposedNamespaces()` unions — no host
-    // allowlist patch on dsh ≥ the 20da39e snapshot).
+    // The registration itself is what the runtime depends on — the advisor
+    // namespace must be registered (its descriptor present in describe).
+    // No `exposeToWebClients` opt-in is asserted: upstream dsh (pristine
+    // 20da39e) has no such option, so the namespace stays off the web
+    // configuration boundary and the client shows the config-row notice.
     expect(
-      ctx.settings.describe().some((d) => d.ns === ADVISOR_SETTINGS_NAMESPACE && d.exposed === true),
+      ctx.settings.describe().some((d) => d.ns === ADVISOR_SETTINGS_NAMESPACE),
     ).toBe(true)
   })
   return { ctx, adapter }

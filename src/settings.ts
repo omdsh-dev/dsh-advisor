@@ -15,14 +15,17 @@
  * every consumer passes it through `resolveAdvisorConfig` — the SSOT for the
  * enabled-without-pair disabled-with-reason resolution (no model call).
  *
- * The namespace joins the configuration-client boundary through the upstream
- * registration opt-in: `exposeToWebClients: true` makes the registration
- * descriptor report `exposed: true`, and on dsh ≥ the 20da39e snapshot the
- * host's `exposedNamespaces()` unions exactly those namespaces — so no host
- * patch is required. Older dsh builds (pre-20da39e) that lack the opt-in
- * simply do not expose the namespace; the client section then renders the
- * unexposed-namespace notice and configuration goes through the plugin config
- * row only.
+ * The namespace does NOT join the configuration-client boundary on the
+ * current upstream dsh builds: the host's `exposedNamespaces()` unions only
+ * model-provider namespaces plus its own product namespaces (locale /
+ * permission / ui-conversation / ui-theme / ui-onboarding / agent-presets) —
+ * there is no registration-level opt-in in upstream dsh (verified against the
+ * pristine 20da39e snapshot; `SettingsRegisterOptions` has no
+ * `exposeToWebClients` key). The advisor namespace is therefore always absent
+ * from `settings.describe` on the web configuration boundary, and the client
+ * section renders the unexposed-namespace notice; configuration goes through
+ * the plugin config row only. No host patch is applied or required for the
+ * plugin to function — the runtime reads the entry config exactly as before.
  *
  * @module dsh-advisor/settings
  */
@@ -75,11 +78,16 @@ export interface AdvisorSettingsBridge {
  * `ctx.inject(['settings'], ...)` child, so with no settings service the
  * source stays the entry config. `setSource` swaps the authoritative thunk
  * (the settings scope's resolved value while attached); `onChange` fires at
- * attach, on committed changes, and at detach. The registration opts into the
- * configuration-client boundary (`exposeToWebClients: true` — the upstream
- * registration-level opt-in, threaded through `installSettingsSection`'s
- * hooks; on dsh ≥ the 20da39e snapshot the host exposes exactly these
- * namespaces, so no host patch is needed).
+ * attach, on committed changes, and at detach. The registration carries NO
+ * `exposeToWebClients` option — upstream dsh (pristine 20da39e) has no such
+ * registration-level opt-in (its `exposedNamespaces()` unions model-provider
+ * plus product namespaces only), so the advisor namespace stays off the web
+ * configuration boundary on every current dsh build; the client section shows
+ * the unexposed-namespace notice and configuration happens through the plugin
+ * config row. (A previous iteration believed the opt-in existed upstream and
+ * declared it here; that conclusion was a circular verification against a
+ * locally-modified staging tree — the option does not exist in upstream types
+ * and has been removed.)
  *
  * qc1 W-5 (multi-fiber dedupe): the host composes several dsh-advisor fibers,
  * and this runs on EVERY instance — but `Settings.register` fails loud on a
@@ -107,13 +115,13 @@ export function installAdvisorSettings(ctx: Context, entry: AdvisorConfig): Advi
     try {
       scope = sctx.settings.register(ADVISOR_SETTINGS_NAMESPACE, Config, {
         base: entry,
-        // Registration-level opt-in: the descriptor reports `exposed: true`,
-        // and the host's `exposedNamespaces()` (dsh ≥ the 20da39e snapshot)
-        // unions such namespaces into the configuration-client boundary — no
-        // host patch is required. Older hosts that lack the opt-in do not
-        // expose the namespace; the section falls back to the config-row
-        // notice.
-        exposeToWebClients: true,
+        // No `exposeToWebClients` here: the option does not exist in upstream
+        // dsh (verified against pristine 20da39e — `SettingsRegisterOptions`
+        // has no such key, and the host's `exposedNamespaces()` unions only
+        // model-provider plus product namespaces). The namespace stays off
+        // the web configuration boundary; the client section falls back to
+        // the config-row notice, and the runtime reads the entry exactly as
+        // it would without a settings service.
       })
     } catch (error) {
       if (!(error instanceof Error) || !error.message.includes('already registered')) throw error

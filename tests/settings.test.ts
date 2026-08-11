@@ -94,10 +94,11 @@ describe('with a settings service (namespace registration)', () => {
     // The plugin-row config is the composition base layer.
     expect(descriptor.base).toEqual(entry)
     expect(descriptor.applies).toBe('live')
-    // Registration-level opt-in: the descriptor reports `exposed: true`, so
-    // the host's `exposedNamespaces()` picks the namespace up without a host
-    // allowlist patch (dsh ≥ the 20da39e snapshot).
-    expect(descriptor.exposed).toBe(true)
+    // No `exposeToWebClients` opt-in: upstream dsh (pristine 20da39e) has no
+    // such registration option (`SettingsRegisterOptions` lacks the key), so
+    // the advisor namespace stays off the web configuration boundary — the
+    // client section shows the config-row notice. Registration itself is all
+    // the runtime depends on; nothing is asserted about web exposure.
     // The source now reads the scope's resolved value (entry-composed).
     expect(bridge.source()).toEqual(entry)
   })

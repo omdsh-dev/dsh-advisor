@@ -68,9 +68,8 @@ dsh plugin --profile web add .   # <name> = your profile name
 `id: advisor`, `name: dsh-advisor` (see `cordis.patch.yml`). A local `add .`
 goes through pnpm's `link:` dependency, for which pnpm does **not** run
 prepare/postinstall — build the bundle with `pnpm install` (or `pnpm build`)
-before adding. No host patching is involved: the `advisor` namespace joins the
-web configuration boundary via the upstream `exposeToWebClients` registration
-opt-in (see [Web Settings exposure](#4-web-settings-exposure)).
+before adding. No host patching is involved: the plugin runs entirely from its
+plugin config row (see [Web Settings exposure](#4-web-settings-exposure)).
 
 ## 3. Tarball install
 
@@ -88,17 +87,17 @@ profile module fallback — no extra install step.
 ## 4. Web Settings exposure
 
 The web Settings page reads and writes settings namespaces through the dsh
-host's apiproxy, which historically exposed only an allowlist of namespaces to
-configuration clients. The `advisor` namespace joins that boundary through the
-**upstream registration opt-in** — `exposeToWebClients: true` on the settings
-registration (see `src/settings.ts`). On dsh ≥ snapshot 20da39e the host
-unions such namespaces into the exposed set, so the Advisor section
-round-trips live with **no host patching required**.
-
-On older dsh builds that lack the opt-in mechanism, the section detects the
-unexposed namespace and shows an explicit notice instead of a writable form;
-the advisor is then configured via the plugin config row in the profile's
-`cordis.patch.yml` (`- id: advisor` + `config:` map).
+host's apiproxy, which exposes only an allowlist of namespaces to
+configuration clients: model-provider namespaces plus product namespaces
+(locale / permission / ui-conversation / ui-theme / ui-onboarding /
+agent-presets). **Upstream dsh has no registration-level opt-in**
+(`exposeToWebClients` does not exist in upstream `SettingsRegisterOptions` —
+verified against the pristine 20da39e snapshot), so the `advisor` namespace is
+**not exposed** on the web configuration boundary on current dsh builds. The
+web section therefore shows an explicit config-row notice instead of a
+writable form, and the advisor is configured via the plugin config row in the
+profile's `cordis.patch.yml` (`- id: advisor` + `config:` map). No host
+patching is applied or required.
 
 ## 5. Verify
 
@@ -107,10 +106,10 @@ dsh --profile web --dump-config   # shows a "# == dsh-advisor" layer with the ad
 dsh --profile web
 ```
 
-After booting, the web Settings page renders the Advisor section; on dsh
-builds that expose the namespace (≥ snapshot 20da39e) the section reads and
-writes the `advisor` settings namespace live — saving applies to new sessions
-immediately.
+After booting, the web Settings page renders the Advisor section; on current
+dsh builds it shows the config-row notice (the namespace is not on the web
+configuration boundary). The advisor runs fully from the plugin config row —
+the notice is informational, not an error.
 
 ## 6. Uninstall
 

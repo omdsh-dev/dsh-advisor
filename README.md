@@ -77,10 +77,13 @@ ones; every surface uses the same key set):
    the plugin-row config without editing it. Saving applies to new sessions
    immediately — no restart (the runtime reads the composed value live).
    Requires a current dsh web build whose shell loads packages that declare
-   `dsh.client` and renders `settings.section` slots. The `advisor` namespace
-   joins the web configuration boundary via the upstream registration opt-in
-   `exposeToWebClients` (dsh ≥ snapshot 20da39e) — no host patching is
-   required.
+   `dsh.client` and renders `settings.section` slots. **On current upstream dsh
+   builds the `advisor` namespace is not exposed on the web configuration
+   boundary** (the host's `exposedNamespaces()` unions only model-provider
+   plus product namespaces — there is no registration-level opt-in upstream,
+   verified against pristine snapshot 20da39e). The web section then shows the
+   config-row notice instead of a writable form, and configuration happens
+   through the plugin config row; no host patching is applied or required.
 3. **`/advisor` command** — per-session and ephemeral: it flips a session
    override, never the persisted config (see [Usage](#usage)).
 
