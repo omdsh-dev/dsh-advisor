@@ -61,7 +61,7 @@ tarball 附带的是构建产物（`lib/` + `cordis.patch.yml` + `patches/` 与 
 
 dsh web Settings 页通过 dsh 宿主的 apiproxy 读写 settings 命名空间，而 apiproxy 只向配置客户端暴露 model-provider 命名空间以及 `permission` / `ui-onboarding`。`advisor` 命名空间在该边界之外：没有 patch 时，页面无法完成 Advisor section 的读写往返——store 检测到未暴露的命名空间后，会显示明确的提示而非可写表单（已交付的插件侧缓解）。
 
-组合包随附这一宿主侧缺口（C-1）的**修复机制**：一个把 `advisor` 加入宿主 exposure allowlist 的最小 git patch（`packages/host/apiproxy/src/api-proxy.ts` 的 `PRODUCT_SETTINGS_NAMESPACES`），外加 apply / revert / verify 脚本与安装期 autopatch——详见 [`patches/README.md`](../patches/README.md)。当宿主尚未暴露 `advisor` 时需要它（钉住的基线 dsh-private b8343cb 未暴露）；每次 dsh 升级后需重跑（升级会重置宿主改动）。
+组合包随附这一宿主侧缺口（C-1）的**修复机制**：一个把 `advisor` 加入宿主 exposure allowlist 的最小 git patch（`packages/host/apiproxy/src/api-proxy.ts` 的 `PRODUCT_SETTINGS_NAMESPACES`），外加 apply / revert / verify 脚本与安装期 autopatch——详见 [`patches/README.md`](../patches/README.md)。当宿主尚未暴露 `advisor` 时需要它（钉住的基线 dsh-private 20da39e 未暴露）；每次 dsh 升级后需重跑（升级会重置宿主改动）。
 
 ```sh
 export DSH_SOURCE_DIR="$DSH_HOME/source/current"   # 或仅设置 DSH_HOME

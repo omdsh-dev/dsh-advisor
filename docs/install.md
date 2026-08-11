@@ -113,7 +113,7 @@ git patch that adds `advisor` to the host's exposure allowlist
 `packages/host/apiproxy/src/api-proxy.ts`), plus apply / revert / verify
 scripts and the install-time autopatch — see
 [`patches/README.md`](../patches/README.md). It is needed when the host does
-not yet expose `advisor` (the pinned baseline dsh-private b8343cb does not);
+not yet expose `advisor` (the pinned baseline dsh-private 20da39e does not);
 re-run after every dsh upgrade, which resets host changes.
 
 ```sh
