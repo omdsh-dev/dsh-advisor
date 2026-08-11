@@ -251,6 +251,23 @@ const turnEnd = (turn: number, reason = 'completed'): EventSpec => ({
   data: { turn, reason: { kind: reason } },
 })
 
+/** A human input committed to the inbox (`agent/inbox/spliced` — log-only, never on the surface). */
+function inboxSpliced(value: string): EventSpec {
+  return {
+    type: 'agent/inbox/spliced',
+    data: {
+      target: 'next-turn',
+      start: 0,
+      inserted: [{
+        id: MessageId(`inbox-${value}`),
+        role: 'user',
+        content: [text(value)],
+        source: { kind: 'user' },
+      }],
+    },
+  }
+}
+
 const compactStart = (): EventSpec => ({ type: 'compact/start', data: { compactionId: 'c1', turn: null } })
 const compactSummary = (): EventSpec => ({
   type: 'compact/summary',
@@ -415,6 +432,166 @@ describe('integration — full advisor loop (spec §7)', () => {
 
     await flush()
     expect(adapter.requests).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5. Agentic reply-complete gate in the composed harness (KD-N4-5)
+//
+// A harness/agentic session emits NO turn/end: human input arrives as
+// `agent/inbox/spliced` and is later committed to the surface as a
+// `user/message` append, and the agent replies with `assistant/message` /
+// `tool/result` inside one long turn. The new observer gate fires on human-
+// input arrival (when an unreviewed assistant increment exists), so the full
+// user → reply → delta → advisor call → guard → delivery chain must run
+// WITHOUT any turn/end — including the immuneTurns fence decrementing across
+// rounds (otherwise a concern steer would permanently downgrade later notes
+// to inject).
+// ---------------------------------------------------------------------------
+
+describe('integration — agentic reply-complete gate drives the loop without turn/end (KD-N4-5)', () => {
+  it('harness stream → advisor calls per round, nit→inject / concern→steer, immuneTurns fence decays', async () => {
+    const { ctx, adapter } = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model', immuneTurns: 3 },
+      [
+        [...textReply('{"note":"concern one","severity":"concern"}')],
+        [...textReply('{"note":"concern two","severity":"concern"}')],
+        [...textReply('{"note":"concern three","severity":"concern"}')],
+        [...textReply('{"note":"concern four","severity":"concern"}')],
+        [...textReply('{"note":"concern five","severity":"concern"}')],
+      ],
+    )
+    const { agent, steer, inject } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+
+    // Five completed agentic rounds, each input entering the inbox and then
+    // committing as a user/message (the realistic dsh agentic flow). No
+    // turn/end anywhere. Each round is fed and awaited SEPARATELY, mirroring
+    // production timing: the previous review's delivery (and fence arming)
+    // settles before the next human input decrements the fence.
+    feed(ctx, session, log, [
+      inboxSpliced('prompt one'), userMessage('prompt one'),
+      assistantMessage('reply one'),
+    ])
+    // Round 2 input → the first review (round 1 completed): concern → STEER, fence arms (3).
+    feed(ctx, session, log, [inboxSpliced('prompt two'), userMessage('prompt two')])
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
+    feed(ctx, session, log, [assistantMessage('reply two')])
+
+    // Round 3 input → review 2: fence 3→2, still armed → INJECT.
+    feed(ctx, session, log, [inboxSpliced('prompt three'), userMessage('prompt three')])
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
+    feed(ctx, session, log, [assistantMessage('reply three')])
+
+    // Round 4 input → review 3: fence 2→1 → INJECT.
+    feed(ctx, session, log, [inboxSpliced('prompt four'), userMessage('prompt four')])
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(2))
+    feed(ctx, session, log, [assistantMessage('reply four')])
+
+    // Round 5 input → review 4: the 3rd completion exhausts the fence and the
+    // note after it steers — which RE-ARMS the fence (delivery.test.ts
+    // semantics: every real steer delivery arms it).
+    feed(ctx, session, log, [inboxSpliced('prompt five'), userMessage('prompt five')])
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(2))
+    feed(ctx, session, log, [assistantMessage('reply five')])
+
+    // Round 6 input → review 5: the re-armed fence (3) decrements to 2 →
+    // INJECT again. The key point: the fence DECAYS across rounds instead of
+    // staying permanently armed after the first steer.
+    feed(ctx, session, log, [inboxSpliced('prompt six'), userMessage('prompt six')])
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(3))
+    expect(steer).toHaveBeenCalledTimes(2)
+
+    // One advisor model call per completed round.
+    expect(adapter.requests).toHaveLength(5)
+
+    // Round 1's delta carries the completed prior round and NOT the trigger.
+    const first = deltaTextOf(adapter.requests[0]!)
+    expect(first).toContain('### Session update')
+    expect(first).toContain('**user**: prompt one')
+    expect(first).toContain('**agent**: reply one')
+    expect(first).not.toContain('prompt two')
+
+    // Each later delta is the increment since the previous review (cursor dedupe).
+    const second = deltaTextOf(adapter.requests[1]!)
+    expect(second).toContain('**user**: prompt two')
+    expect(second).toContain('**agent**: reply two')
+    expect(second).not.toContain('prompt one')
+    const third = deltaTextOf(adapter.requests[2]!)
+    expect(third).toContain('**user**: prompt three')
+    expect(third).toContain('**agent**: reply three')
+    const fifth = deltaTextOf(adapter.requests[4]!)
+    expect(fifth).toContain('**user**: prompt five')
+    expect(fifth).toContain('**agent**: reply five')
+    expect(fifth).not.toContain('prompt six')
+
+    // immuneTurns fence (3): the first concern steers and arms the fence; the
+    // next two rounds decrement it (inject downgrade); the 3rd completion
+    // exhausts it and the note after it steers again (re-arming the fence) —
+    // the fence decays across rounds instead of staying armed forever.
+    const steerMessages = steer.mock.calls.map((call) => (call[0] as UserMessage).content)
+    expect(steerMessages[0]).toEqual([{ type: 'text', text: '[advisor:concern] concern one' }])
+    expect(steerMessages[1]).toEqual([{ type: 'text', text: '[advisor:concern] concern four' }])
+    const injectMessages = inject.mock.calls.map((call) => (call[0] as UserMessage).content)
+    expect(injectMessages).toEqual([
+      [{ type: 'text', text: '[advisor:concern] concern two' }],
+      [{ type: 'text', text: '[advisor:concern] concern three' }],
+      [{ type: 'text', text: '[advisor:concern] concern five' }],
+    ])
+    // Every delivered note carries the advisor source kind.
+    for (const call of [...steer.mock.calls, ...inject.mock.calls]) {
+      expect((call[0] as UserMessage).source.kind).toBe(ADVISOR_SOURCE_KIND)
+    }
+  })
+
+  it('routes a nit note to agent.inject in a harness stream', async () => {
+    const { ctx, adapter } = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [[...textReply('{"note":"add a unit test","severity":"nit"}')]],
+    )
+    const { agent, steer, inject } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+
+    feed(ctx, session, log, [
+      userMessage('prompt one'),
+      assistantMessage('reply one'),
+      userMessage('prompt two'),   // review 1 → nit → inject
+    ])
+
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
+    expect(steer).not.toHaveBeenCalled()
+    const message = inject.mock.calls[0]![0] as UserMessage
+    expect(message.source.kind).toBe(ADVISOR_SOURCE_KIND)
+    expect(message.content).toEqual([{ type: 'text', text: '[advisor:nit] add a unit test' }])
+    expect(adapter.requests).toHaveLength(1)
+  })
+
+  it('mode latch: after a reviewable turn/end the new gate stays dormant', async () => {
+    const { ctx, adapter } = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [[...textReply('{"note":"extract the helper","severity":"concern"}')]],
+    )
+    const { agent, steer } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session, log } = makeSession('s1')
+
+    // A standard turn-driven session completes one turn → reviewed via turn/end.
+    feed(ctx, session, log, simpleTurn(1, 'do the thing', 'done'))
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
+    expect(adapter.requests).toHaveLength(1)
+
+    // Later harness-style input (no turn/end) with unreviewed assistant
+    // increments must NOT fire the new gate for this latched session.
+    feed(ctx, session, log, [
+      userMessage('second'),
+      assistantMessage('reply two'),
+      userMessage('third'),
+    ])
+    await flush()
+    expect(adapter.requests).toHaveLength(1)
+    expect(steer).toHaveBeenCalledTimes(1)
   })
 })
 
