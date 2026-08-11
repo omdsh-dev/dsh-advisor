@@ -69,9 +69,15 @@ export class AdvisorConfigGateway extends GatewayService {
     this.bridge = bridge
     // The settings service is optional (no settings → entry fallback). The
     // inject child activates only when a settings service is composed, mirroring
-    // installAdvisorSettings' conditional child.
+    // installAdvisorSettings' conditional child; the returned disposer mirrors
+    // its detach path — when the settings service goes away, the write channel
+    // is gone with it, and `set` must fail cleanly (KD-G5) instead of holding a
+    // stale service reference.
     ctx.inject(['settings'], (sctx) => {
       this.settings = sctx.settings
+      return () => {
+        this.settings = undefined
+      }
     })
   }
 
@@ -107,7 +113,16 @@ export class AdvisorConfigGateway extends GatewayService {
     if (settings === undefined) {
       throw new Error('advisor: settings service is unavailable — configuration cannot be written')
     }
-    await settings.update(ADVISOR_SETTINGS_NAMESPACE, patch)
+    // Wire normalization (QC tri M-2): JSON cannot carry undefined, so a
+    // null-valued key is a third-party client's way of saying "absent" — the
+    // resolver already treats null as missing on read, but the raw user layer
+    // must not store it. Drop null values before the write (an all-null patch
+    // is a no-op, like the empty patch above).
+    const normalized = Object.fromEntries(
+      Object.entries(patch).filter(([, value]) => value !== null),
+    )
+    if (Object.keys(normalized).length === 0) return { config: this.readConfig() }
+    await settings.update(ADVISOR_SETTINGS_NAMESPACE, normalized)
     return { config: this.readConfig() }
   }
 

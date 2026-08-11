@@ -206,6 +206,66 @@ describe('with a settings service (set writes the user layer)', () => {
     expect(result).toEqual(gateway.get())
     expect(result.config.enabled).toBe(true)
   })
+
+  it('strips null-valued patch keys before the write (raw null never lands in the user layer)', async () => {
+    // JSON cannot carry undefined, so a null value is a third-party client's
+    // way of saying "absent". The resolver already treats null as missing on
+    // read; the raw user layer must not store it either — the null key is
+    // dropped before the settings write, so the base-pinned provider survives.
+    const ctx = new Context()
+    await ctx.plugin(MemorySettings)
+    const bridge = installAdvisorSettings(ctx, entryConfig({ enabled: true, provider: 'deepseek', model: 'deepseek-chat' }))
+    const gateway = new AdvisorConfigGateway(ctx, bridge)
+    await waitRegistered(ctx)
+    await vi.waitFor(() => expect(settingsOf(gateway)).toBeDefined())
+
+    await gateway.set({ provider: null, systemPrompt: 'edited' } as never)
+    const descriptor = ctx.settings.describe().find((d) => d.ns === ADVISOR_SETTINGS_NAMESPACE)!
+    expect(descriptor.user).toEqual({ systemPrompt: 'edited' })
+    // Dropping the null did not clear the base-pinned provider: the composed
+    // config keeps it and the new prompt.
+    expect(gateway.get().config).toEqual({
+      enabled: true,
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      systemPrompt: 'edited',
+      immuneTurns: 3,
+      maxDeltaMessages: 60,
+    })
+  })
+
+  it('an all-null patch is a no-op: nothing written, composed value unchanged', async () => {
+    const ctx = new Context()
+    await ctx.plugin(MemorySettings)
+    const bridge = installAdvisorSettings(ctx, entryConfig({ enabled: true, provider: 'deepseek', model: 'deepseek-chat' }))
+    const gateway = new AdvisorConfigGateway(ctx, bridge)
+    await waitRegistered(ctx)
+    await vi.waitFor(() => expect(settingsOf(gateway)).toBeDefined())
+
+    await gateway.set({ provider: null, model: null } as never)
+    const descriptor = ctx.settings.describe().find((d) => d.ns === ADVISOR_SETTINGS_NAMESPACE)!
+    expect(descriptor.user).toBeUndefined()
+    expect(gateway.get().config.enabled).toBe(true)
+    expect(gateway.get().config.provider).toBe('deepseek')
+  })
+
+  it('set fails cleanly after the settings service is disposed (the inject child disposer clears the capture)', async () => {
+    // The inject child's returned disposer mirrors installAdvisorSettings'
+    // detach path: when the settings service goes away, the captured reference
+    // is cleared, so `set` fails with the KD-G5 error instead of holding a
+    // stale service reference (which would throw from inside the settings
+    // package after disposal).
+    const ctx = new Context()
+    await ctx.plugin(MemorySettings)
+    const bridge = installAdvisorSettings(ctx, entryConfig())
+    const gateway = new AdvisorConfigGateway(ctx, bridge)
+    await waitRegistered(ctx)
+    await vi.waitFor(() => expect(settingsOf(gateway)).toBeDefined())
+
+    ctx.registry.delete(MemorySettings)
+    await vi.waitFor(() => expect(settingsOf(gateway)).toBeUndefined())
+    await expect(gateway.set({ enabled: true })).rejects.toThrow(/settings service is unavailable/)
+  })
 })
 
 // ---------------------------------------------------------------------------

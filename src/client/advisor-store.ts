@@ -335,7 +335,14 @@ export class AdvisorSettingsStore {
       })
     }
     this.seed = draftOfConfig(config)
-    if (!this.draftSeeded) {
+    // The draft is seeded only from a REAL config (QC tri I-1): when the
+    // first load's get fails (gateway down), seeding the schema defaults and
+    // marking the draft seeded would freeze the form on defaults — once the
+    // gateway recovered, the seed would refresh to the actual config but the
+    // draft would not re-seed, and an Apply (diffed against the correct seed)
+    // would send a full-default patch and wipe the real configuration. Gate
+    // both the seed and the seeded flag on the config having resolved.
+    if (!this.draftSeeded && config !== undefined) {
       this.store.update((s) => { s.draft = this.seed })
       this.draftSeeded = true
     }
@@ -507,14 +514,6 @@ export class AdvisorSettingsStore {
     this.setField('maxDeltaMessages', this.clampInt(value, this.store.getSnapshot().draft.maxDeltaMessages ?? 0))
   }
 
-  /** Cancel: re-seed the draft from the latest resolved config and clear feedback. */
-  resetDraft(): void {
-    this.store.update((s) => {
-      s.draft = this.seed
-      s.applyState = { kind: 'idle' }
-    })
-  }
-
   /**
    * Validate the draft (KD-S4 gate), then write the changed keys as a config
    * patch through the gateway channel (`/api/advisor/set`). Any failure
@@ -597,8 +596,8 @@ export class AdvisorSettingsStore {
         // The resolved seed pins the value (composition base and/or user
         // layer): the gateway merge has no unset, so the explicit empty-string
         // override is the reliable clear — the host resolver treats '' as
-        // absent and the next get omits the key, keeping the clear stable
-        // across later applies.
+        // absent and the client reads it as missing (the wire may still carry
+        // the stored ''), keeping the clear stable across later applies.
         patch[key] = ''
       }
       // else: nothing resolves the key → nothing stored, no op.

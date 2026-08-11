@@ -425,9 +425,10 @@ describe('apply patch + seed (gateway channel semantics)', () => {
 
   it('keeps a base-clearing override stable across a second apply (no churn)', async () => {
     // Apply 1 stores the explicit '' override; a later apply with a DIFFERENT
-    // edit must not re-emit the cleared keys — after the reload the get omits
-    // the '' override (the resolver treats it as absent), so the seed no
-    // longer pins provider/model and the second patch carries neither.
+    // edit must not re-emit the cleared keys — after the reload the get
+    // returns the stored '' (the wire may carry it), but the resolver treats
+    // '' as absent and the client reads it as missing, so the seed no longer
+    // pins provider/model and the second patch carries neither.
     const { api, rpc, call } = scriptedApi({
       config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
@@ -578,21 +579,6 @@ describe('invalidations (refreshIfLoaded)', () => {
   })
 })
 
-describe('resetDraft (Cancel)', () => {
-  it('re-seeds the draft from the latest config', async () => {
-    const { api, rpc } = scriptedApi({
-      config: { enabled: true, provider: 'x', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
-    })
-    const store = new AdvisorSettingsStore(api, rpc)
-    await store.load()
-    store.setProvider('')
-    store.setSystemPrompt('changed')
-    store.resetDraft()
-    expect(draftOf(store).provider).toBe('x')
-    expect(draftOf(store).systemPrompt).toBe('')
-  })
-})
-
 describe('model option refresh on invalidation (qc1 W-1 / qc3 S-1)', () => {
   it('a reload after models/changed re-resolves a previously-resolved provider with the NEW options', async () => {
     const { api, rpc, models } = scriptedApi()
@@ -693,6 +679,34 @@ describe('gateway availability (KD-G5 — advisorPresent)', () => {
     expect(state.advisorPresent).toBe(false)
     expect(state.status).toBe('ready')
     expect(state.providers.length).toBeGreaterThan(0) // directory survived
+  })
+
+  it('does not seed the draft from a failed first get, and seeds the REAL config once the gateway recovers (I-1)', async () => {
+    // First load: the get fails (gateway not ready). The draft must NOT be
+    // seeded with schema defaults NOR marked seeded — otherwise a later Apply
+    // (diffed against the recovered real seed) would send a full-default
+    // patch and wipe the actual configuration.
+    const { api, rpc, get } = scriptedApi()
+    get
+      .mockImplementationOnce(() => Promise.resolve(failResult('advisor gateway is not ready')))
+      .mockImplementationOnce(() => Promise.resolve(okResult({
+        config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20 },
+      })))
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    let state = store.store.getSnapshot()
+    expect(state.advisorPresent).toBe(false)
+    // The pristine (unseeded) draft stays the schema defaults — NOT marked
+    // seeded, so the next successful load can still seed.
+    expect(state.draft).toEqual({ enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 })
+    // Gateway recovers: the next load seeds the ACTUAL config.
+    await store.load()
+    state = store.store.getSnapshot()
+    expect(state.advisorPresent).toBe(true)
+    expect(state.draft).toEqual({
+      enabled: true, provider: 'deepseek-official', model: 'ds-a',
+      systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
+    })
   })
 })
 
