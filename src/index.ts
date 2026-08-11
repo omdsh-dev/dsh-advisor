@@ -187,7 +187,12 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       provider: effective.provider!,
       model: effective.model!,
       systemPrompt: safeResolved().systemPrompt || DEFAULT_ADVISOR_SYSTEM_PROMPT,
-      llm: ctx.llm,
+      // n4 root-cause (host-observed NO_ADAPTER): this plugin's ctx may live in
+      // an isolated scope whose local llm service lacks the provider adapters
+      // (adapter registrations live on the application root's LlmService). Resolve
+      // the llm service from the APPLICATION ROOT so the advisor's model calls
+      // reach the registered deepseek-official adapter.
+      llm: ((ctx as unknown as { root?: { get?: (k: string) => unknown } }).root?.get?.('llm') as typeof ctx.llm) ?? ctx.llm,
       onNote: (note: AdviceNote) => {
         // Accepted notes only — the runtime's emission guard (T5) already
         // filtered suppressed ones. T6 routes the accepted note to the primary

@@ -37,6 +37,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { Context } from 'cordis'
 import { CallId, LlmAdapter, LlmService, MessageId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, StreamChunk, UserMessage } from '@deepseek-ai/dsh-llm'
+import type { LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent, SurfaceOp } from '@deepseek-ai/dsh-session'
 import type { CommandDefinition, CommandResult } from '@deepseek-ai/dsh-commands'
@@ -79,6 +80,15 @@ const permanentFailure = (): { message: string; code: string } => ({
  * suffices (id/name = provider).
  */
 class StubAdapter extends LlmAdapter {
+  override resolveModel(provider: string, model: string, _signal?: undefined): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({
+      provider,
+      id: model,
+      name: model,
+      reasoning: { efforts: [{ id: 'off' as never, name: 'Off' }, { id: 'high' as never, name: 'High' }], defaultEffort: 'off' as never },
+    })
+  }
+
   readonly requests: GenerateOptions[] = []
 
   constructor(private readonly script: ReadonlyArray<readonly StreamChunk[]>) {
@@ -380,7 +390,7 @@ describe('integration — full advisor loop (spec §7)', () => {
     const options = adapter.requests[0]!
     expect(options.provider).toBe('stub')
     expect(options.model).toBe('stub-model')
-    expect(options.maxTokens).toBe(256)
+    expect(options.maxTokens).toBe(5120)
     expect('purpose' in options).toBe(false) // KD-5: purpose left unset
     const delta = deltaTextOf(options)
     expect(delta).toContain('### Session update')

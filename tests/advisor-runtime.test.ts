@@ -31,7 +31,7 @@ import { Context } from 'cordis'
 // default, so `LlmService` (named export of @deepseek-ai/dsh-llm) is imported
 // by name, not as the default.
 import { LlmService, LlmAdapter } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, LlmFailure, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, LlmFailure, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { AdvisorRuntime, extractAdviceNote } from '../src/advisor-runtime'
 import type { AdvisorLlm, AdvisorRuntimeOptions, AdvisorRuntimeStatus, AdviceNote } from '../src/advisor-runtime'
@@ -137,7 +137,8 @@ describe('AdvisorRuntime — drain calls llm.stream once per delta with expected
       provider: 'test-provider',
       model: 'test-model',
       system: TEST_SYSTEM_PROMPT,
-      maxTokens: 256,
+      maxTokens: 5120,
+      reasoningEffort: 'off',
     })
     // KD-5: purpose is a closed union and must be left unset for an advisor call.
     expect(options.purpose).toBeUndefined()
@@ -462,6 +463,15 @@ describe('AdvisorRuntime — dispose (KD-5 in-flight abort)', () => {
 // ---------------------------------------------------------------------------
 
 class RecordingAdapter extends LlmAdapter {
+  override resolveModel(provider: string, model: string, _signal?: undefined): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({
+      provider,
+      id: model,
+      name: model,
+      reasoning: { efforts: [{ id: 'off' as never, name: 'Off' }, { id: 'high' as never, name: 'High' }], defaultEffort: 'off' as never },
+    })
+  }
+
   readonly requests: GenerateOptions[] = []
 
   constructor(private readonly script: readonly StreamChunk[]) {
@@ -498,7 +508,8 @@ describe('AdvisorRuntime — composed with a real LlmService + registered adapte
       provider: 'test-provider',
       model: 'test-model',
       system: TEST_SYSTEM_PROMPT,
-      maxTokens: 256,
+      maxTokens: 5120,
+      reasoningEffort: 'off',
     })
     expect(adapter.requests[0]!.purpose).toBeUndefined()
     expect('purpose' in adapter.requests[0]!).toBe(false)

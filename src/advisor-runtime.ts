@@ -607,7 +607,17 @@ export class AdvisorRuntime {
         content: [{ type: 'text', text: delta.markdown }],
         source: { kind: 'user' },
       })],
-      maxTokens: this.maxTokens,
+      // n4 root-cause (host-observed "reply yielded no note"): deepseek-v4-flash
+      // is a reasoning model — with maxTokens=256 the reasoning stream consumed
+      // the whole budget, the text output came back EMPTY (finish: max-tokens),
+      // and KD-2 dropped every reply. Turn reasoning OFF so the budget goes to
+      // the JSON frame, and raise it for headroom. The advisor's job is a short
+      // structured note — reasoning is not needed. The branded ReasoningEffortId
+      // only accepts values the adapter defines ('off' is llm-deepseek's).
+      reasoningEffort: 'off' as never,
+      // n4 user direction: amplify the token budget 20x (256 -> 5120) so even a
+      // reasoning-heavy reply cannot starve the JSON frame.
+      maxTokens: 5120,
       signal,
       // KD-5: `purpose` is a closed union ('compaction' | 'session-title'); an
       // advisor call is an ordinary conversation request and leaves it unset.

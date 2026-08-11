@@ -43,6 +43,7 @@ import { Context } from 'cordis'
 import { MemorySettings } from './support/memory-settings'
 import { LlmAdapter, LlmService, MessageId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent, SurfaceOp } from '@deepseek-ai/dsh-session'
 import type { CommandDefinition, CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
@@ -70,6 +71,15 @@ const textReply = (text: string): readonly StreamChunk[] => [
  * must observe a call actually routed to the new provider.
  */
 class StubAdapter extends LlmAdapter {
+  override resolveModel(provider: string, model: string, _signal?: undefined): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({
+      provider,
+      id: model,
+      name: model,
+      reasoning: { efforts: [{ id: 'off' as never, name: 'Off' }, { id: 'high' as never, name: 'High' }], defaultEffort: 'off' as never },
+    })
+  }
+
   readonly requests: GenerateOptions[] = []
 
   constructor(private readonly script: ReadonlyArray<readonly StreamChunk[]>) {
@@ -93,6 +103,15 @@ class StubAdapter extends LlmAdapter {
  * at that point would abort the in-flight call AND drop the queued delta.
  */
 class GatedAdapter extends LlmAdapter {
+  override resolveModel(provider: string, model: string, _signal?: undefined): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({
+      provider,
+      id: model,
+      name: model,
+      reasoning: { efforts: [{ id: 'off' as never, name: 'Off' }, { id: 'high' as never, name: 'High' }], defaultEffort: 'off' as never },
+    })
+  }
+
   readonly requests: GenerateOptions[] = []
   private gate: Promise<void> | undefined
   private releaseGate: (() => void) | undefined
