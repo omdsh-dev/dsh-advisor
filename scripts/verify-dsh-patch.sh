@@ -173,14 +173,21 @@ fi
 # Probes: (relative path|match string|label) with an optional match-mode field:
 #   F = fixed string (grep -F, default); E = extended regex (grep -E).
 # The src / tsc-emit probes keep the literal single-quoted source marker. The
-# tsdown bundle (lib/index.js) probe is quote- and order-agnostic: it greps the
-# PRODUCT_SETTINGS_NAMESPACES assignment context (up to the statement's `;`)
-# for `advisor`, so it matches both the single-quoted source form and the
-# double-quoted bundle form (`new Set(["ui-onboarding", "advisor"])`).
+# tsdown bundle (lib/index.js) probe is split into TWO line-based probes
+# because the new tsdown (rolldown) emits the Set multi-line:
+#   const PRODUCT_SETTINGS_NAMESPACES = new Set([
+#     "ui-onboarding",
+#     "advisor",
+#     ...
+#   ]);
+# grep -E is line-based, so a single [^;]* context probe cannot span the
+# newlines. The two probes check the constant declaration line and the quoted
+# allowlist entry line separately — quote- and order-agnostic.
 PROBES=(
   "packages/host/apiproxy/src/api-proxy.ts|'ui-onboarding', 'advisor'|host-apiproxy source (src/api-proxy.ts)"
   "packages/host/apiproxy/lib/types/api-proxy.js|'ui-onboarding', 'advisor'|host-apiproxy build (lib/types/api-proxy.js)"
-  "packages/host/apiproxy/lib/index.js|PRODUCT_SETTINGS_NAMESPACES[^;]*advisor|host-apiproxy bundle (lib/index.js)|E"
+  "packages/host/apiproxy/lib/index.js|PRODUCT_SETTINGS_NAMESPACES = new Set\\(|host-apiproxy bundle (lib/index.js — allowlist constant)|E"
+  "packages/host/apiproxy/lib/index.js|^[[:space:]]*\"advisor\"|host-apiproxy bundle (lib/index.js — advisor allowlist entry)|E"
 )
 
 EXPECT_LABEL="present"

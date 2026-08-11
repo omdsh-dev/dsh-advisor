@@ -109,11 +109,15 @@ describe('host exposure patch artifact (C-1)', () => {
     expect(probes, 'bundle probe entry for the tsdown bundle (package main)').toContain(
       'packages/host/apiproxy/lib/index.js',
     )
-    // The bundle probe is quote-agnostic: it greps the PRODUCT_SETTINGS_NAMESPACES
-    // assignment context for `advisor` (tsdown emits double-quoted literals, so
-    // the single-quoted source marker never appears there).
-    expect(probes, 'bundle probe greps the assignment context, quote-agnostic').toContain(
-      'PRODUCT_SETTINGS_NAMESPACES[^;]*advisor',
+    // The bundle probe is split into two line-based probes: the new tsdown
+    // (rolldown) emits the Set multi-line, so no single context regex can span
+    // the newlines. The two probes pin the constant declaration line and the
+    // quoted allowlist entry line separately (quote- and order-agnostic).
+    expect(probes, 'bundle probe pins the allowlist constant declaration line').toContain(
+      'PRODUCT_SETTINGS_NAMESPACES = new Set\\\\(',
+    )
+    expect(probes, 'bundle probe pins the quoted advisor allowlist entry line').toContain(
+      '^[[:space:]]*\\"advisor\\"',
     )
     // The source / tsc-emit probes keep the single-quoted source form.
     expect(probes, 'source/build probes keep the single-quoted marker').toContain(MARKER)
