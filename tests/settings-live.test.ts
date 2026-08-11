@@ -206,7 +206,13 @@ async function composeLiveHarness(
   }
   await ctx.plugin(advisorPlugin, fullConfig(config))
   await vi.waitFor(() => {
-    expect(ctx.settings.describe().some((d) => d.ns === ADVISOR_SETTINGS_NAMESPACE)).toBe(true)
+    // Registration-level opt-in asserted on the live registration: the
+    // advisor descriptor must report `exposed: true` (the configuration-
+    // client boundary the host's `exposedNamespaces()` unions — no host
+    // allowlist patch on dsh ≥ the 20da39e snapshot).
+    expect(
+      ctx.settings.describe().some((d) => d.ns === ADVISOR_SETTINGS_NAMESPACE && d.exposed === true),
+    ).toBe(true)
   })
   return { ctx, adapter }
 }
