@@ -38,7 +38,7 @@
  * T8 integration suite); `feed` mirrors the cordis `session/event` listener.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from 'cordis'
 import { MemorySettings } from './support/memory-settings'
 import { LlmAdapter, LlmService, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -52,6 +52,14 @@ import type { AdvisorConfig } from '../src/config'
 import { ADVISOR_SETTINGS_NAMESPACE } from '../src/settings'
 import { TRUNCATION_MARKER } from '../src/transcript'
 import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from '../src/prompts'
+
+// n4 QC F-6: the single-reviewer guard is process-global; each test case
+// composes a fresh harness, so the flag must reset between cases (production
+// keeps the first-claim-wins behavior).
+beforeEach(() => {
+  delete (globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']
+})
+
 
 // ---------------------------------------------------------------------------
 // Stub adapter (T4/T8 pattern: real LlmService + ctx.llm.registerAdapter)

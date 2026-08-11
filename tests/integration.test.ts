@@ -33,7 +33,7 @@
  * appended event delivered once against the growing live log).
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from 'cordis'
 import { CallId, LlmAdapter, LlmService, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, StreamChunk, UserMessage } from '@deepseek-ai/dsh-llm'
@@ -46,6 +46,14 @@ import * as advisorPlugin from '../src/index'
 import type { AdvisorConfig } from '../src/config'
 import { ADVISOR_MAX_TOKENS } from '../src/advisor-runtime'
 import { ADVISOR_SOURCE_KIND } from '../src/kinds'
+
+// n4 QC F-6: the single-reviewer guard is process-global; each test case
+// composes a fresh harness, so the flag must reset between cases (production
+// keeps the first-claim-wins behavior).
+beforeEach(() => {
+  delete (globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']
+})
+
 
 // ---------------------------------------------------------------------------
 // Stub adapter (T4 pattern: real LlmService + ctx.llm.registerAdapter)
@@ -985,5 +993,55 @@ describe('integration — root-llm resolution from an isolated child scope (qc1 
     const message = steer.mock.calls[0]![0] as UserMessage
     expect(message.source.kind).toBe(ADVISOR_SOURCE_KIND)
     expect(message.content).toEqual([{ type: 'text', text: '[advisor:concern] root adapter reached' }])
+  })
+})
+
+
+// ---------------------------------------------------------------------------
+// n4 QC F-6 — single-reviewer guard
+// ---------------------------------------------------------------------------
+
+describe('single-reviewer guard (n4 QC F-6)', () => {
+  it('a second apply on the same process does not wire a second reviewer (one model call per round)', async () => {
+    const first = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [textReply('{"note":"first round"}')],
+    )
+    const { session, log } = makeSession()
+    const fake = makeFakeAgent()
+    first.ctx.emit('agent/created', { agent: fake.agent })
+    first.ctx.emit('session/event', session, {
+      type: 'user/message', seq: 0, time: 0, data: { id: 'u0', role: 'user', content: [], source: { kind: 'user' } },
+    } as never)
+    log.push({ type: 'user/message', seq: 0, time: 0, data: { id: 'u0', role: 'user', content: [], source: { kind: 'user' } } } as never)
+    log.push({ type: 'assistant/message', seq: 1, time: 0, data: { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'wrote a test' }], source: { kind: 'model', provider: 'stub', model: 'stub-model' } } }, surfaceOp: 'append' } as never)
+    log.push({ type: 'step/start', seq: 2, time: 0, data: { turn: 1, step: 1 } } as never)
+    // Complete the round: turn/end triggers the standard review path.
+    log.push({ type: 'turn/end', seq: 3, time: 0, data: { turn: 1, reason: { kind: 'completed' } } } as never)
+    first.ctx.emit('session/event', session, log[3] as never)
+
+    // Now compose a SECOND instance of the same plugin module in the same process.
+    const second = await composeHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model' },
+      [textReply('{"note":"second round"}')],
+    )
+    // The guard is process-global: the second apply must not have claimed the
+    // reviewer role. Feed the same round shape through the second harness.
+    const session2 = makeSession()
+    const fake2 = makeFakeAgent('s2')
+    second.ctx.emit('agent/created', { agent: fake2.agent })
+    session2.log.push({ type: 'user/message', seq: 0, time: 0, data: { id: 'u0', role: 'user', content: [], source: { kind: 'user' } } } as never)
+    session2.log.push({ type: 'assistant/message', seq: 1, time: 0, data: { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'wrote a test' }], source: { kind: 'model', provider: 'stub', model: 'stub-model' } } }, surfaceOp: 'append' } as never)
+    session2.log.push({ type: 'step/start', seq: 2, time: 0, data: { turn: 1, step: 1 } } as never)
+    session2.log.push({ type: 'turn/end', seq: 3, time: 0, data: { turn: 1, reason: { kind: 'completed' } } } as never)
+    second.ctx.emit('session/event', session2.session, session2.log[3] as never)
+
+    // The second harness has no reviewer: its adapter must never be called and
+    // its fake agent must never receive an injection.
+    expect(second.adapter.requests).toHaveLength(0)
+    expect(fake2.inject).not.toHaveBeenCalled()
+    expect(fake2.steer).not.toHaveBeenCalled()
+    // The first harness keeps working (single reviewer).
+    expect(first.adapter.requests.length).toBeGreaterThanOrEqual(1)
   })
 })

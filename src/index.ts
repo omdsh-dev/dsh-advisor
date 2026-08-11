@@ -60,7 +60,30 @@ export const inject = ['sessions', 'agents', 'llm']
 export { Config } from './config'
 export type { AdvisorConfig, ResolvedAdvisorConfig } from './config'
 
+/** n4 QC F-6: single-reviewer guard. The host composes multiple dsh-advisor
+ * fibers (observed: 3 active); with the global session/event subscription every
+ * instance would observe every session and N×-review/N×-call per round. The
+ * FIRST apply to claim the reviewer role wires the observer/runtime/delivery
+ * and the /advisor commands; later instances register settings only (the
+ * namespace registration is idempotent by design) and stay inert otherwise.
+ * The flag rides globalThis so it survives even module-copy divergence. */
+const REVIEWER_KEY = '__dshAdvisorReviewer__'
+function claimReviewer(): boolean {
+  const g = globalThis as Record<string, unknown>
+  if (g[REVIEWER_KEY] === true) return false
+  g[REVIEWER_KEY] = true
+  return true
+}
+
 export function apply(ctx: Context, config: AdvisorConfig) {
+  const reviewer = claimReviewer()
+  if (!reviewer) {
+    // Non-reviewer instance: settings namespace registration still applies
+    // (installAdvisorSettings below runs unconditionally); everything else —
+    // observer, runtimes, delivery, commands — is skipped.
+    ctx.logger('advisor').debug('non-reviewer instance — observer/runtime/commands skipped (single-reviewer guard)')
+    // Continue: the shared code path below must not run for this instance.
+  }
   // T2: the explicit provider/model gate — no model call without both
   // (spec §5.2). Unknown keys / malformed config throw here, rejecting the
   // plugin row at load; the gate resolves to disabled-with-reason instead.
@@ -218,6 +241,11 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     runtime.dispose()
   }
 
+  // n4 QC F-6: non-reviewer instances stop here — observer/runtime/delivery
+  // and the /advisor commands are wired only by the single claimed reviewer.
+  // Settings registration (installAdvisorSettings above) already ran, so the
+  // namespace stays available on every composition.
+  if (!reviewer) return
   const observer = new SessionTranscriptObserver({
     maxDeltaMessages: resolved().maxDeltaMessages,
     onSteppedTurnEnd: (sessionId: string) => {
