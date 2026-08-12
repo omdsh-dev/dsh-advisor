@@ -966,6 +966,84 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
     expect(store.store.getSnapshot().applyState.kind).toBe('error')
     expect(store.store.getSnapshot().dirty).toBe(true) // no write, no re-seed
   })
+
+  it('a refresh whose host config now matches the draft flips dirty back to false (S-2 pin)', async () => {
+    // The claimed direction at advisor-store.ts load(): "A refresh whose host
+    // values now match the draft (another session saved) correctly flips
+    // dirty back to false." The invalidation test keeps the draft across a
+    // refresh but never asserted the dirty recompute — this pins it (qc2 S-2).
+    const { api, rpc, get } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    store.setSystemPrompt('review terser')
+    expect(store.store.getSnapshot().dirty).toBe(true)
+    // Another session saved the same value on the host: the next refresh's
+    // get returns a config EQUAL to the draft → load() re-seeds and derives
+    // clean, while the draft itself survives (never re-seeded).
+    get.mockReturnValueOnce(Promise.resolve(okResult({
+      config: { enabled: false, systemPrompt: 'review terser', immuneTurns: 3, maxDeltaMessages: 60 },
+    })))
+    await store.load()
+    const state = store.store.getSnapshot()
+    expect(state.draft.systemPrompt).toBe('review terser') // draft survives the refresh
+    expect(state.dirty).toBe(false) // host matches the draft → clean
+  })
+
+  it('keeps the draft dirty when the client gate blocks apply (the force-down patch is unreachable from the card) (S-3 pin)', async () => {
+    // qc2 S-3 (deferred — plan Risks, 2026-08-12): the host force-down
+    // (resolved enabled:false + disabledReason) is reachable only if a patch
+    // the client gate would block still reaches the host. This pin documents
+    // that such a patch cannot be produced from the card: enabled without
+    // provider/model is blocked by the gate BEFORE any write, dirty stays
+    // true for the user to complete, and advisor/set is never called.
+    const { api, rpc, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    store.setEnabled(true) // enabled + no provider/model → the KD-S4 gate blocks apply
+    expect(store.store.getSnapshot().dirty).toBe(true)
+    await store.apply()
+    const state = store.store.getSnapshot()
+    expect(state.applyState.kind).toBe('error')
+    if (state.applyState.kind === 'error' && state.applyState.failure.kind === 'gate') {
+      expect(state.applyState.failure.reason).toBe('provider')
+    }
+    expect(state.dirty).toBe(true) // nothing written, nothing re-seeded — the form stays
+    expect(set).not.toHaveBeenCalled()
+  })
+})
+
+describe('read-only apply guard (qc2 W-1 — writable flips mid-session)', () => {
+  it('refuses to apply when a refresh flipped writable false while edits are staged (advisor/set never called)', async () => {
+    // W-1 store pin: the card fix (saveDisabled carries !writable) covers the
+    // UI, but a write must never be issued in an environment the UI declares
+    // read-only. A mid-session invalidation refresh can return writable=false
+    // while staged edits survive — dirty stays true in read-only, and apply()
+    // must refuse instead of issuing the write.
+    const { api, rpc, describe, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    store.setSystemPrompt('review terser')
+    expect(store.store.getSnapshot().dirty).toBe(true)
+    // The invalidation refresh reports the settings service as read-only now
+    // (same scripted config — the staged edits still differ from the host).
+    describe.mockReturnValueOnce(Promise.resolve(ok({
+      writable: false,
+      hasDocument: false,
+      namespaces: [deepseekNs(), piAiNs()],
+    })))
+    await store.load()
+    let state = store.store.getSnapshot()
+    expect(state.writable).toBe(false)
+    expect(state.dirty).toBe(true) // the W-1 reachability: dirty survives read-only
+    // The store guard refuses the write: an error state, no advisor/set call.
+    await store.apply()
+    state = store.store.getSnapshot()
+    expect(state.applyState.kind).toBe('error')
+    if (state.applyState.kind === 'error' && state.applyState.failure.kind === 'message') {
+      expect(state.applyState.failure.message).toContain('read-only')
+    }
+    expect(set).not.toHaveBeenCalled()
+  })
 })
 
 describe('card scenario (store-level load/save over the gateway channel)', () => {

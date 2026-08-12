@@ -537,16 +537,35 @@ export class AdvisorSettingsStore {
   }
 
   /**
-   * Validate the draft (KD-S4 gate), then write the changed keys as a config
-   * patch through the gateway channel (`/api/advisor/set`). Any failure
-   * (business rejection or transport) surfaces the message failure and keeps
-   * the form for retry — the gateway merge has no revision guard, so the old
-   * settings-conflict branch is replaced by plain error handling (KD-G3).
-   * Nothing to write → the apply reports saved without a call.
+   * Refuse in a read-only environment (store-side defense-in-depth for the
+   * W-1 invariant — a write must never be issued when the UI declares the
+   * settings service read-only), then validate the draft (KD-S4 gate) and
+   * write the changed keys as a config patch through the gateway channel
+   * (`/api/advisor/set`). Any failure (business rejection or transport)
+   * surfaces the message failure and keeps the form for retry — the gateway
+   * merge has no revision guard, so the old settings-conflict branch is
+   * replaced by plain error handling (KD-G3). Nothing to write → the apply
+   * reports saved without a call.
    * @returns nothing; the apply state carries the outcome.
    */
   async apply(): Promise<void> {
     const state = this.store.getSnapshot()
+    // W-1 (qc2 fix wave): the writable guard comes FIRST — before the client
+    // gate check AND the empty-patch shortcut. In read-only the patch cannot
+    // land, so the failure reports that instead of claiming a no-op save;
+    // the card's disabled terms cover the UI, this guard closes the
+    // store-side gap a mid-session writable flip (invalidation refresh
+    // returns writable=false while staged edits survive) would otherwise
+    // leave open.
+    if (!state.writable) {
+      this.store.update((s) => {
+        s.applyState = {
+          kind: 'error',
+          failure: { kind: 'message', message: 'advisor: settings service is read-only — configuration cannot be written' },
+        }
+      })
+      return
+    }
     const gate = gateFailure(state.draft)
     if (gate !== undefined) {
       this.store.update((s) => {

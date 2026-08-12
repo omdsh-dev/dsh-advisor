@@ -32,12 +32,6 @@
  * hook reads the current snapshot per render (no uSES subscription), so
  * assertions after a store mutation re-render the card explicitly
  * (`rerender`), exactly like the ui-models specs do.
- *
- * TASK 2 handoff (plan dsh-advisor-plugin-config-card-ux, task 2): the
- * store's `dirty` derivation (`patchFor` non-empty) lands in task 2; until
- * then every assertion marked `// TASK2` fails by design — the card already
- * consumes `state.dirty` per the interface (the pill, and the save/discard
- * disabled terms), and task 2 flips those assertions to green.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -338,27 +332,23 @@ describe('AdvisorCard chrome (upstream PluginCard contract)', () => {
   })
 
   it('shows the unsaved pill after an edit and keeps it while collapsed', async () => {
-    // TASK2: state.dirty is task 2's derivation (patchFor non-empty); until
-    // it lands the pill never appears and these assertions fail by design.
     const { view, props } = await mountCard()
     toggleCard()
     fireEvent.change(screen.getByLabelText(en.systemPrompt), { target: { value: 'review terser' } })
     view.rerender(<AdvisorCard {...props} />)
-    expect(screen.getByText(en.unsaved)).toBeTruthy() // TASK2
+    expect(screen.getByText(en.unsaved)).toBeTruthy()
     // Staged edits outlive collapsing — the pill rides the header (upstream).
     toggleCard()
-    expect(screen.getByText(en.unsaved)).toBeTruthy() // TASK2
+    expect(screen.getByText(en.unsaved)).toBeTruthy()
   })
 
   it('clears the unsaved pill after discard', async () => {
-    // TASK2: needs the dirty derivation — the pill appears once the edit
-    // stages (first assertion) and the discard button enables (click below).
     const { view, props } = await mountCard()
     toggleCard()
     fireEvent.change(screen.getByLabelText(en.systemPrompt), { target: { value: 'review terser' } })
     view.rerender(<AdvisorCard {...props} />)
-    expect(screen.getByText(en.unsaved)).toBeTruthy() // TASK2
-    fireEvent.click(screen.getByRole('button', { name: en.discard })) // TASK2
+    expect(screen.getByText(en.unsaved)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: en.discard }))
     view.rerender(<AdvisorCard {...props} />)
     expect(screen.queryByText(en.unsaved)).toBeNull()
   })
@@ -371,11 +361,10 @@ describe('AdvisorCard chrome (upstream PluginCard contract)', () => {
     expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: en.discard }) as HTMLButtonElement).disabled).toBe(true)
     // One staged edit → both actions become available.
-    // TASK2: the dirty derivation flips these two assertions to green.
     fireEvent.change(screen.getByLabelText(en.systemPrompt), { target: { value: 'review terser' } })
     view.rerender(<AdvisorCard {...props} />)
-    expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false) // TASK2
-    expect((screen.getByRole('button', { name: en.discard }) as HTMLButtonElement).disabled).toBe(false) // TASK2
+    expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: en.discard }) as HTMLButtonElement).disabled).toBe(false)
   })
 })
 
@@ -496,12 +485,10 @@ describe('AdvisorCard', () => {
     expect(screen.getByText(en.staleProvider)).toBeTruthy()
     // The warning does not gate the save: once an edit is staged the save is
     // enabled even while the provider is stale (keep or reselect — the
-    // upstream contract disables a clean form's save, so the enabled
-    // assertion needs the dirty derivation first).
-    // TASK2: flips to green once state.dirty derives.
+    // upstream contract disables a clean form's save).
     fireEvent.change(screen.getByLabelText(en.systemPrompt), { target: { value: 'x' } })
     view.rerender(<AdvisorCard {...props} />)
-    expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false) // TASK2
+    expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false)
     // Reselecting a valid provider clears the warning.
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek-official' } })
     view.rerender(<AdvisorCard {...props} />)
@@ -561,11 +548,9 @@ describe('AdvisorCard', () => {
     view.rerender(<AdvisorCard {...props} />)
     fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'ds-b' } })
     view.rerender(<AdvisorCard {...props} />)
-    // TASK2: the save button is disabled while the form is clean
-    // (!dirty || invalid || saving) — the staged edits above enable it once
-    // task 2 derives dirty; until then this click is a no-op and the flow
-    // below fails by design.
-    fireEvent.click(screen.getByRole('button', { name: en.save })) // TASK2
+    // The staged edits above enable the save (!dirty no longer blocks the
+    // upstream terms) — the click writes through the gateway channel.
+    fireEvent.click(screen.getByRole('button', { name: en.save }))
     await waitFor(() => expect(scripted.set).toHaveBeenCalled())
     // The write is a minimal patch over the gateway channel: only the changed
     // keys (enabled + the new pair); the untouched scalars stay out.
@@ -600,9 +585,7 @@ describe('AdvisorCard', () => {
     view.rerender(<AdvisorCard {...props} />)
     fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'ds-a' } })
     view.rerender(<AdvisorCard {...props} />)
-    // TASK2: needs the dirty derivation so the save button enables and the
-    // in-flight state is reachable (until then the click is a no-op).
-    fireEvent.click(screen.getByRole('button', { name: en.save })) // TASK2
+    fireEvent.click(screen.getByRole('button', { name: en.save }))
     view.rerender(<AdvisorCard {...props} />)
     // Save in flight (the set promise is still pending): the Discard control
     // is disabled alongside Save.
@@ -627,14 +610,14 @@ describe('AdvisorCard', () => {
     view.rerender(<AdvisorCard {...props} />)
     expect(controller.store.getSnapshot().draft.enabled).toBe(false)
     expect(controller.store.getSnapshot().draft.provider).toBe('openai')
-    // TASK2: the discard button is disabled while the form is clean
-    // (!dirty || saving); the edits above make the draft dirty once task 2
-    // derives it, enabling the click that rewinds the draft.
-    fireEvent.click(screen.getByRole('button', { name: en.discard })) // TASK2
+    // The discard button is disabled while the form is clean (!dirty ||
+    // saving); the edits above make the draft dirty, enabling the click that
+    // rewinds the draft.
+    fireEvent.click(screen.getByRole('button', { name: en.discard }))
     view.rerender(<AdvisorCard {...props} />)
-    expect(controller.store.getSnapshot().draft.enabled).toBe(true) // TASK2
-    expect(controller.store.getSnapshot().draft.provider).toBe('deepseek-official') // TASK2
-    expect(controller.store.getSnapshot().draft.model).toBe('ds-a') // TASK2
+    expect(controller.store.getSnapshot().draft.enabled).toBe(true)
+    expect(controller.store.getSnapshot().draft.provider).toBe('deepseek-official')
+    expect(controller.store.getSnapshot().draft.model).toBe('ds-a')
     // Discard is a client-side rewind — no gateway write happened.
     expect(scripted.set).not.toHaveBeenCalled()
   })
@@ -659,17 +642,15 @@ describe('AdvisorCard', () => {
     view.rerender(<AdvisorCard {...props} />)
     fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'ds-a' } })
     view.rerender(<AdvisorCard {...props} />)
-    // TASK2: needs the dirty derivation so the save button enables and the
-    // rejection is reachable (until then the click is a no-op).
-    fireEvent.click(screen.getByRole('button', { name: en.save })) // TASK2
+    fireEvent.click(screen.getByRole('button', { name: en.save }))
     await waitFor(() => expect(controller.store.getSnapshot().applyState.kind).toBe('error'))
     view.rerender(<AdvisorCard {...props} />)
     expect(screen.getByText('host refused')).toBeTruthy()
     // The gateway merge has no revision guard: a plain rejection keeps the
     // form editable for a retry — the save stays enabled while the draft is
-    // dirty (TASK2: the dirty derivation enables it; a clean form's save is
+    // dirty (the dirty derivation enables it; a clean form's save is
     // disabled by the upstream contract).
-    expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false) // TASK2
+    expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('shows the system-prompt placeholder telling the user empty means default', async () => {

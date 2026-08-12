@@ -12,9 +12,12 @@
  * divider under the header; then the form content; then a footer with the
  * failed message + Discard/Save carrying the upstream disabled semantics —
  * save = `!dirty || invalid || saving`, discard = `!dirty || saving` (KD-U1,
- * Global Constraints). Disclosure is card-local state: which card a user has
- * open is a reading gesture, and staged edits outlive collapsing — the pill
- * rides the header (upstream rationale).
+ * Global Constraints). Save additionally carries `!writable` and the store
+ * refuses writes outright in read-only environments (W-1, qc2 fix wave) —
+ * see the disabled-term comment in the ready branch. Disclosure is
+ * card-local state: which card a user has open is a reading gesture, and
+ * staged edits outlive collapsing — the pill rides the header (upstream
+ * rationale).
  *
  * The full form is unchanged from the card-form plan: `enabled` switch
  * (default off), `provider`/`model` select boxes limited to the
@@ -204,8 +207,18 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
     // Upstream disabled semantics (Global Constraints): save = !dirty ||
     // invalid || saving; discard = !dirty || saving. In a read-only
     // environment the fields are disabled, so the draft cannot become dirty
-    // and both actions stay disabled through the !dirty term.
-    const saveDisabled = !state.dirty || gateFailed || saving
+    // and both actions stay disabled through the !dirty term. W-1 (qc2 fix
+    // wave): the dirty-implies-writable assumption does NOT hold for this
+    // in-place-draft store — a mid-session invalidation refresh can return
+    // writable=false while staged edits survive (dirty stays true), so Save
+    // additionally carries `!writable` (restoring the pre-plan Apply, which
+    // was always disabled when !writable).
+    const saveDisabled = !state.dirty || gateFailed || saving || !writable
+    // Discard KEEPS `!dirty || saving` BY DESIGN: it is a pure client-side
+    // revert to the last-known seed (no gateway write) — disabling it in
+    // read-only would strand staged edits the user cannot clear, and the
+    // store-side writable guard (advisor-store.ts apply()) makes a read-only
+    // write fail cleanly even if it were reached.
     const discardDisabled = !state.dirty || saving
     body = (
       <div className={styles['body']}>
