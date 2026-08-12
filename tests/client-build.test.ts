@@ -137,12 +137,16 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     // section css — same commit, else the build gate fails).
     expect(bundle).toContain('dsh-advisor/advisor-card.module.css')
     // Hashed class-map export ([hash]_[local]): the card classes reach the
-    // bundle as hashed names, and the map keys preserve the local names.
+    // bundle as hashed names, and the map keys preserve the local names —
+    // plan dsh-advisor-plugin-config-card-ux, task 1: the chrome classes
+    // (header/body/footer/chevron/chevronOpen) replace the removed
+    // title/intro/editorActions classes; the form-field classes stay.
     expect(bundle).toMatch(/_card/)
-    expect(bundle).toMatch(/_(card|title|intro|field|input|selectInput)/)
+    expect(bundle).toMatch(/_(card|header|body|footer|chevron|field|input)/)
     expect(bundle).toMatch(/"card": "[A-Za-z0-9]+_card"/)
     expect(bundle).toContain('"card"')
-    expect(bundle).toContain('"title"')
+    expect(bundle).toContain('"header"')
+    expect(bundle).toContain('"chevronOpen"')
   })
 
   it('declares the dsh.client client-bundle contract', () => {

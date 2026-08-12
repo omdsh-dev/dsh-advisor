@@ -147,9 +147,30 @@ export interface AdvisorSettingsState {
    * Whether the `advisor.get` gateway endpoint was reachable on the last load
    * (KD-G3/G5): success = a writable form; failure (gateway not ready, no
    * settings service on the host) = the card shows the config-channel
-   * notice instead of a writable-looking form and never offers Apply.
+   * notice instead of a writable-looking form and never offers Save.
    */
   advisorPresent: boolean
+  /**
+   * Latch of the last SETTLED readiness: true iff the last ready update
+   * resolved `config === undefined` (qc1 S-2 fix wave). The snapshot cannot
+   * tell a "refresh of a degraded card" from a "first mount not yet settled"
+   * while `status === 'loading'` (both read loading + advisorPresent=false),
+   * so the card derives its degraded disclosure from this latch during
+   * loading — keeping the AC-3 notice visible through a background refresh
+   * of a degraded card. Set ONLY in the ready update (the load-error path
+   * leaves it alone — the error state has its own always-open branch).
+   */
+  degraded: boolean
+  /**
+   * Whether the draft holds edits a save would write — the "unsaved" pill
+   * and the save/discard disabled semantics (upstream CardShell.dirty).
+   * Derived as `patchFor(draft)` non-empty (KD-U2, plan
+   * dsh-advisor-plugin-config-card-ux task 2), recomputed on load (seed
+   * settled, real config resolved only), every draft mutation, discard and a
+   * successful apply — always inside the same `store.update` callback that
+   * mutates the draft/seed, never via a snapshot read + second write.
+   */
+  dirty: boolean
   /** The form draft (seeded from the resolved config; never re-seeded by refreshes). */
   draft: AdvisorDraft
   /** Apply lifecycle feedback. */
@@ -225,6 +246,14 @@ export class AdvisorSettingsStore {
     modelsEmptyReason: {},
     namespaces: {},
     advisorPresent: false,
+    // qc1 S-2: the degraded latch defaults false — a first mount / healthy
+    // card is never degraded, so the healthy card stays collapsed through its
+    // first load (the latch only flips on a settled degraded ready state).
+    degraded: false,
+    // KD-U2: dirty derives from the patch diff against the seed
+    // (recomputeDirty below — patchFor non-empty), recomputed on
+    // load/mutation/discard/apply; the store default is clean.
+    dirty: false,
     draft: defaultDraft(),
     applyState: { kind: 'idle' },
   })
@@ -365,8 +394,20 @@ export class AdvisorSettingsStore {
       s.providers = options
       s.namespaces = namespaces
       s.advisorPresent = config !== undefined
+      // qc1 S-2: the degraded latch mirrors advisorPresent on every SETTLED
+      // ready update — during a subsequent refresh (status 'loading') the
+      // card derives its degraded disclosure from this latch, so the AC-3
+      // notice never collapses for the refresh window.
+      s.degraded = config === undefined
       s.modelsByProvider = {}
       s.modelsEmptyReason = {}
+      // KD-U2 dirty recompute point: the seed just settled (line above — the
+      // same synchronous tick, no await in between). Only a REAL resolved
+      // config recomputes — on a get failure the draft keeps its previous
+      // dirty state against the last-known-good seed (the unseeded first-load
+      // failure path stays clean). A refresh whose host values now match the
+      // draft (another session saved) correctly flips dirty back to false.
+      if (config !== undefined) s.dirty = this.recomputeDirty(s.draft)
     })
     // Model options for the provider already selected by the stored config,
     // so a freshly opened form shows the options without interaction.
@@ -480,6 +521,7 @@ export class AdvisorSettingsStore {
       // A provider switch invalidates the previously chosen model.
       s.draft = deletePath(withoutProvider, ['model']) as unknown as AdvisorDraft
       s.applyState = { kind: 'idle' }
+      s.dirty = this.recomputeDirty(s.draft)
     })
     if (trimmed.length > 0) void this.ensureModels(trimmed)
   }
@@ -515,16 +557,35 @@ export class AdvisorSettingsStore {
   }
 
   /**
-   * Validate the draft (KD-S4 gate), then write the changed keys as a config
-   * patch through the gateway channel (`/api/advisor/set`). Any failure
-   * (business rejection or transport) surfaces the message failure and keeps
-   * the form for retry — the gateway merge has no revision guard, so the old
-   * settings-conflict branch is replaced by plain error handling (KD-G3).
-   * Nothing to write → the apply reports saved without a call.
+   * Refuse in a read-only environment (store-side defense-in-depth for the
+   * W-1 invariant — a write must never be issued when the UI declares the
+   * settings service read-only), then validate the draft (KD-S4 gate) and
+   * write the changed keys as a config patch through the gateway channel
+   * (`/api/advisor/set`). Any failure (business rejection or transport)
+   * surfaces the message failure and keeps the form for retry — the gateway
+   * merge has no revision guard, so the old settings-conflict branch is
+   * replaced by plain error handling (KD-G3). Nothing to write → the apply
+   * reports saved without a call.
    * @returns nothing; the apply state carries the outcome.
    */
   async apply(): Promise<void> {
     const state = this.store.getSnapshot()
+    // W-1 (qc2 fix wave): the writable guard comes FIRST — before the client
+    // gate check AND the empty-patch shortcut. In read-only the patch cannot
+    // land, so the failure reports that instead of claiming a no-op save;
+    // the card's disabled terms cover the UI, this guard closes the
+    // store-side gap a mid-session writable flip (invalidation refresh
+    // returns writable=false while staged edits survive) would otherwise
+    // leave open.
+    if (!state.writable) {
+      this.store.update((s) => {
+        s.applyState = {
+          kind: 'error',
+          failure: { kind: 'message', message: 'advisor: settings service is read-only — configuration cannot be written' },
+        }
+      })
+      return
+    }
     const gate = gateFailure(state.draft)
     if (gate !== undefined) {
       this.store.update((s) => {
@@ -534,7 +595,18 @@ export class AdvisorSettingsStore {
     }
     const patch = this.patchFor(state.draft)
     if (Object.keys(patch).length === 0) {
-      this.store.update((s) => { s.applyState = { kind: 'saved' } })
+      this.store.update((s) => {
+        s.applyState = { kind: 'saved' }
+        // qc3 S-2 (belt-and-braces): recompute dirty in the empty-patch
+        // branch too, like every other apply outcome. In every UI-reachable
+        // flow dirty is already false here (same derivation, same seed), but
+        // the M-7 degraded window — a get-failure refresh clobbers
+        // `this.seed` to defaults while skipping the dirty recompute (config
+        // undefined) — can leave the snapshot dirty against a stale seed; a
+        // programmatic apply then diff-cleans EMPTY against the defaulted
+        // seed and would report saved while the pill stayed lit.
+        s.dirty = this.recomputeDirty(s.draft)
+      })
       return
     }
     this.store.update((s) => { s.applyState = { kind: 'saving' } })
@@ -553,7 +625,14 @@ export class AdvisorSettingsStore {
       // qc3 N-1: the saved feedback is set BEFORE the reload — a reload
       // failure (status 'error') must not mask the landed write; the card
       // renders the saved line alongside the error+retry view.
-      this.store.update((s) => { s.applyState = { kind: 'saved' } })
+      this.store.update((s) => {
+        s.applyState = { kind: 'saved' }
+        // KD-U2 recompute point: the draft now matches the host (every
+        // differing key was written and the returned config was adopted as the
+        // seed), so dirty re-derives false here — even if the post-apply
+        // reload below fails and leaves the dirty term un-recomputed.
+        s.dirty = this.recomputeDirty(s.draft)
+      })
       await this.load()
     } catch (error) {
       this.store.update((s) => {
@@ -586,6 +665,8 @@ export class AdvisorSettingsStore {
     this.store.update((s) => {
       s.draft = this.seed
       s.applyState = { kind: 'idle' }
+      // The draft is exactly the seed again → the diff is empty → clean.
+      s.dirty = this.recomputeDirty(s.draft)
     })
   }
 
@@ -629,11 +710,24 @@ export class AdvisorSettingsStore {
     return patch
   }
 
+  /**
+   * The dirty derivation (KD-U2, plan dsh-advisor-plugin-config-card-ux task
+   * 2): the draft holds edits a save would write iff the minimal patch
+   * against the current seed is non-empty. Takes the DRAFT being mutated and
+   * reads `this.seed` — it must be called INSIDE the same `store.update`
+   * callback that mutates the draft/seed, never via a snapshot read + second
+   * write (the frozen-snapshot write would be dropped by the snapshot store).
+   */
+  private recomputeDirty(draft: AdvisorDraft): boolean {
+    return Object.keys(this.patchFor(draft)).length > 0
+  }
+
   /** Edit one always-present draft field via the schema-form path writer. */
   private setField(key: string, value: unknown): void {
     this.store.update((s) => {
       s.draft = setPath(s.draft as unknown as Record<string, unknown>, [key], value) as unknown as AdvisorDraft
       s.applyState = { kind: 'idle' }
+      s.dirty = this.recomputeDirty(s.draft)
     })
   }
 
@@ -642,6 +736,7 @@ export class AdvisorSettingsStore {
     this.store.update((s) => {
       s.draft = deletePath(s.draft as unknown as Record<string, unknown>, [key]) as unknown as AdvisorDraft
       s.applyState = { kind: 'idle' }
+      s.dirty = this.recomputeDirty(s.draft)
     })
   }
 
