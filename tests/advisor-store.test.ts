@@ -901,6 +901,22 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
     expect(store.store.getSnapshot().dirty).toBe(true)
   })
 
+  it("derives dirty from the '' provider override alone — no enabled toggle needed (M-6 isolation)", async () => {
+    // The sibling test calls setEnabled(false) first, which alone makes the
+    // patch non-empty ({ enabled: false }) — this variant isolates the
+    // ''-provider semantic: NO enabled toggle, only the provider clear, and
+    // the seed pins no model, so the resulting patch is exactly
+    // { provider: '' } → dirty derives true from that alone.
+    const { api, rpc } = scriptedApi({
+      config: { enabled: false, provider: 'deepseek-official', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    expect(store.store.getSnapshot().dirty).toBe(false)
+    store.setProvider('') // patchFor emits provider: '' → a real write → dirty
+    expect(store.store.getSnapshot().dirty).toBe(true)
+  })
+
   it('keeps dirty false through an unseeded first-load failure and recomputes from the recovered seed', async () => {
     // First load: the get fails (gateway not ready) — nothing seeded, nothing
     // staged: dirty must stay false. Once the gateway recovers, the REAL

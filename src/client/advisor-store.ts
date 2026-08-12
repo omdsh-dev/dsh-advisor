@@ -235,9 +235,9 @@ export class AdvisorSettingsStore {
     modelsEmptyReason: {},
     namespaces: {},
     advisorPresent: false,
-    // TASK 2 handoff: the dirty derivation (patchFor non-empty, recomputed on
-    // load/mutation/discard/apply) lands with task 2 of plan
-    // dsh-advisor-plugin-config-card-ux; until then the card reads false.
+    // KD-U2: dirty derives from the patch diff against the seed
+    // (recomputeDirty below — patchFor non-empty), recomputed on
+    // load/mutation/discard/apply; the store default is clean.
     dirty: false,
     draft: defaultDraft(),
     applyState: { kind: 'idle' },
