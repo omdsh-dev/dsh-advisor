@@ -95,6 +95,8 @@ Both persisted surfaces share the same hard gate: `enabled: true` with empty
 Settings page additionally blocks saving while enabled with a required field
 empty; the host-side gate stays the final line of defense on every path.
 
+![Advisor card on the dsh web Settings (插件配置) page](https://raw.githubusercontent.com/dsh-external/dsh-advisor/main/docs/screenshots/advisor-settings-card.webp)
+
 Plugin-row config:
 
 ```yaml
@@ -181,6 +183,8 @@ The `[advisor:{severity}]` prefix is the only cue the primary model gets about
 how to treat it — the primary system prompt never mentions advisories. Advisor
 messages are excluded from later advisor deltas, so the advisor never reads
 its own advice back.
+
+![Advisor note injected into the session stream](https://raw.githubusercontent.com/dsh-external/dsh-advisor/main/docs/screenshots/advisor-injected-note.webp)
 
 ## How it works
 
