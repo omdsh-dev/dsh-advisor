@@ -32,6 +32,13 @@
  *               the source tree is missing or a peer is not linkable.
  *   --check     verify only — no writes; exit non-zero when the farm is
  *               missing, stale, or a peer is unlinkable.
+ *
+ * Safety (this repo's git-install path): the host profile installs the plugin
+ * via git deps, whose prepare/postinstall run INSIDE the profile's pnpm store
+ * (`<profile>/node_modules/.pnpm/…`). There the farm must NOT be created —
+ * the host resolves `@deepseek-ai/*` from its in-box bundles, never from a
+ * staging tree. The script therefore skips (exit 0) when it detects a pnpm
+ * store copy or a repo root without `node_modules/` yet.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -42,6 +49,18 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = resolve(here, '..')
 const CHECK = process.argv.includes('--check')
+
+// ---------------------------------------------------------------------------
+// Safety guard: never run inside a host-profile install (pnpm store copy) or
+// an uninstalled checkout.
+// ---------------------------------------------------------------------------
+const inStore = repo.includes(`${sep}node_modules${sep}.pnpm${sep}`)
+const hasNodeModules = existsSync(join(repo, 'node_modules'))
+if (inStore || !hasNodeModules) {
+  console.log(`[dsh-links] skip: not a top-level dev install (${inStore ? 'inside the pnpm store (host-profile install path)' : 'repo root has no node_modules/ yet (not installed)'}).`)
+  console.log('  @deepseek-ai/* resolve from the dsh in-box bundles at runtime; no link farm is created here.')
+  process.exit(0)
+}
 
 /** Resolve the dsh source tree root ($DSH_SOURCE_DIR first, then $DSH_HOME/source/current, then the default home location). */
 function resolveSourceRoot() {
@@ -103,6 +122,37 @@ function resolveTreeReact(sourceRoot) {
   const reactDir = dirname(requireFrom.resolve('react/package.json'))
   const reactDomDir = dirname(requireDomFrom.resolve('react-dom/package.json'))
   return { react: reactDir, 'react-dom': reactDomDir }
+}
+
+/**
+ * The virtual store's react / react-dom entries (installed as transitive
+ * peers of the DOM-testing packages) must resolve to the SAME copies the
+ * identity links above point at — otherwise node's raw resolution from
+ * inside those packages (externalized by vitest) would load a SECOND React
+ * instance alongside the identity-linked one — the hooks-dispatcher split
+ * the identity links exist to prevent. pnpm recreates the entries on every
+ * install, so `dsh:link` re-pins them.
+ * @returns the pin targets as `{ name, linkPath, target }` rows.
+ */
+function virtualStoreReactLinks(sourceRoot) {
+  const identity = resolveTreeReact(sourceRoot)
+  const virtualStore = join(repo, 'node_modules', '.pnpm')
+  const links = []
+  for (const entry of readdirSafe(virtualStore)) {
+    if (!entry.startsWith('react@') && !entry.startsWith('react-dom@')) continue
+    const isDom = entry.startsWith('react-dom@')
+    const linkPath = join(virtualStore, entry, 'node_modules', isDom ? 'react-dom' : 'react')
+    if (!existsSync(linkPath)) continue
+    links.push({ name: `${entry} node_modules/${isDom ? 'react-dom' : 'react'}`, linkPath, target: isDom ? identity['react-dom'] : identity.react })
+  }
+  return links
+}
+
+/** Ensure the virtual-store react entries resolve to the tree copies. */
+function ensureVirtualStoreReactIdentity(sourceRoot) {
+  for (const { linkPath, target } of virtualStoreReactLinks(sourceRoot)) {
+    ensure(linkPath, target)
+  }
 }
 
 /**
@@ -308,6 +358,10 @@ function main() {
       const problem = checkLink(name, linkPath, target)
       if (problem !== undefined) problems.push(problem)
     }
+    for (const { name, linkPath, target } of virtualStoreReactLinks(sourceRoot)) {
+      const problem = checkLink(name, linkPath, target)
+      if (problem !== undefined) problems.push(problem)
+    }
     const cordisProblem = checkCordisShim(sourceRoot)
     if (cordisProblem !== undefined) problems.push(cordisProblem)
     for (const stale of pruneStale(managed, true)) {
@@ -325,6 +379,9 @@ function main() {
   for (const [name, target] of managed) {
     ensure(join(repo, 'node_modules', name), target)
   }
+  // Re-pin the virtual-store react entries (see ensureVirtualStoreReactIdentity)
+  // after every install-triggered link run.
+  ensureVirtualStoreReactIdentity(sourceRoot)
   writeCordisShim(sourceRoot)
   const removed = pruneStale(managed, false)
   console.log(

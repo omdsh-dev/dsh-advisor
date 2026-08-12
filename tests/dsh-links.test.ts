@@ -47,9 +47,15 @@ describe('dev-time dsh resolution contract (real packages via DSH_HOME)', () => 
     }
   })
 
-  it('.npmrc disables autoInstallPeers (private packages must never hit the registry)', () => {
+  it('pnpm-workspace.yaml disables autoInstallPeers (private packages must never hit the registry)', () => {
+    // pnpm 11+ ignores non-auth settings in .npmrc (see
+    // .mstar/knowledge/developer-experience/pnpm11-workspace-config-and-windows-link-farm.md):
+    // the convention lives in pnpm-workspace.yaml, and .npmrc keeps only
+    // registry/auth settings.
+    const workspace = readFileSync(resolve(repo, 'pnpm-workspace.yaml'), 'utf8')
+    expect(workspace).toMatch(/autoInstallPeers\s*:\s*false/)
     const npmrc = readFileSync(resolve(repo, '.npmrc'), 'utf8')
-    expect(npmrc).toMatch(/auto-install-peers\s*=\s*false/)
+    expect(npmrc).not.toMatch(/auto-install-peers|node-linker|_authToken/)
   })
 
   it('@deepseek-ai/cordis is the peer-only vendored baseline (^4.0.1-rc.1, shim-provided)', () => {

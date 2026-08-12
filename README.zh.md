@@ -136,7 +136,7 @@ MVP 有意放弃与 omp 的完整对等。已接受的差距（在 harness 迭�
 
 ## 开发
 
-组合包在安装时自行构建：`package.json` 声明了 `"prepare": "node scripts/setup-dsh-links.mjs && pnpm build"`（开发期链接农场、与 `prepack` 相同的构建），因此任何克隆在 **`DSH_HOME` 指向一个含 `source/current` 的 dsh home（或 `DSH_SOURCE_DIR` 直接指向一个 dsh 源码树）** 后立即可构建。私有的 `@deepseek-ai/dsh-*` 运行时依赖**只声明为 peerDependencies**；开发期由 `scripts/setup-dsh-links.mjs`（挂在 `prepare` 上、独立命令为 `pnpm dsh:link`、用 `pnpm dsh:link:check` 校验）把该树里的**真实包**链接进 `node_modules/@deepseek-ai/` —— 树声明的每个 `@deepseek-ai/*` 包（声明 `bin` 的工具 CLI 会被跳过：链接它们会让 pnpm 向共享树写入 bin）、无 bin 的内置 `cordis` 框架 shim、以及树自带的 `react`/`react-dom` 副本（node 解析 —— 包括外部化的 CJS 依赖 —— 必须看到同一个 react 身份，即真实 client 包所用的身份；`.npmrc` 设了 `node-linker=hoisted`（dsh profile 约定），避免 `.pnpm` 逐包目录遮蔽这些链接）。农场幂等、会清理陈旧条目，并在树缺失或 peer 无法链接时给出明确指引。`.npmrc` 还设了 `auto-install-peers=false`（dsh profile 约定）：私有 peer 绝不能从 npm registry 获取。
+组合包在安装时自行构建：`package.json` 声明了 `"prepare": "node scripts/setup-dsh-links.mjs && pnpm build"`（开发期链接农场、与 `prepack` 相同的构建），因此任何克隆在 **`DSH_HOME` 指向一个含 `source/current` 的 dsh home（或 `DSH_SOURCE_DIR` 直接指向一个 dsh 源码树）** 后立即可构建。私有的 `@deepseek-ai/dsh-*` 运行时依赖**只声明为 peerDependencies**；开发期由 `scripts/setup-dsh-links.mjs`（挂在 `prepare` 上、独立命令为 `pnpm dsh:link`、用 `pnpm dsh:link:check` 校验）把该树里的**真实包**链接进 `node_modules/@deepseek-ai/` —— 树声明的每个 `@deepseek-ai/*` 包（声明 `bin` 的工具 CLI 会被跳过：链接它们会让 pnpm 向共享树写入 bin）、无 bin 的内置 `cordis` 框架 shim、以及树自带的 `react`/`react-dom` 副本（node 解析 —— 包括外部化的 CJS 依赖 —— 必须看到同一个 react 身份，即真实 client 包所用的身份；dsh profile 约定 `nodeLinker=hoisted` 放在 `pnpm-workspace.yaml`（pnpm 11+ 忽略 `.npmrc` 中的非认证设置），避免 `.pnpm` 逐包目录遮蔽这些链接）。农场幂等、会清理陈旧条目，并在树缺失或 peer 无法链接时给出明确指引。`pnpm-workspace.yaml` 还设了 `autoInstallPeers: false`（dsh profile 约定）：私有 peer 绝不能从 npm registry 获取。
 
 ```sh
 export DSH_HOME=~/.dsh    # 含 source/current 的 dsh home（或直接设置 DSH_SOURCE_DIR）
@@ -147,7 +147,9 @@ pnpm build                # tsc -p tsconfig.build.json emit to lib/ + node scrip
 pnpm pack                 # build + produce dsh-advisor-0.0.1.tgz
 ```
 
-`cordis` 声明为确定性的 devDependency（`^4.0.0-rc.7` —— npm registry 最高就是该版本，因此范围精确钉住 dsh 宿主内置的基线）；安装后链接农场的无 bin cordis shim 仍会把 `node_modules/cordis` 覆盖为 vendored 文件，因为真实包是对着 vendored 构建类型化/运行的，模块身份要求开发期的 `import 'cordis'` 解析到同一份文件。其余公开 devDependencies（`schemastery`、`react` 等）照常从 npm registry 解析。
+Windows 上链接农场的目录条目以 junction 创建（无需特权），但 cordis shim 的文件条目使用文件符号链接，需要开启[开发者模式](https://learn.microsoft.com/windows/apps/get-started/enable-your-device-for-development)（或以管理员 shell 运行）——请先开启再执行 `pnpm install`。Windows 没有 `HOME`，脚本回退到 `USERPROFILE` 解析 dsh 源码树。
+
+内置 `cordis` 框架声明为 scoped peer `@deepseek-ai/cordis: ^4.0.1-rc.1`（范围必须带精确的发布 tag —— 带 prerelease 的 comparator 只匹配同 `[major, minor, patch]` tuple，`^4.0.0-rc.7` 永远不匹配 vendored 的 `4.0.1-rc.1`）；安装后链接农场的无 bin cordis shim 位于 `node_modules/@deepseek-ai/cordis`，以 scoped 名应答并解析到 vendored 文件，因为真实包是对着 vendored 构建类型化/运行的，模块身份要求开发期的 `import '@deepseek-ai/cordis'` 解析到同一份文件。其余公开 devDependencies（`schemastery`、`react` 等）照常从 npm registry 解析。
 
 `prepack` 运行 `pnpm build`；`prepare` 运行链接农场与构建，因此 `pnpm pack` 会构建两次（每个生命周期一次）——这是为保持 git 安装可构建而接受的取舍。没有 `postinstall` 步骤：tarball 安装已带构建产物，完全跳过构建。
 

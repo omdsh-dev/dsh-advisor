@@ -6,6 +6,7 @@
 
 - 可用的 dsh 运行环境（`$DSH_HOME`，默认 `~/.dsh`），且其源码树在 `$DSH_SOURCE_DIR`（缺省 `${DSH_HOME}/source/current`）——开发期链接农场（`prepare` 构建）与开发期类型检查 / 测试都需要它。
 - 构建需要 **node**（≥ 22）与 **pnpm**（≥ 10）——组合包的 `prepare` 脚本自构建（`tsc`，无 bun）。
+- **Windows**：请先开启[开发者模式](https://learn.microsoft.com/windows/apps/get-started/enable-your-device-for-development)（git 安装 / `prepare` 的链接农场会创建文件符号链接；目录 junction 无需特权）。Windows 没有 `HOME`，链接农场自动回退 `USERPROFILE` 解析 dsh 源码树。
 - 目标 profile（如 `web`）可读写；安装后重启 dsh 会话。
 
 ## 1. 一条命令的 git 安装
@@ -49,7 +50,7 @@ pnpm pack
 dsh plugin --profile web add dsh-advisor-0.0.1.tgz
 ```
 
-tarball 附带的是构建产物（`lib/` + `cordis.patch.yml`），因此不会运行 `prepare` 脚本，也无需构建权限。运行时依赖（`cordis`、`schemastery` 与 `@deepseek-ai/dsh-{session,agent,llm,commands,timeout}`）声明为 peerDependencies，由 dsh 安装的扁平 profile module fallback 解析——无需额外安装步骤。
+tarball 附带的是构建产物（`lib/` + `cordis.patch.yml`），因此不会运行 `prepare` 脚本，也无需构建权限。运行时依赖（`@deepseek-ai/cordis`、`schemastery` 与 `@deepseek-ai/dsh-{session,agent,llm,commands,timeout}`）声明为 peerDependencies，由 dsh 安装的扁平 profile module fallback 解析——无需额外安装步骤。
 
 ## 4. web Settings 暴露
 

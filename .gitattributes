@@ -1,0 +1,5 @@
+# Text files are normalized to LF in the repo; checkouts may use the
+# platform-native EOL. The link-farm script (scripts/setup-dsh-links.mjs)
+# and its tests are EOL-agnostic (path joins use node:path, regexes allow
+# \r\n), so Windows checkouts with CRLF are safe.
+* text=auto

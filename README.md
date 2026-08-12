@@ -248,12 +248,13 @@ package the tree declares (tool CLIs with a `bin` are skipped: linking them
 would make pnpm write their bins into the shared tree), a bin-less shim for
 the in-box `cordis` framework, and the tree's own `react`/`react-dom` copies
 (node resolution — including externalized CJS deps — must see ONE react
-identity, the identity the real client packages use; `.npmrc` sets
-`node-linker=hoisted`, the dsh profile convention, so no `.pnpm` per-package
-dirs shadow those links). The farm is idempotent, prunes stale entries, and
-fails with guidance when the tree is missing or a peer cannot be linked.
-`.npmrc` also sets `auto-install-peers=false` (dsh profile convention): the
-private peers must never be fetched from the npm registry.
+identity, the identity the real client packages use; the dsh profile
+convention `nodeLinker=hoisted` lives in `pnpm-workspace.yaml` (pnpm 11+
+ignores non-auth settings in `.npmrc`), so no `.pnpm` per-package dirs shadow
+those links). The farm is idempotent, prunes stale entries, and fails with
+guidance when the tree is missing or a peer cannot be linked.
+`pnpm-workspace.yaml` also sets `autoInstallPeers: false` (dsh profile
+convention): the private peers must never be fetched from the npm registry.
 
 ```sh
 export DSH_HOME=~/.dsh    # a dsh home with source/current (or set DSH_SOURCE_DIR)
@@ -264,12 +265,21 @@ pnpm build                # tsc -p tsconfig.build.json emit to lib/ + node scrip
 pnpm pack                 # build + produce dsh-advisor-0.0.1.tgz
 ```
 
-`cordis` is declared as a deterministic devDependency (`^4.0.0-rc.7` — the npm
-registry tops out at exactly that version, so the range pins the baseline the
-dsh host vendors); after install the link farm's bin-less cordis shim still
-overrides `node_modules/cordis` with the vendored files, because the real
-packages type and run against the vendored build and module identity requires
-dev-time `import 'cordis'` to resolve to the same files. The other public
+On Windows the link farm creates directory entries as junctions (no special
+privileges), but the cordis shim's file entries use file symlinks, which need
+[Developer Mode](https://learn.microsoft.com/windows/apps/get-started/enable-your-device-for-development)
+(or an admin shell) — enable it before `pnpm install`. Windows has no
+`HOME`, so the script falls back to `USERPROFILE` to resolve the dsh source
+tree.
+
+The in-box `cordis` framework is declared as the scoped peer
+`@deepseek-ai/cordis: ^4.0.1-rc.1` (the range carries the exact publish tag —
+a comparator prerelease such as `^4.0.0-rc.7` never matches the vendored
+`4.0.1-rc.1` per the node-semver tuple rule); after install the link farm's
+bin-less cordis shim at `node_modules/@deepseek-ai/cordis` answers the scoped
+name and resolves to the vendored files, because the real packages type and
+run against the vendored build and module identity requires dev-time
+`import '@deepseek-ai/cordis'` to resolve to the same files. The public
 devDependencies (`schemastery`, `react`, …) resolve from the npm registry as
 usual.
 
