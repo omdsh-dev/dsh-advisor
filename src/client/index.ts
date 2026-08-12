@@ -15,6 +15,11 @@ import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 // Type-only: pulls the shell's SlotMap merge (the 'settings.section' entry).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+// Type-only: pulls the plugin-config card slot's SlotMap merge (the
+// 'settings.plugin.item' entry — the Task-2 registration target). Same empty
+// type-only import pattern as ui-settings: it loads the module's types (the
+// ./client entry re-exports the slot-contract merge) without any value import.
+import type {} from '@deepseek-ai/dsh-client-ui-plugin-config/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { AdvisorSection } from './advisor-section.tsx'
