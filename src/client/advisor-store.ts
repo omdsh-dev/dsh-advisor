@@ -151,6 +151,17 @@ export interface AdvisorSettingsState {
    */
   advisorPresent: boolean
   /**
+   * Latch of the last SETTLED readiness: true iff the last ready update
+   * resolved `config === undefined` (qc1 S-2 fix wave). The snapshot cannot
+   * tell a "refresh of a degraded card" from a "first mount not yet settled"
+   * while `status === 'loading'` (both read loading + advisorPresent=false),
+   * so the card derives its degraded disclosure from this latch during
+   * loading — keeping the AC-3 notice visible through a background refresh
+   * of a degraded card. Set ONLY in the ready update (the load-error path
+   * leaves it alone — the error state has its own always-open branch).
+   */
+  degraded: boolean
+  /**
    * Whether the draft holds edits a save would write — the "unsaved" pill
    * and the save/discard disabled semantics (upstream CardShell.dirty).
    * Derived as `patchFor(draft)` non-empty (KD-U2, plan
@@ -235,6 +246,10 @@ export class AdvisorSettingsStore {
     modelsEmptyReason: {},
     namespaces: {},
     advisorPresent: false,
+    // qc1 S-2: the degraded latch defaults false — a first mount / healthy
+    // card is never degraded, so the healthy card stays collapsed through its
+    // first load (the latch only flips on a settled degraded ready state).
+    degraded: false,
     // KD-U2: dirty derives from the patch diff against the seed
     // (recomputeDirty below — patchFor non-empty), recomputed on
     // load/mutation/discard/apply; the store default is clean.
@@ -379,6 +394,11 @@ export class AdvisorSettingsStore {
       s.providers = options
       s.namespaces = namespaces
       s.advisorPresent = config !== undefined
+      // qc1 S-2: the degraded latch mirrors advisorPresent on every SETTLED
+      // ready update — during a subsequent refresh (status 'loading') the
+      // card derives its degraded disclosure from this latch, so the AC-3
+      // notice never collapses for the refresh window.
+      s.degraded = config === undefined
       s.modelsByProvider = {}
       s.modelsEmptyReason = {}
       // KD-U2 dirty recompute point: the seed just settled (line above — the
@@ -575,7 +595,18 @@ export class AdvisorSettingsStore {
     }
     const patch = this.patchFor(state.draft)
     if (Object.keys(patch).length === 0) {
-      this.store.update((s) => { s.applyState = { kind: 'saved' } })
+      this.store.update((s) => {
+        s.applyState = { kind: 'saved' }
+        // qc3 S-2 (belt-and-braces): recompute dirty in the empty-patch
+        // branch too, like every other apply outcome. In every UI-reachable
+        // flow dirty is already false here (same derivation, same seed), but
+        // the M-7 degraded window — a get-failure refresh clobbers
+        // `this.seed` to defaults while skipping the dirty recompute (config
+        // undefined) — can leave the snapshot dirty against a stale seed; a
+        // programmatic apply then diff-cleans EMPTY against the defaulted
+        // seed and would report saved while the pill stayed lit.
+        s.dirty = this.recomputeDirty(s.draft)
+      })
       return
     }
     this.store.update((s) => { s.applyState = { kind: 'saving' } })

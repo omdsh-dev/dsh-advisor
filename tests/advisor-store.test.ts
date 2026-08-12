@@ -489,6 +489,9 @@ describe('apply patch + seed (gateway channel semantics)', () => {
     await store.apply() // no edits at all → nothing to write
     expect(set).not.toHaveBeenCalled()
     expect(store.store.getSnapshot().applyState.kind).toBe('saved')
+    // qc3 S-2: the empty-patch branch recomputes dirty like every other apply
+    // outcome — an apply that writes nothing keeps the form clean.
+    expect(store.store.getSnapshot().dirty).toBe(false)
   })
 
   it('adopts the returned config as the new seed after a successful apply', async () => {
@@ -1009,6 +1012,41 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
     }
     expect(state.dirty).toBe(true) // nothing written, nothing re-seeded — the form stays
     expect(set).not.toHaveBeenCalled()
+  })
+
+  it('recomputes dirty in the empty-patch apply branch — a stale seed cannot leave the pill lit (qc3 S-2)', async () => {
+    // qc3 S-2 belt-and-braces: the empty-patch apply branch must recompute
+    // dirty like every other apply outcome. In every UI-reachable flow the
+    // patch is empty only when the draft already equals the seed (dirty
+    // false), but the M-7 degraded window can leave the SNAPSHOT dirty=true
+    // against a stale seed: a get-failure refresh clobbers `this.seed` to
+    // defaults while skipping the dirty recompute (config undefined). A
+    // programmatic apply in that window would diff EMPTY against the
+    // defaulted seed and report saved while the pill stayed lit.
+    const { api, rpc, get, set } = scriptedApi({
+      config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    // Edit the draft back to the schema defaults (enabled off + cleared pair).
+    store.setEnabled(false)
+    store.setProvider('') // clears the provider AND the invalidated model
+    expect(draftOf(store)).toEqual({ enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 })
+    expect(store.store.getSnapshot().dirty).toBe(true) // still differs from the pinned seed
+    // The degraded refresh: get fails → `seed` clobbers to defaults and the
+    // dirty recompute is skipped → the stale window (snapshot dirty=true).
+    get.mockImplementationOnce(() => Promise.resolve(failResult('advisor gateway is not ready')))
+    await store.load()
+    let state = store.store.getSnapshot()
+    expect(state.advisorPresent).toBe(false)
+    expect(state.dirty).toBe(true) // stale — the recompute was skipped
+    // The programmatic apply diff-cleans against the (defaulted) seed → empty
+    // patch → saved WITHOUT a call, and the recompute clears the stale pill.
+    await store.apply()
+    state = store.store.getSnapshot()
+    expect(set).not.toHaveBeenCalled()
+    expect(state.applyState.kind).toBe('saved')
+    expect(state.dirty).toBe(false)
   })
 })
 

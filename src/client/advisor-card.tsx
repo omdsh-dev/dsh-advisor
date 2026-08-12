@@ -46,7 +46,11 @@
  * divergence from upstream, whose unavailable card renders nothing). A card
  * that cannot render its form keeps the notice/error body ALWAYS visible
  * (derived open — the header cannot collapse it away), while a healthy card
- * is collapsed until the user expands it (AC-1).
+ * is collapsed until the user expands it (AC-1). The notice also stays
+ * visible through a background refresh of a degraded card: while
+ * `status === 'loading'` the open derivation falls back to the store's
+ * latched `degraded` (qc1 S-2 fix wave), so the refresh window never
+ * collapses the AC-3 notice.
  * When the last load could not reach the `advisor.get` gateway endpoint (the
  * gateway channel is down or not ready on this host), the form is replaced
  * by the `namespaceUnavailable` notice and Save is never offered, so the
@@ -110,11 +114,17 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
   // `open` is DERIVED from the current snapshot — never from a mount-time
   // snapshot read and never through a useEffect (I-1, T1 fix wave): the
   // mount-time snapshot is the store default ('idle', advisorPresent=false),
-  // so a mount-time read would wrongly start the healthy card open. The
-  // header click toggles `userOpen` only; while degraded the derived open
-  // ignores it, so the notice stays visible (the header stays focusable).
+  // so a mount-time read would wrongly start the healthy card open.
   const [userOpen, setUserOpen] = useState(false)
-  const open = userOpen || state.status === 'error' || (state.status === 'ready' && !state.advisorPresent)
+  // `degraded` is the derived notion (qc1 S-2): while ready it IS
+  // `!advisorPresent`; while loading/error it falls back to the store's
+  // LATCHED last-settled degraded state. A background refresh flips status
+  // to 'loading' while advisorPresent keeps its stale value, so the latch is
+  // what keeps the AC-3 notice visible through the refresh window — and it
+  // is false on a first mount, so the healthy card still starts (and stays)
+  // collapsed through its first load.
+  const degraded = state.status === 'ready' ? !state.advisorPresent : state.degraded
+  const open = userOpen || state.status === 'error' || degraded
 
   // Load-on-mount (KD-3): the plugin-config page mounts the card lazily when
   // the user opens the settings panel, so the first mount triggers the first
@@ -136,7 +146,13 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
       className={styles['header']}
       aria-expanded={open}
       aria-label={`${t(open ? 'collapse' : 'expand')}: ${title}`}
-      onClick={() => { setUserOpen(!userOpen) }}
+      // The click toggles `userOpen` only, gated to the user-collapsible
+      // (healthy) state (qc3 S-1): while degraded/error the derived open is
+      // forced true, so the click must be a NO-OP — toggling userOpen would
+      // silently latch it and pre-open the recovered form, and the
+      // "collapse" aria-label would announce an action the control cannot
+      // perform. The header stays focusable; aria-expanded stays true.
+      onClick={() => { if (!degraded && state.status !== 'error') setUserOpen(!userOpen) }}
     >
       <span className={styles['headText']}>
         <span className={styles['name']}>{title}</span>
@@ -158,25 +174,36 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
         {state.applyState.kind === 'saved' ? <p className={styles['savedNotice']} role="status">{t('saved')}</p> : null}
         <p className={styles['error']}>{`${t('loadFailed')}: ${state.error ?? ''}`}</p>
         <div className={styles['footer']}>
+          {/* Retry reuses the `.discard` (secondary/outline) button look — the
+              module's only secondary-button style, mirroring upstream
+              PluginCard's single secondary action; intentional reuse (qc1
+              N-2). */}
           <button type="button" className={styles['discard']} onClick={() => { void controller.load() }}>
             {t('retry')}
           </button>
         </div>
       </div>
     )
-  } else if (!state.advisorPresent) {
+  } else if (degraded) {
     // KD-G5 (the n2-era C-1 mitigation): when the last load could not reach
     // the `advisor.get` gateway endpoint (gateway not ready / channel down),
     // the form would present defaults + a writable-looking Save that can only
     // fail with a host refusal — render the explicit notice in the card body
-    // instead and never offer Save. qc3 N-1 mirrors here too: a post-apply
-    // reload that loses the gateway must not mask a landed write — the saved
-    // line renders alongside the notice.
+    // instead and never offer Save. The branch is the DERIVED `degraded` (not
+    // the raw `!advisorPresent`) so it also covers a refresh in flight: while
+    // `status === 'loading'` on a degraded card the latch keeps the AC-3
+    // notice visible through the refresh window (qc1 S-2). qc3 N-1 mirrors
+    // here too: a post-apply reload that loses the gateway must not mask a
+    // landed write — the saved line renders alongside the notice.
     body = (
       <div className={styles['body']}>
         {state.applyState.kind === 'saved' ? <p className={styles['savedNotice']} role="status">{t('saved')}</p> : null}
         <p className={styles['notice']} role="status">{t('namespaceUnavailable')}</p>
         <div className={styles['footer']}>
+          {/* Retry reuses the `.discard` (secondary/outline) button look — the
+              module's only secondary-button style, mirroring upstream
+              PluginCard's single secondary action; intentional reuse (qc1
+              N-2). */}
           <button type="button" className={styles['discard']} onClick={() => { void controller.load() }}>
             {t('retry')}
           </button>

@@ -44,7 +44,7 @@ import { bindSnapshotSelector, type SnapshotSelectorHook } from '@deepseek-ai/ds
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import { AdvisorCard } from '../src/client/advisor-card'
 import type { AdvisorCardProps } from '../src/client/advisor-card'
-import { AdvisorSettingsStore } from '../src/client/advisor-store'
+import { AdvisorSettingsStore, refreshIfLoaded } from '../src/client/advisor-store'
 import type { AdvisorConfigView, AdvisorSettingsState } from '../src/client/advisor-store'
 import { apply } from '../src/client/index'
 import { en, zh } from '../src/client/locales'
@@ -438,6 +438,65 @@ describe('AdvisorCard', () => {
     view.rerender(<AdvisorCard {...props} />)
     expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
     expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('keeps the degraded notice visible through a background refresh (qc1 S-2)', async () => {
+    // A pushed invalidation refresh flips a degraded card to status 'loading';
+    // the derived open must NOT collapse the AC-3 notice for the refresh
+    // window — the store's latched `degraded` holds the disclosure open until
+    // the refresh settles back to degraded.
+    const scripted = scriptedApi({ config: null })
+    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc)
+    await controller.load() // settled degraded: ready + advisorPresent=false
+    const view = render(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
+    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
+
+    // The invalidation refresh: hold the gateway get pending so the snapshot
+    // stays 'loading' while we assert the notice visibility.
+    let releaseGet!: (value: RpcResult<{ config: AdvisorConfigView }>) => void
+    scripted.get.mockReturnValueOnce(
+      new Promise<RpcResult<{ config: AdvisorConfigView }>>((resolve) => { releaseGet = resolve }),
+    )
+    refreshIfLoaded(controller)
+    // load() flipped status synchronously; the latch keeps the notice open.
+    expect(controller.store.getSnapshot().status).toBe('loading')
+    view.rerender(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
+    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
+
+    // The refresh settles back to degraded: the notice persists.
+    releaseGet(failResult('advisor gateway is not ready') as RpcResult<{ config: AdvisorConfigView }>)
+    await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
+    view.rerender(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
+    expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
+    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('does not latch userOpen when the header is clicked while degraded — recovery stays collapsed (qc3 S-1)', async () => {
+    // While degraded the derived open is forced true and the header click is
+    // a NO-OP: it must not silently toggle userOpen (which would pre-open the
+    // recovered form) and aria-expanded must stay true (no false
+    // collapse announcement).
+    const scripted = scriptedApi({ config: null })
+    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc)
+    await controller.load()
+    const view = render(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
+    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
+    // Clicking the header while degraded changes nothing.
+    toggleCard()
+    view.rerender(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
+    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
+    // The gateway recovers: the healthy card must still start collapsed —
+    // userOpen stayed false through the degraded clicks.
+    scripted.get.mockImplementation(() => Promise.resolve(okResult({ config: defaultConfig() })))
+    await controller.load()
+    view.rerender(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
+    expect(headerButton(false).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText(en.namespaceUnavailable)).toBeNull()
+    expect(screen.queryByLabelText(en.enabled)).toBeNull()
   })
 
   it('reveals required provider/model selects when enabled and blocks Save with the gate copy', async () => {
