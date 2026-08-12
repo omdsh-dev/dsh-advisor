@@ -851,6 +851,107 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
   })
 })
 
+describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — KD-U2)', () => {
+  it('tracks the dirty lifecycle: clean → edit dirty → discard clean → edit → apply success clean', async () => {
+    const { api, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
+    // The store default is clean — no edits staged against any seed.
+    expect(store.store.getSnapshot().dirty).toBe(false)
+    await store.load()
+    expect(store.store.getSnapshot().dirty).toBe(false) // seeded from the config → clean
+    store.setSystemPrompt('review terser')
+    expect(store.store.getSnapshot().dirty).toBe(true) // a save would write the prompt
+    store.discard()
+    expect(store.store.getSnapshot().dirty).toBe(false) // draft rewound to the seed → clean
+    store.setImmuneTurns(9)
+    expect(store.store.getSnapshot().dirty).toBe(true)
+    await store.apply()
+    // The write landed and the returned config was adopted as the new seed —
+    // the draft now matches the host, so a save writes nothing → clean.
+    expect(store.store.getSnapshot().dirty).toBe(false)
+  })
+
+  it('keeps a cleared number field clean by itself (patchFor omits it — leave stored value unchanged)', async () => {
+    const { api, rpc } = scriptedApi({
+      config: { enabled: false, systemPrompt: '', immuneTurns: 5, maxDeltaMessages: 60 },
+    })
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    expect(store.store.getSnapshot().dirty).toBe(false)
+    store.setImmuneTurns(undefined) // cleared input → the key is omitted from the patch
+    expect(store.store.getSnapshot().dirty).toBe(false)
+    // And clearing BOTH number fields stays clean — empty input means
+    // "leave the stored value unchanged", never a write.
+    store.setMaxDeltaMessages(undefined)
+    expect(store.store.getSnapshot().dirty).toBe(false)
+  })
+
+  it("treats a cleared provider the seed pins as dirty (the '' override is a real edit)", async () => {
+    const { api, rpc } = scriptedApi({
+      config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    expect(store.store.getSnapshot().dirty).toBe(false)
+    // The KD-S4 gate forbids Apply while enabled with an empty provider/model,
+    // so the clear path is exercised with the switch off (values are then
+    // ignored by the host gate) — the dirty derivation itself does not care.
+    store.setEnabled(false)
+    store.setProvider('') // patchFor emits provider: '' → a real write → dirty
+    expect(store.store.getSnapshot().dirty).toBe(true)
+  })
+
+  it('keeps dirty false through an unseeded first-load failure and recomputes from the recovered seed', async () => {
+    // First load: the get fails (gateway not ready) — nothing seeded, nothing
+    // staged: dirty must stay false. Once the gateway recovers, the REAL
+    // config seeds the draft and dirty derives clean against it.
+    const { api, rpc, get } = scriptedApi()
+    get
+      .mockImplementationOnce(() => Promise.resolve(failResult('advisor gateway is not ready')))
+      .mockImplementationOnce(() => Promise.resolve(okResult({
+        config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20 },
+      })))
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    let state = store.store.getSnapshot()
+    expect(state.advisorPresent).toBe(false)
+    expect(state.dirty).toBe(false) // unseeded failure keeps the form clean
+    await store.load() // gateway recovers → seeds the ACTUAL config
+    state = store.store.getSnapshot()
+    expect(state.advisorPresent).toBe(true)
+    expect(state.dirty).toBe(false) // seeded from the config → clean
+  })
+
+  it('returns to clean when an edit reverts to the seed value (empty patch boundary)', async () => {
+    // dirty = "a save would write something": an edit that puts the draft
+    // back to the seed produces an EMPTY patch → clean (the UI then hides
+    // Save/Discard — the store keeps the defense as well).
+    const { api, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    store.setSystemPrompt('review terser')
+    expect(store.store.getSnapshot().dirty).toBe(true)
+    store.setSystemPrompt('') // back to the seed value → empty patch → clean
+    expect(store.store.getSnapshot().dirty).toBe(false)
+  })
+
+  it('keeps the draft dirty when an apply is rejected (the form stays for retry)', async () => {
+    // A rejected write leaves the seed untouched: the draft still differs,
+    // so dirty stays true and the card keeps Save enabled for the retry.
+    const { api, rpc, set } = scriptedApi()
+    set.mockReturnValueOnce(Promise.resolve(failResult('host refused')))
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    store.setEnabled(true)
+    store.setProvider('deepseek-official')
+    store.setModel('ds-a')
+    expect(store.store.getSnapshot().dirty).toBe(true)
+    await store.apply()
+    expect(store.store.getSnapshot().applyState.kind).toBe('error')
+    expect(store.store.getSnapshot().dirty).toBe(true) // no write, no re-seed
+  })
+})
+
 describe('card scenario (store-level load/save over the gateway channel)', () => {
   it('runs the card round trip: load → edit → apply → edit → discard → apply (empty diff, no write)', async () => {
     // The store-level mirror of the card interaction: a minimal patch lands on

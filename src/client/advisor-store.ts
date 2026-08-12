@@ -152,10 +152,12 @@ export interface AdvisorSettingsState {
   advisorPresent: boolean
   /**
    * Whether the draft holds edits a save would write — the "unsaved" pill
-   * and the save/discard disabled semantics (upstream CardShell.dirty). The
-   * card reads it; the derivation (`patchFor` non-empty, recomputed on
-   * load/mutation/discard/apply) is task 2 of plan
-   * dsh-advisor-plugin-config-card-ux — until it lands this stays false.
+   * and the save/discard disabled semantics (upstream CardShell.dirty).
+   * Derived as `patchFor(draft)` non-empty (KD-U2, plan
+   * dsh-advisor-plugin-config-card-ux task 2), recomputed on load (seed
+   * settled, real config resolved only), every draft mutation, discard and a
+   * successful apply — always inside the same `store.update` callback that
+   * mutates the draft/seed, never via a snapshot read + second write.
    */
   dirty: boolean
   /** The form draft (seeded from the resolved config; never re-seeded by refreshes). */
@@ -379,6 +381,13 @@ export class AdvisorSettingsStore {
       s.advisorPresent = config !== undefined
       s.modelsByProvider = {}
       s.modelsEmptyReason = {}
+      // KD-U2 dirty recompute point: the seed just settled (line above — the
+      // same synchronous tick, no await in between). Only a REAL resolved
+      // config recomputes — on a get failure the draft keeps its previous
+      // dirty state against the last-known-good seed (the unseeded first-load
+      // failure path stays clean). A refresh whose host values now match the
+      // draft (another session saved) correctly flips dirty back to false.
+      if (config !== undefined) s.dirty = this.recomputeDirty(s.draft)
     })
     // Model options for the provider already selected by the stored config,
     // so a freshly opened form shows the options without interaction.
@@ -492,6 +501,7 @@ export class AdvisorSettingsStore {
       // A provider switch invalidates the previously chosen model.
       s.draft = deletePath(withoutProvider, ['model']) as unknown as AdvisorDraft
       s.applyState = { kind: 'idle' }
+      s.dirty = this.recomputeDirty(s.draft)
     })
     if (trimmed.length > 0) void this.ensureModels(trimmed)
   }
@@ -565,7 +575,14 @@ export class AdvisorSettingsStore {
       // qc3 N-1: the saved feedback is set BEFORE the reload — a reload
       // failure (status 'error') must not mask the landed write; the card
       // renders the saved line alongside the error+retry view.
-      this.store.update((s) => { s.applyState = { kind: 'saved' } })
+      this.store.update((s) => {
+        s.applyState = { kind: 'saved' }
+        // KD-U2 recompute point: the draft now matches the host (every
+        // differing key was written and the returned config was adopted as the
+        // seed), so dirty re-derives false here — even if the post-apply
+        // reload below fails and leaves the dirty term un-recomputed.
+        s.dirty = this.recomputeDirty(s.draft)
+      })
       await this.load()
     } catch (error) {
       this.store.update((s) => {
@@ -598,6 +615,8 @@ export class AdvisorSettingsStore {
     this.store.update((s) => {
       s.draft = this.seed
       s.applyState = { kind: 'idle' }
+      // The draft is exactly the seed again → the diff is empty → clean.
+      s.dirty = this.recomputeDirty(s.draft)
     })
   }
 
@@ -641,11 +660,24 @@ export class AdvisorSettingsStore {
     return patch
   }
 
+  /**
+   * The dirty derivation (KD-U2, plan dsh-advisor-plugin-config-card-ux task
+   * 2): the draft holds edits a save would write iff the minimal patch
+   * against the current seed is non-empty. Takes the DRAFT being mutated and
+   * reads `this.seed` — it must be called INSIDE the same `store.update`
+   * callback that mutates the draft/seed, never via a snapshot read + second
+   * write (the frozen-snapshot write would be dropped by the snapshot store).
+   */
+  private recomputeDirty(draft: AdvisorDraft): boolean {
+    return Object.keys(this.patchFor(draft)).length > 0
+  }
+
   /** Edit one always-present draft field via the schema-form path writer. */
   private setField(key: string, value: unknown): void {
     this.store.update((s) => {
       s.draft = setPath(s.draft as unknown as Record<string, unknown>, [key], value) as unknown as AdvisorDraft
       s.applyState = { kind: 'idle' }
+      s.dirty = this.recomputeDirty(s.draft)
     })
   }
 
@@ -654,6 +686,7 @@ export class AdvisorSettingsStore {
     this.store.update((s) => {
       s.draft = deletePath(s.draft as unknown as Record<string, unknown>, [key]) as unknown as AdvisorDraft
       s.applyState = { kind: 'idle' }
+      s.dirty = this.recomputeDirty(s.draft)
     })
   }
 
