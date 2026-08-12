@@ -49,7 +49,7 @@ advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabl
 配置在**三个配置面**之间合成（后一层覆盖前一层；各处使用同一组键）：
 
 1. **插件行 config** —— `$DSH_HOME/profiles/web/cordis.patch.yml`（见下）。这是合成 base。
-2. **dsh web Settings 页** —— Advisor section（enabled 开关、只列出系统内已配置 provider 及其模型的 provider/model 选择框、可选字段）保存到 `advisor` settings namespace，覆盖插件行 config 而无需改动它。保存后新会话立即生效，无需重启（运行时 live 读取合成值）。需要当前版本的 dsh web 构建（其 web shell 能加载 `dsh.client` 声明包并渲染 `settings.section` slot）。section 通过**官方 `GatewayService` RPC 通道**读写该命名空间（`/api/advisor/get` + `/api/advisor/set`，由宿主的 typertGateway claims——与 dsh 内建 `goals` 服务同一机制），该通道**不受 settings 暴露白名单门控**：进程内写入（`ctx.settings.update`）没有 exposed-namespace 检查。无需也不施加任何宿主补丁。
+2. **dsh web Settings 页 —— "插件配置"页** —— Advisor **卡片**（id `advisor`，渲染在三张上游卡片 bash / agent-loop / web-search 之后），含 enabled 开关、只列出系统内已配置 provider 及其模型的 provider/model 选择框与可选字段。保存写入 `advisor` settings namespace，覆盖插件行 config 而无需改动它。保存后新会话立即生效，无需重启（运行时 live 读取合成值）。需要当前版本的 dsh web 构建（其 web shell 声明了 `settings.plugin.item` 卡片 slot 并能加载 `dsh.client` 声明包）。卡片通过**官方 `GatewayService` RPC 通道**读写该命名空间（`/api/advisor/get` + `/api/advisor/set`，由宿主的 typertGateway claims——与 dsh 内建 `goals` 服务同一机制），该通道**不受 settings 暴露白名单门控**：进程内写入（`ctx.settings.update`）没有 exposed-namespace 检查。无需也不施加任何宿主补丁。
 3. **`/advisor` 指令** —— 按会话且临时：翻转的是会话级 override，从不修改持久化配置（见[用法](#用法)）。
 
 两个持久化配置面共享同一个硬门禁：`enabled: true` 而 `provider`/`model` 为空时绝不发起模型调用（disabled-with-reason）。Settings 页还会在 enabled 且必填字段为空时阻止保存；宿主侧硬门禁始终是所有路径上的最后防线。
@@ -123,7 +123,7 @@ MVP 有意放弃与 omp 的完整对等。已接受的差距（在 harness 迭�
 
 - **每个会话一个 advisor** —— 无并行 advisor roster 或 WATCHDOG 式文件发现（下一迭代）。
 - **无 advisor tools** —— 评审者只是一个独立的模型调用；它无法自行核验主张（下下迭代）。
-- **无会话内 advisor 面板** —— 建议仅以带标签的注入消息呈现（本迭代新增的 Advisor **Settings** section 是配置面，不是会话内视图；会话内卡片为下下迭代）。
+- **无会话内 advisor 面板** —— 建议仅以带标签的注入消息呈现（"插件配置"设置页上的 Advisor 卡片是配置面，不是会话内视图；会话内卡片为下下迭代）。
 - **无 transcript 持久化或成本统计** —— 无可恢复的 advisor 历史或成本可观测性（下下迭代）。
 - **无 delta 内容密钥混淆** —— transcript 中出现的 secrets 可能到达 advisor 模型；请通过配置可信的评审模型来缓解。
 - **不隔离不安全的 advisor 输出** —— 行为异常的 note 可能携带指令性文本；JSON frame + 校验 + advisory-only 框架（`[advisor:…]`、"weigh, don't blindly obey"）是仅有的缓解手段，且 note 会原样送达主 transcript（路线图）。

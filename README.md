@@ -71,17 +71,20 @@ ones; every surface uses the same key set):
 
 1. **Plugin-row config** — `$DSH_HOME/profiles/web/cordis.patch.yml`
    (below). This is the composition base.
-2. **dsh web Settings page** — the Advisor section (enabled toggle, provider /
-   model selects restricted to system-configured providers and their models,
-   optional fields) saves into the `advisor` settings namespace and overrides
-   the plugin-row config without editing it. Saving applies to new sessions
-   immediately — no restart (the runtime reads the composed value live).
-   Requires a current dsh web build whose shell loads packages that declare
-   `dsh.client` and renders `settings.section` slots. The section reads and
-   writes the namespace through the **official `GatewayService` RPC channel**
-   (`/api/advisor/get` + `/api/advisor/set`, claimed by the host's
-   typertGateway — the same mechanism the dsh `goals` service uses), which is
-   **not gated by the settings exposure allowlist**: the in-process write
+2. **dsh web Settings page — the "插件配置" (Plugin Configuration) page** —
+   the Advisor **card** (id `advisor`, rendered after the upstream bash /
+   agent-loop / web-search cards) with the enabled toggle, provider / model
+   selects restricted to system-configured providers and their models, and the
+   optional fields. Saving writes into the `advisor` settings namespace and
+   overrides the plugin-row config without editing it. Saving applies to new
+   sessions immediately — no restart (the runtime reads the composed value
+   live). Requires a current dsh web build whose shell declares the
+   `settings.plugin.item` card slot and loads packages that declare
+   `dsh.client`. The card reads and writes the namespace through the
+   **official `GatewayService` RPC channel** (`/api/advisor/get` +
+   `/api/advisor/set`, claimed by the host's typertGateway — the same
+   mechanism the dsh `goals` service uses), which is **not gated by the
+   settings exposure allowlist**: the in-process write
    (`ctx.settings.update`) carries no exposed-namespace check. No host
    patching is applied or required.
 3. **`/advisor` command** — per-session and ephemeral: it flips a session
@@ -207,8 +210,8 @@ harness iteration roadmap):
 - **No advisor tools** — the reviewer is an independent model call only; it
   cannot verify claims itself (next-next iteration).
 - **No in-session advisor panel** — advice surfaces only as tagged injected
-  messages (the Advisor **Settings** section is a config surface, not a
-  session view; an in-session card is next-next iteration).
+  messages (the Advisor card on the "插件配置" settings page is a config
+  surface, not a session view; an in-session card is next-next iteration).
 - **No transcript persistence or cost stats** — no resumable advisor history or
   cost observability (next-next iteration).
 - **No secret obfuscation of delta content** — secrets present in the transcript
