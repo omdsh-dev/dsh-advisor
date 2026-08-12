@@ -54,7 +54,7 @@ advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabl
 
 两个持久化配置面共享同一个硬门禁：`enabled: true` 而 `provider`/`model` 为空时绝不发起模型调用（disabled-with-reason）。Settings 页还会在 enabled 且必填字段为空时阻止保存；宿主侧硬门禁始终是所有路径上的最后防线。
 
-![dsh web Settings（"插件配置"）页上的 Advisor 卡片](https://raw.githubusercontent.com/dsh-external/dsh-advisor/main/docs/screenshots/advisor-settings-card.webp)
+![dsh web Settings（"插件配置"）页上的 Advisor 卡片](docs/screenshots/advisor-settings-card.webp)
 
 插件行配置：
 
@@ -115,7 +115,7 @@ advisor 采用双模式触发，取决于会话形态：
 
 `[advisor:{severity}]` 前缀是主模型获得的关于如何对待它的唯一线索 —— 主 system prompt 从不提及 advisory。advisor 消息会被排除在此后的 advisor delta 之外，因此 advisor 永远不会读回自己的建议。
 
-![注入到会话流中的 advisor 建议](https://raw.githubusercontent.com/dsh-external/dsh-advisor/main/docs/screenshots/advisor-injected-note.webp)
+![注入到会话流中的 advisor 建议](docs/screenshots/advisor-injected-note.webp)
 
 ## 工作原理
 
