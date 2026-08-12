@@ -34,7 +34,7 @@
  *               missing, stale, or a peer is unlinkable.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -48,7 +48,7 @@ function resolveSourceRoot() {
   const candidates = [
     process.env.DSH_SOURCE_DIR,
     process.env.DSH_HOME ? join(process.env.DSH_HOME, 'source', 'current') : undefined,
-    join(process.env.HOME ?? '', '.dsh', 'source', 'current'),
+    join(process.env.HOME ?? process.env.USERPROFILE ?? '', '.dsh', 'source', 'current'),
   ].filter((candidate) => candidate !== undefined)
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate
@@ -130,13 +130,21 @@ function readdirSafe(dir) {
 const linkDir = join(repo, 'node_modules', '@deepseek-ai')
 const cordisShimDir = join(repo, 'node_modules', '@deepseek-ai', 'cordis')
 
-function linkKind() {
-  return process.platform === 'win32' ? 'junction' : 'dir'
+function linkKind(target) {
+  if (process.platform !== 'win32') return 'dir'
+  // Windows: junctions are dir-only (and need no special privileges); file
+  // symlinks need Developer Mode or admin. Pick per target so the cordis
+  // shim's file entries (index.js / index.d.ts) don't get broken junctions.
+  try {
+    return statSync(target).isDirectory() ? 'junction' : 'file'
+  } catch {
+    return 'file'
+  }
 }
 
 function ensure(linkPath, target) {
   rmSync(linkPath, { recursive: true, force: true })
-  symlinkSync(target, linkPath, linkKind())
+  symlinkSync(target, linkPath, linkKind(target))
 }
 
 /**
@@ -239,8 +247,10 @@ function pruneStale(managed, dryRun) {
   const stale = []
   const scan = (linkPath) => {
     // Managed keys are package names ('@deepseek-ai/x', 'react'); the scanned
-    // paths are node_modules-relative ('node_modules/@deepseek-ai/x').
-    const entry = linkPath.slice(repo.length + 1).replace(/^node_modules\//, '')
+    // paths are node_modules-relative ('node_modules/@deepseek-ai/x'). Strip
+    // the node_modules prefix and normalize backslashes to forward slashes
+    // (Windows path separator) so the key matches the managed Map.
+    const entry = linkPath.slice(repo.length + 1).replace(/^node_modules[/\\]/, '').replace(/\\/g, '/')
     if (managed.has(entry)) return
     let target
     try {
