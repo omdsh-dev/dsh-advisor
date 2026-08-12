@@ -224,13 +224,13 @@ if (bundleText.includes('/Users/')) {
   throw new Error('client bundle contract: emitted bundle leaks a builder machine path ("/Users/")')
 }
 // CSS-modules inline wiring: the bundle must carry the guarded <style
-// data-plugin> injection stub and the tagId of the advisor section module
+// data-plugin> injection stub and the tagId of the advisor card module
 // (the loader cleans up plugin-owned tags by `style[data-plugin=<id>]` +
-// `data-plugin-css`; without this wiring the section renders unstyled).
+// `data-plugin-css`; without this wiring the card renders unstyled).
 for (const fragment of [
   'data-plugin',
   'document.head.appendChild',
-  'dsh-advisor/advisor-section.module.css',
+  'dsh-advisor/advisor-card.module.css',
 ]) {
   if (!bundleText.includes(fragment)) {
     throw new Error(`client bundle contract: CSS-modules inline wiring missing — "${fragment}" not in the emitted bundle`)

@@ -566,6 +566,22 @@ export class AdvisorSettingsStore {
   }
 
   /**
+   * Drop the current draft edits and rewind the form to the last-known host
+   * config (the seed from the last get/apply). The card chrome mirrors the
+   * upstream plugin cards' Save/Discard pair (KD-4): unlike the upstream
+   * staged CardForm, this store's edits mutate the draft in place, so discard
+   * rewinds the draft instead of dropping a staging layer. Pure client-side
+   * revert — no gateway write (the host stays the single fact source; a
+   * follow-up apply diffs against the restored seed and sends nothing).
+   */
+  discard(): void {
+    this.store.update((s) => {
+      s.draft = this.seed
+      s.applyState = { kind: 'idle' }
+    })
+  }
+
+  /**
    * The minimal config patch making the effective config match the draft —
    * only keys whose value differs from the last-read seed are sent, so a
    * stale read never clobbers concurrent changes to untouched keys and base

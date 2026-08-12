@@ -84,7 +84,9 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     const offenders = [...new Set(requires)].filter((specifier) => !CLIENT_EXTERNALS.includes(specifier))
     expect(offenders, 'no @deepseek-ai value import outside the frozen externals table').toEqual([])
     // The type-only packages must never surface as runtime requires.
-    for (const forbidden of ['dsh-client-connection', 'dsh-client-locale', 'dsh-client-ui-settings']) {
+    for (const forbidden of [
+      'dsh-client-connection', 'dsh-client-locale', 'dsh-client-ui-settings', 'dsh-client-ui-plugin-config',
+    ]) {
       expect(bundle, `no require of @deepseek-ai/${forbidden}`).not.toContain(`require("@deepseek-ai/${forbidden}`)
     }
   })
@@ -106,13 +108,13 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
   })
 
   it('inlines CSS Modules: style-injection wiring and hashed class-map export reach the bundle', () => {
-    // plan dsh-advisor-settings-ui-n3, task 1: the dsh-css-modules-inline
-    // plugin compiles `*.module.css` (the advisor section imports
-    // src/client/advisor-section.module.css) with lightningcss ([hash]_[local]
+    // plan dsh-advisor-plugin-config-card, task 2: the dsh-css-modules-inline
+    // plugin compiles `*.module.css` (the advisor card imports
+    // src/client/advisor-card.module.css) with lightningcss ([hash]_[local]
     // pattern, minified) and emits a guarded `<style data-plugin>` injection
     // stub that runs at factory execution. The loader cleans up plugin-owned
     // tags by `style[data-plugin=<id>]` + per-module `data-plugin-css`, so
-    // the bundle MUST carry that wiring or the section renders unstyled.
+    // the bundle MUST carry that wiring or the card renders unstyled.
     const bundle = readFileSync(resolve(repo, 'lib/client.js'), 'utf8')
     // F-1 regression (QC consolidated): the artifact must carry neither a raw
     // NUL byte nor the builder's absolute machine path — esbuild's virtual
@@ -131,14 +133,15 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     // the stub must actually assign tag.dataset.plugin, not merely contain the
     // literal "data-plugin". Quote/whitespace-normalized assignment form.
     expect(bundle, 'tag.dataset.plugin attribution (loader cleanup key)').toMatch(/tag\.dataset\.plugin\s*=/)
-    // tagId wiring: dsh-advisor/<basename>.
-    expect(bundle).toContain('dsh-advisor/advisor-section.module.css')
-    // Hashed class-map export ([hash]_[local]): the section classes reach the
+    // tagId wiring: dsh-advisor/<basename> (the card css replaced the removed
+    // section css — same commit, else the build gate fails).
+    expect(bundle).toContain('dsh-advisor/advisor-card.module.css')
+    // Hashed class-map export ([hash]_[local]): the card classes reach the
     // bundle as hashed names, and the map keys preserve the local names.
-    expect(bundle).toMatch(/_section/)
-    expect(bundle).toMatch(/_(section|title|intro|field|input|selectInput)/)
-    expect(bundle).toMatch(/"section": "[A-Za-z0-9]+_section"/)
-    expect(bundle).toContain('"section"')
+    expect(bundle).toMatch(/_card/)
+    expect(bundle).toMatch(/_(card|title|intro|field|input|selectInput)/)
+    expect(bundle).toMatch(/"card": "[A-Za-z0-9]+_card"/)
+    expect(bundle).toContain('"card"')
     expect(bundle).toContain('"title"')
   })
 
