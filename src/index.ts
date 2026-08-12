@@ -31,7 +31,7 @@
  * Config gateway (plan dsh-advisor-settings-gateway-n5): `apply` also
  * registers the host-side `AdvisorConfigGateway` (`src/gateway.ts`) — the
  * `/api/advisor/get` + `/api/advisor/set` Remote endpoints (typertGateway
- * SRC claims) that make the Settings section truly readable/writable from
+ * SRC claims) that make the Settings card truly readable/writable from
  * the web client.
  *
  * @module dsh-advisor

@@ -21,9 +21,15 @@
  *    merge has no revision guard).
  * ⑤ gateway availability (KD-G5): get success → advisorPresent; get failure
  *    (ok:false or transport throw) → advisorPresent=false with status 'ready'
- *    (the section shows the config-channel notice — never a hard load error).
+ *    (the card shows the config-channel notice — never a hard load error).
  * ⑥ invalidations: `refreshIfLoaded` refetches a loaded store and skips an
  *    idle (never-loaded) one.
+ * ⑦ discard (T2 store add, T3 review): the card's Discard rewinds the draft to
+ *    the last-known seed — pure client-side (no gateway write), the apply diff
+ *    after discard is EMPTY (reports saved without calling `advisor/set`),
+ *    pending apply feedback (error/saved) resets to idle, a fresh edit after
+ *    discard diff-cleans against the restored seed, and the unseeded first-load
+ *    path stays pristine (a later recovery still seeds the REAL config).
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -731,5 +737,148 @@ describe('post-apply reload failure (qc3 N-1)', () => {
     // error + retry).
     expect(state.applyState.kind).toBe('saved')
     expect(state.status).toBe('error')
+  })
+})
+
+describe('discard (card draft rewind — T2 store add, T3 review)', () => {
+  it('rewinds the draft to the last-known host config without any gateway write', async () => {
+    const { api, rpc, set } = scriptedApi({
+      config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20 },
+    })
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    store.setProvider('openai') // a provider switch invalidates the chosen model
+    store.setEnabled(false)
+    store.setSystemPrompt('edited')
+    expect(draftOf(store).provider).toBe('openai')
+    expect(draftOf(store).enabled).toBe(false)
+    store.discard()
+    // The draft is exactly the seed again — every edited key rewound.
+    expect(draftOf(store)).toEqual({
+      enabled: true, provider: 'deepseek-official', model: 'ds-a',
+      systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
+    })
+    // Discard is a client-side rewind — no advisor/set call ever happened.
+    expect(set).not.toHaveBeenCalled()
+  })
+
+  it('after discard, apply diffs empty and reports saved without a write', async () => {
+    // The T3-review-flagged assertion: discard restores the draft to the seed,
+    // so a follow-up apply has an EMPTY diff and reports saved WITHOUT calling
+    // advisor/set (the host stays the single fact source — nothing to write).
+    const { api, rpc, set } = scriptedApi({
+      config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    store.setEnabled(false)
+    store.setProvider('openai')
+    store.setSystemPrompt('edited')
+    store.discard()
+    await store.apply()
+    expect(set).not.toHaveBeenCalled()
+    expect(store.store.getSnapshot().applyState.kind).toBe('saved')
+    // The empty apply leaves the rewound draft untouched (no re-seed, no re-write).
+    expect(draftOf(store)).toEqual({
+      enabled: true, provider: 'deepseek-official', model: 'ds-a',
+      systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60,
+    })
+  })
+
+  it('clears a pending gate-error apply state back to idle', async () => {
+    const { api, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    store.setEnabled(true) // enabled without provider/model → the KD-S4 gate blocks Apply
+    await store.apply()
+    expect(store.store.getSnapshot().applyState.kind).toBe('error')
+    store.discard()
+    expect(store.store.getSnapshot().applyState.kind).toBe('idle')
+  })
+
+  it('clears the saved feedback back to idle after a landed apply (discard is a no-op on values)', async () => {
+    const { api, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    store.setImmuneTurns(5)
+    await store.apply()
+    expect(store.store.getSnapshot().applyState.kind).toBe('saved')
+    // Discard right after a landed apply: the values already match the seed
+    // (the returned config was adopted), so only the feedback resets.
+    store.discard()
+    expect(store.store.getSnapshot().applyState.kind).toBe('idle')
+    expect(draftOf(store).immuneTurns).toBe(5)
+  })
+
+  it('a fresh edit after discard diff-cleans against the restored seed', async () => {
+    // Discard restores the diff baseline: a later apply carries ONLY the new
+    // edit — the pre-discard model edit must not resurface in the patch.
+    const { api, rpc, call } = scriptedApi({
+      config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    store.setModel('ds-b')  // pre-discard edit
+    store.discard()         // rewind → seed (ds-a)
+    store.setImmuneTurns(9) // post-discard edit
+    await store.apply()
+    const payload = call.mock.calls.find(callArgs => callArgs[1] === 'advisor/set')?.[2] as { args: { patch: Record<string, unknown> } }
+    expect(payload.args.patch).toEqual({ immuneTurns: 9 })
+  })
+
+  it('does not corrupt the unseeded draft when discarded before the first successful load', async () => {
+    // First load: the get fails (gateway not ready) — the draft is NOT seeded
+    // and the card shows the notice (no discard button), but a store-level
+    // discard must not mark the draft seeded or invent values: once the
+    // gateway recovers, the next load still seeds the REAL config.
+    const { api, rpc, get } = scriptedApi()
+    get
+      .mockImplementationOnce(() => Promise.resolve(failResult('advisor gateway is not ready')))
+      .mockImplementationOnce(() => Promise.resolve(okResult({
+        config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20 },
+      })))
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    expect(store.store.getSnapshot().advisorPresent).toBe(false)
+    store.discard()
+    expect(draftOf(store)).toEqual({ enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 })
+    await store.load()
+    expect(store.store.getSnapshot().advisorPresent).toBe(true)
+    expect(draftOf(store)).toEqual({
+      enabled: true, provider: 'deepseek-official', model: 'ds-a',
+      systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
+    })
+  })
+})
+
+describe('card scenario (store-level load/save over the gateway channel)', () => {
+  it('runs the card round trip: load → edit → apply → edit → discard → apply (empty diff, no write)', async () => {
+    // The store-level mirror of the card interaction: a minimal patch lands on
+    // the host, the post-apply reload re-reads the composed config, and after
+    // a discard the follow-up apply diffs empty (saved-without-call).
+    const { api, rpc, call, get } = scriptedApi()
+    const store = new AdvisorSettingsStore(api, rpc)
+    await store.load()
+    expect(store.store.getSnapshot().advisorPresent).toBe(true)
+
+    // Card edit: enable + pick provider/model → apply writes the minimal patch.
+    store.setEnabled(true)
+    store.setProvider('deepseek-official')
+    store.setModel('ds-b')
+    await store.apply()
+    const payload = call.mock.calls.find(callArgs => callArgs[1] === 'advisor/set')?.[2] as { args: { patch: Record<string, unknown> } }
+    expect(payload.args.patch).toEqual({ enabled: true, provider: 'deepseek-official', model: 'ds-b' })
+    expect(get).toHaveBeenCalledTimes(2) // initial load + post-apply reload
+
+    // Edit again, then discard: the draft rewinds to the post-apply seed.
+    store.setModel('ds-a')
+    expect(draftOf(store).model).toBe('ds-a')
+    store.discard()
+    expect(draftOf(store).model).toBe('ds-b')
+
+    // Apply after discard: nothing differs from the seed → no second write.
+    await store.apply()
+    expect(call.mock.calls.filter(callArgs => callArgs[1] === 'advisor/set')).toHaveLength(1)
+    expect(store.store.getSnapshot().applyState.kind).toBe('saved')
   })
 })

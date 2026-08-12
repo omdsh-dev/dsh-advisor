@@ -1,6 +1,7 @@
 ---
 module: dsh host settings exposure boundary
 date: 2026-08-11
+last_updated: 2026-08-12
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
@@ -46,6 +47,8 @@ The dsh web Settings page's wire (`settings.describe` / `settings.mutate` / `set
 ## Why This Matters
 
 This is a cross-repo boundary that only surfaces at browser-level acceptance: all install/bundle/factory smokes pass while the settings wire silently refuses. The correct posture for a third-party plugin is: route the web Settings section through the `GatewayService` RPC channel (item 0), which bypasses the allowlist without any host change; the plugin config row stays the authoritative fallback configuration path. Do not verify host capabilities against a locally-modified host tree — verify against pristine upstream (or a clean snapshot) or the verification is circular.
+
+**Current web configuration face (n6)**: the advisor's web configuration surface is now the "插件配置" (plugin config) page card — the standalone `settings.section` entry was removed and the plugin registers a `settings.plugin.item` card (id `advisor`, order 30) instead, keeping the n5 GatewayService channel (item 0) for reads and writes. The allowlist boundary statement above stays accurate: the `advisor` namespace remains off both `WEB_SETTINGS_NAMESPACES` and `PRODUCT_SETTINGS_NAMESPACES`, the client settings scope still answers `settings-not-exposed`, and no host change is involved. The card-surface recipe is documented in `{KNOWLEDGE_DIR}/architecture-patterns/dsh-plugin-config-card-surface.md`.
 
 ## When to Apply
 

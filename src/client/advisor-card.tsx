@@ -1,17 +1,27 @@
 /**
- * Advisor settings section (plan dsh-advisor-settings-n5, task 2): the full
- * form — `enabled` switch (default off), `provider`/`model` select boxes
- * limited to the system-configured providers and their models (KD-S2), the
- * required-when-enabled gate (KD-S4, also enforced in the store), the
- * `systemPrompt` textarea, the `immuneTurns`/`maxDeltaMessages` number inputs,
- * and Apply writing the advisor config through the host gateway channel
- * (store → `connection.rpc.call('/api', 'advisor/set', { patch })`).
+ * Advisor settings card (plan dsh-advisor-plugin-config-card, task 2): the
+ * card registered into the "插件配置" settings page's `settings.plugin.item`
+ * slot (id `advisor`, order 30). It keeps the n5 gateway channel — the store
+ * reads/writes the advisor config through `/api/advisor/get` +
+ * `/api/advisor/set` (KD-G3) — and the n3 design language; only the
+ * registration surface changed (section → card, KD-1/KD-2).
  *
- * Presentation: the settings-panel design language (ModelsSection
- * vocabulary) via `advisor-section.module.css` — the section column, the form
- * grouped in one outlined card, 32px fields with the shared select chevron,
- * capsule Apply, and 12/18 hint tones. Every color resolves through a
- * `--dsw-alias-*` token so the section adapts to the light/dark theme.
+ * The full form: `enabled` switch (default off), `provider`/`model` select
+ * boxes limited to the system-configured providers and their models (KD-S2),
+ * the required-when-enabled gate (KD-S4, also enforced in the store), the
+ * `systemPrompt` textarea, the `immuneTurns`/`maxDeltaMessages` number inputs,
+ * and Apply writing the advisor config through the gateway channel (store →
+ * `connection.rpc.call('/api', 'advisor/set', { patch })`). Discard rewinds
+ * the draft to the last-known host config (client-side only — no gateway
+ * write). The card chrome (title/description/save/discard) is self-drawn in
+ * the plugin's own design language (KD-4): the upstream plugin-config client
+ * value face exports no reusable card components.
+ *
+ * Presentation: the settings-panel design language via
+ * `advisor-card.module.css` — the card column, the form grouped in one
+ * outlined surface, 32px fields with the shared select chevron, capsule
+ * Save/Discard, and 12/18 hint tones. Every color resolves through a
+ * `--dsw-alias-*` token so the card adapts to the light/dark theme.
  *
  * A stored provider/model that is no longer among the current options
  * surfaces warning copy (`staleProvider`/`staleModel`) instead of blocking
@@ -31,66 +41,76 @@
  */
 
 import type { ReactNode } from 'react'
+import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-web-react'
 import type { ApplyFailure, AdvisorSettingsState, AdvisorSettingsStore } from './advisor-store.ts'
-import type { en } from './locales.ts'
-import styles from './advisor-section.module.css'
+import styles from './advisor-card.module.css'
 
-/** Injected dependencies of {@link AdvisorSection} (slot `inject`). */
-export interface AdvisorSectionInjected {
-  /** The page store (loaded on mount, refreshed on pushed invalidations). */
+/** Injected dependencies of {@link AdvisorCard} (slot `inject`). */
+export interface AdvisorCardInjected {
+  /** The card store (loaded on mount, refreshed on pushed invalidations). */
   controller: AdvisorSettingsStore
   /** uSES subscription hook bound to the store. */
   useSnapshot: SnapshotSelectorHook<AdvisorSettingsState>
-  /** Section copy. */
-  t: (key: keyof typeof en) => string
 }
 
 /**
- * Props delivered by the slot outlet: the inject face spread flat (the
- * renderer erases the share boundary at the render call).
+ * Props the renderer binds for the card: the `settings.plugin.item` runtime
+ * share (empty owner props), the framework-synthesized `t` seat for the
+ * declared `settings.advisor` namespace (KD-1 — `t` is NOT part of the inject
+ * face), and the registrant's business face.
  */
-export type AdvisorSectionProps = Partial<AdvisorSectionInjected>
-
-/**
- * Render the Advisor section content column.
- * @param props - slot-delivered injected dependencies.
- * @returns the section, or null while the shell has not injected yet.
- */
-export function AdvisorSection(props: AdvisorSectionProps): ReactNode {
-  const { controller, useSnapshot, t } = props
-  if (controller === undefined || useSnapshot === undefined || t === undefined) return null
-  return <Loaded injected={{ controller, useSnapshot, t }} />
-}
+export type AdvisorCardProps =
+  PropsRuntime<'settings.plugin.item'>
+  & PropsLocale<'settings.advisor'>
+  & InjectFace<AdvisorCardInjected>
 
 /** Copy for an apply failure; the gate failure renders as the inline hints instead. */
-function failureCopy(failure: ApplyFailure, t: AdvisorSectionInjected['t']): string | undefined {
+function failureCopy(failure: ApplyFailure, t: AdvisorCardProps['t']): string | undefined {
   switch (failure.kind) {
     case 'gate': return undefined
     case 'message': return failure.message
   }
 }
 
-function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
-  const { controller, t } = injected
-  const state = injected.useSnapshot(snapshot => snapshot)
+/**
+ * Render the advisor card inside the plugin-config section.
+ * @param props - slot-delivered injected dependencies and the synthesized t seat.
+ * @returns the card.
+ */
+export function AdvisorCard(props: AdvisorCardProps): ReactNode {
+  const { controller, useSnapshot, t } = props
+  const state = useSnapshot(snapshot => snapshot)
 
+  // Load-on-mount (KD-3): the plugin-config page mounts the card lazily when
+  // the user opens the settings panel, so the first mount triggers the first
+  // gateway load — same idle→load() pattern the section used.
+  // Loop-guard invariant (qc3 N-1): load() synchronously flips status
+  // idle→loading BEFORE its first await (advisor-store.ts load() — the first
+  // store.update, no await in between), which is what terminates this mount
+  // trigger: the re-render reads 'loading' and the idle branch no longer
+  // fires, so there is no loop — and a StrictMode double render sees the
+  // already-flipped snapshot, so there is no duplicate fetch. Do NOT
+  // restructure into a useEffect: a deps-`[]` effect would refetch on every
+  // remount, changing the load-once semantics.
   if (state.status === 'idle') void controller.load()
   if (state.status === 'error') {
     // A post-apply reload failure must not mask a landed write: the saved
-    // feedback renders alongside the error + retry (qc3 N-1).
+    // feedback renders alongside the error + retry.
     return (
-      <div className={styles['section']}>
-        <h2 className={styles['title']}>{t('title')}</h2>
+      <li className={styles['card']}>
+        <h3 className={styles['title']}>{t('title')}</h3>
         {state.applyState.kind === 'saved' ? <p className={styles['savedNotice']} role="status">{t('saved')}</p> : null}
         <p className={styles['error']}>{`${t('loadFailed')}: ${state.error ?? ''}`}</p>
-        <button type="button" className={styles['secondaryButton']} onClick={() => { void controller.load() }}>
-          {t('retry')}
-        </button>
-      </div>
+        <div className={styles['editorActions']}>
+          <button type="button" className={styles['secondaryButton']} onClick={() => { void controller.load() }}>
+            {t('retry')}
+          </button>
+        </div>
+      </li>
     )
   }
-  if (state.status !== 'ready') return <h2 className={styles['title']}>{t('title')}</h2>
+  if (state.status !== 'ready') return <li className={styles['card']}><h3 className={styles['title']}>{t('title')}</h3></li>
 
   // KD-G5 (the n2-era C-1 mitigation): when the last load could not reach the
   // `advisor.get` gateway endpoint (gateway not ready / channel down), the
@@ -101,12 +121,12 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
   // the notice.
   if (!state.advisorPresent) {
     return (
-      <div className={styles['section']}>
-        <h2 className={styles['title']}>{t('title')}</h2>
+      <li className={styles['card']}>
+        <h3 className={styles['title']}>{t('title')}</h3>
         <p className={styles['intro']}>{t('intro')}</p>
         {state.applyState.kind === 'saved' ? <p className={styles['savedNotice']} role="status">{t('saved')}</p> : null}
         <p className={styles['notice']} role="status">{t('namespaceUnavailable')}</p>
-      </div>
+      </li>
     )
   }
 
@@ -131,12 +151,12 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
   const errorText = applyState.kind === 'error' ? failureCopy(applyState.failure, t) : undefined
 
   return (
-    <div className={styles['section']}>
-      <h2 className={styles['title']}>{t('title')}</h2>
+    <li className={styles['card']}>
+      <h3 className={styles['title']}>{t('title')}</h3>
       <p className={styles['intro']}>{t('intro')}</p>
       {!writable ? <p className={styles['notice']}>{t('readOnly')}</p> : null}
       {applyState.kind === 'saved' ? <p className={styles['savedNotice']} role="status">{t('saved')}</p> : null}
-      <div className={styles['card']}>
+      <div className={styles['form']}>
         <div className={styles['checkboxRow']}>
           <label htmlFor="advisor-enabled" className={styles['checkLabel']}>{t('enabled')}</label>
           <input
@@ -240,11 +260,14 @@ function Loaded({ injected }: { injected: AdvisorSectionInjected }): ReactNode {
         </div>
         {errorText === undefined ? null : <p className={styles['error']} role="alert">{errorText}</p>}
         <div className={styles['editorActions']}>
+          <button type="button" className={styles['secondaryButton']} disabled={busy} onClick={() => { controller.discard() }}>
+            {t('discard')}
+          </button>
           <button type="button" className={styles['primaryButton']} disabled={busy || gateFailed} onClick={() => { void controller.apply() }}>
             {saving ? t('applying') : t('apply')}
           </button>
         </div>
       </div>
-    </div>
+    </li>
   )
 }

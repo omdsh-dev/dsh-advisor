@@ -1,6 +1,6 @@
 /**
- * Advisor settings page store (plan dsh-advisor-settings-gateway-n5, task 2).
- * One snapshot over the wire faces the section renders from; the host stays the
+ * Advisor settings card store (plan dsh-advisor-settings-gateway-n5, task 2).
+ * One snapshot over the wire faces the card renders from; the host stays the
  * single fact source — every mutation writes through the host `advisor` config
  * gateway (`connection.rpc.call('/api', 'advisor/get' | 'advisor/set', …)`),
  * and the page re-renders from the next get, pushed or refetched.
@@ -31,10 +31,10 @@
  *   namespace value);
  * - **model options** = the provider profile's declared `models` first
  *   (KD-S2), else the `llm.models` catalog group for that provider, else
- *   empty options + a reason (guidance copy lives in the section);
+ *   empty options + a reason (guidance copy lives in the card);
  * - the **draft** is seeded from the RESOLVED advisor config so the form
  *   always shows the effective configuration (KD-G5: `advisor.get` failure →
- *   the section shows the config-channel notice instead of a writable-looking
+ *   the card shows the config-channel notice instead of a writable-looking
  *   form — never a hard load error, and never Apply).
  */
 
@@ -70,7 +70,7 @@ export interface AdvisorConfigView {
   disabledReason?: string
 }
 
-/** One provider row the section offers (configured providers only, KD-S2). */
+/** One provider row the card offers (configured providers only, KD-S2). */
 export interface ProviderOption {
   /** Provider route id. */
   provider: string
@@ -116,7 +116,7 @@ export interface AdvisorDraft {
   maxDeltaMessages?: number
 }
 
-/** Why an Apply failed (copy keys resolve in the section; raw text passes through). */
+/** Why an Apply failed (copy keys resolve in the card; raw text passes through). */
 export type ApplyFailure =
   | { kind: 'gate'; reason: 'provider' | 'model' }
   | { kind: 'message'; message: string }
@@ -146,7 +146,7 @@ export interface AdvisorSettingsState {
   /**
    * Whether the `advisor.get` gateway endpoint was reachable on the last load
    * (KD-G3/G5): success = a writable form; failure (gateway not ready, no
-   * settings service on the host) = the section shows the config-channel
+   * settings service on the host) = the card shows the config-channel
    * notice instead of a writable-looking form and never offers Apply.
    */
   advisorPresent: boolean
@@ -212,10 +212,10 @@ function profileModels(profile: unknown): readonly ModelOption[] | undefined {
 }
 
 /**
- * The advisor settings page controller (one per settings surface).
+ * The advisor settings card controller (one per settings surface).
  */
 export class AdvisorSettingsStore {
-  /** The snapshot the section renders from (uSES-safe store). */
+  /** The snapshot the card renders from (uSES-safe store). */
   readonly store: SnapshotStore<AdvisorSettingsState> = createSnapshotStore<AdvisorSettingsState>({
     status: 'idle',
     error: null,
@@ -270,7 +270,7 @@ export class AdvisorSettingsStore {
    * namespaces in parallel, then the advisor config over the gateway channel,
    * then the provider join and the draft seed. A provider-directory failure
    * keeps the last good rows and surfaces the error; an `advisor.get` failure
-   * is NOT a page error (KD-G5 — the section shows the config-channel notice,
+   * is NOT a page error (KD-G5 — the card shows the config-channel notice,
    * the provider directory stays usable). The draft is seeded only on the
    * first load — pushed refreshes never discard in-progress edits (mirror the
    * ProviderEditor draft lifetime).
@@ -551,7 +551,7 @@ export class AdvisorSettingsStore {
       // reload below fails.
       this.seed = draftOfConfig((result.value as { config: AdvisorConfigView }).config)
       // qc3 N-1: the saved feedback is set BEFORE the reload — a reload
-      // failure (status 'error') must not mask the landed write; the section
+      // failure (status 'error') must not mask the landed write; the card
       // renders the saved line alongside the error+retry view.
       this.store.update((s) => { s.applyState = { kind: 'saved' } })
       await this.load()
@@ -563,6 +563,30 @@ export class AdvisorSettingsStore {
         }
       })
     }
+  }
+
+  /**
+   * Drop the current draft edits and rewind the form to the last-known host
+   * config (the seed from the last get/apply). The card chrome mirrors the
+   * upstream plugin cards' Save/Discard pair (KD-4): unlike the upstream
+   * staged CardForm, this store's edits mutate the draft in place, so discard
+   * rewinds the draft instead of dropping a staging layer. Pure client-side
+   * revert — no gateway write (the host stays the single fact source; a
+   * follow-up apply diffs against the restored seed and sends nothing).
+   *
+   * Invariant (qc3 N-2): a mid-apply discard is UNGUARDED at the store level
+   * BY DESIGN — the UI disables Discard while a save is in flight
+   * (`disabled={busy}` on the card, `busy = !writable || saving`), so the
+   * interleaving cannot occur from the UI and no behavior guard is added
+   * here. A programmatic mid-apply discard would only rewind the draft before
+   * the in-flight apply adopts the returned config as the new seed — the
+   * host write is unaffected.
+   */
+  discard(): void {
+    this.store.update((s) => {
+      s.draft = this.seed
+      s.applyState = { kind: 'idle' }
+    })
   }
 
   /**
@@ -627,9 +651,9 @@ export class AdvisorSettingsStore {
 }
 
 /**
- * Refetch the page snapshot only after its first load: an unopened Advisor
- * page must not fetch on background invalidations.
- * @param controller - the page store.
+ * Refetch the card snapshot only after its first load: an unopened Advisor
+ * card must not fetch on background invalidations.
+ * @param controller - the card store.
  */
 export function refreshIfLoaded(controller: AdvisorSettingsStore): void {
   if (controller.store.getSnapshot().status === 'idle') return

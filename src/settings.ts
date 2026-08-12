@@ -23,7 +23,7 @@
  * pristine 20da39e snapshot; `SettingsRegisterOptions` has no
  * `exposeToWebClients` key). The advisor namespace is therefore always absent
  * from `settings.describe` on the web configuration boundary — but the web
- * section reaches the config through the GatewayService channel instead (plan
+ * card reaches the config through the GatewayService channel instead (plan
  * dsh-advisor-settings-gateway-n5: `AdvisorConfigGateway` claims
  * `/api/advisor/get` + `/api/advisor/set`, and the client calls
  * `connection.rpc.call('/api', …)`; the in-process `ctx.settings.update`

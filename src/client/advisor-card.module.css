@@ -1,14 +1,17 @@
-/* Advisor settings section, in the settings-panel design language: 16/24
- * title, 14/22 intro, 12/18 captions and hints, 32px fields, capsule
- * controls (h36 r18), and `border-l2` hairlines — the vocabulary
- * ModelsSection and the Button/Input primitives already use.
+/* Advisor settings card, in the settings-panel design language (the n3
+ * section vocabulary carried over to the card form): 16/24 title, 14/22
+ * intro, 12/18 captions and hints, 32px fields, capsule controls (h36 r18),
+ * and `border-l2` hairlines — the vocabulary ModelsSection and the
+ * Button/Input primitives already use.
  *
  * Every color resolves through a `--dsw-alias-*` token (light/dark
  * adaptive). Bare `--border` / `--surface` / `--text-*` names, which nothing
  * in this app defines, would render the light-mode literals written as their
  * fallbacks and stay light under the dark theme. */
 
-.section {
+/* The card is one <li> in the plugin-config section's card list: the whole
+   editing surface reads as one compact card in the settings column. */
+.card {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -31,7 +34,7 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* Warn-toned section notices: read-only environment, namespace unavailable. */
+/* Warn-toned card notices: read-only environment, namespace unavailable. */
 .notice {
   margin: 0;
   font-size: 12px;
@@ -46,9 +49,9 @@
   color: var(--dsw-alias-state-success-primary);
 }
 
-/* The compact form grouped as one card: outlined on the panel fill like the
-   models page's row cards, so the editing surface reads as a unit. */
-.card {
+/* The compact form grouped as one outlined surface on the panel fill, so the
+   editing surface reads as a unit. */
+.form {
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   padding: 12px 14px;
@@ -224,8 +227,8 @@ select.input {
   color: var(--dsw-alias-state-error-primary);
 }
 
-/* Apply/Cancel footer: the same h36 r18 capsules as the models page — the
-   primary button carries the brand fill, Cancel is the outlined sibling. */
+/* Save/Discard footer: the same h36 r18 capsules as the models page — the
+   primary button carries the brand fill, Discard is the outlined sibling. */
 .editorActions {
   display: flex;
   justify-content: flex-end;
