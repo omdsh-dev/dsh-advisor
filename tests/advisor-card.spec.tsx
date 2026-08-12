@@ -301,6 +301,12 @@ describe('AdvisorCard chrome (upstream PluginCard contract)', () => {
     expect(header.getAttribute('aria-label')).toBe(`${en.expand}: ${en.title}`)
     expect(within(header).getByText(en.title)).toBeTruthy()
     expect(within(header).getByText(en.intro)).toBeTruthy()
+    // The chevron rotation is a CSS-module class toggle — jsdom resolves the
+    // module to `{}`, so the literal `chevronOpen` class is asserted at the
+    // bundle level (client-build.test.ts class-map assertion) and through the
+    // substitutes here: the svg presence + aria-expanded + the body toggle
+    // (M-1, T1 task review — the class rotation itself is not DOM-assertable
+    // in jsdom).
     expect(header.querySelector('svg')).toBeTruthy() // the chevron icon
     expect(screen.queryByLabelText(en.enabled)).toBeNull()
     expect(screen.queryByRole('button', { name: en.save })).toBeNull()
@@ -380,6 +386,69 @@ describe('AdvisorCard', () => {
     const { scripted, controller } = await mountCard({}, false)
     await waitFor(() => expect(scripted.get).toHaveBeenCalled())
     await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
+  })
+
+  it('starts collapsed on a real first mount (idle store): header only, no body', async () => {
+    // I-1 regression (T1 task review): the mount-time snapshot is the store
+    // default — 'idle' with advisorPresent=false — and the old mount-time
+    // useState initializer read that as "cannot render the form", starting the
+    // healthy card OPEN with an empty body. On a real first mount (no
+    // preload) the card must render COLLAPSED (AC-1, Task 3 GUI ①): the
+    // header button only, aria-expanded=false, no body/form at all.
+    await mountCard({}, false)
+    const header = headerButton(false)
+    expect(header.getAttribute('aria-expanded')).toBe('false')
+    expect(header.getAttribute('aria-label')).toBe(`${en.expand}: ${en.title}`)
+    expect(header.querySelector('svg')).toBeTruthy() // the chevron icon
+    expect(screen.queryByLabelText(en.enabled)).toBeNull()
+    expect(screen.queryByRole('button', { name: en.save })).toBeNull()
+    expect(screen.queryByRole('button', { name: en.discard })).toBeNull()
+    expect(screen.queryByText(en.namespaceUnavailable)).toBeNull()
+    expect(screen.queryByText(`${en.loadFailed}:`)).toBeNull()
+  })
+
+  it('keeps the healthy card collapsed through load; the form appears only on header click', async () => {
+    // I-1 regression: a real first mount (idle store) stays collapsed while
+    // the load is in flight AND after it resolves to a healthy ready state —
+    // the form appears only once the user clicks the header (AC-1).
+    const { view, controller, props } = await mountCard({}, false)
+    // While the load is in flight: header only, no open empty body (M-2).
+    expect(headerButton(false).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByLabelText(en.enabled)).toBeNull()
+    // The load resolves to ready + advisorPresent → still collapsed (no click
+    // yet — the derived open must not follow the load result).
+    await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
+    view.rerender(<AdvisorCard {...props} />)
+    expect(headerButton(false).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByLabelText(en.enabled)).toBeNull()
+    expect(screen.queryByText(en.namespaceUnavailable)).toBeNull()
+    // The user's click reveals the form.
+    toggleCard()
+    view.rerender(<AdvisorCard {...props} />)
+    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByLabelText(en.enabled)).toBeTruthy()
+  })
+
+  it('shows the gateway notice open without any click on a real first mount when get fails', async () => {
+    // I-1 regression + AC-3: on a real first mount (idle store) whose gateway
+    // get fails, the card must end up with the notice body VISIBLE without any
+    // interaction (derived open — the notice must appear without a click) —
+    // and the header click must NOT hide it (the degraded body is always
+    // visible; the documented divergence from upstream's unavailable→nothing).
+    const { view, controller, props } = await mountCard({ config: null }, false)
+    await waitFor(() => {
+      expect(controller.store.getSnapshot().status).toBe('ready')
+      expect(controller.store.getSnapshot().advisorPresent).toBe(false)
+    })
+    view.rerender(<AdvisorCard {...props} />)
+    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: en.save })).toBeNull()
+    // Clicking the header cannot collapse the degraded notice away.
+    toggleCard()
+    view.rerender(<AdvisorCard {...props} />)
+    expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
+    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
   })
 
   it('reveals required provider/model selects when enabled and blocks Save with the gate copy', async () => {
@@ -696,7 +765,15 @@ describe('AdvisorCard', () => {
     fireEvent.click(screen.getByRole('button', { name: en.retry }))
     await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
     view.rerender(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
-    // The error-started card stays open after recovery — the form is visible.
+    // The error body was derived-open while degraded; once the retry recovers
+    // the healthy card, the derivation no longer forces it open (I-1 — the
+    // disclosure follows userOpen for a healthy card), so the card is
+    // collapsed again until the user expands it.
+    expect(headerButton(false).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByLabelText(en.enabled)).toBeNull()
+    // The recovered form is still reachable through the header.
+    toggleCard()
+    view.rerender(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
     expect(screen.getByLabelText(en.enabled)).toBeTruthy()
   })
 })

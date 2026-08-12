@@ -41,7 +41,9 @@
  * header always renders title+description+chevron, and the body carries the
  * config-channel notice or the load error + retry (AC-3 — the documented
  * divergence from upstream, whose unavailable card renders nothing). A card
- * that cannot render its form starts open so the notice/error stays visible.
+ * that cannot render its form keeps the notice/error body ALWAYS visible
+ * (derived open — the header cannot collapse it away), while a healthy card
+ * is collapsed until the user expands it (AC-1).
  * When the last load could not reach the `advisor.get` gateway endpoint (the
  * gateway channel is down or not ready on this host), the form is replaced
  * by the `namespaceUnavailable` notice and Save is never offered, so the
@@ -98,11 +100,18 @@ function failureCopy(failure: ApplyFailure, t: AdvisorCardProps['t']): string | 
 export function AdvisorCard(props: AdvisorCardProps): ReactNode {
   const { controller, useSnapshot, t } = props
   const state = useSnapshot(snapshot => snapshot)
-  // Disclosure is card-local state (upstream rationale). A card that cannot
-  // render its form — a load error, or an unreachable gateway — starts open
-  // so the notice/error + retry stay visible (KD-U3/AC-3); the form card
-  // starts collapsed.
-  const [open, setOpen] = useState(() => state.status === 'error' || !state.advisorPresent)
+  // Disclosure is card-local USER state (upstream rationale): the healthy
+  // card starts collapsed and opens on the header click only. The degraded
+  // (advisorPresent=false) and error cards render their notice/error body
+  // ALWAYS visible (AC-3 — the notice must appear without interaction), so
+  // `open` is DERIVED from the current snapshot — never from a mount-time
+  // snapshot read and never through a useEffect (I-1, T1 fix wave): the
+  // mount-time snapshot is the store default ('idle', advisorPresent=false),
+  // so a mount-time read would wrongly start the healthy card open. The
+  // header click toggles `userOpen` only; while degraded the derived open
+  // ignores it, so the notice stays visible (the header stays focusable).
+  const [userOpen, setUserOpen] = useState(false)
+  const open = userOpen || state.status === 'error' || (state.status === 'ready' && !state.advisorPresent)
 
   // Load-on-mount (KD-3): the plugin-config page mounts the card lazily when
   // the user opens the settings panel, so the first mount triggers the first
@@ -124,7 +133,7 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
       className={styles['header']}
       aria-expanded={open}
       aria-label={`${t(open ? 'collapse' : 'expand')}: ${title}`}
-      onClick={() => { setOpen(!open) }}
+      onClick={() => { setUserOpen(!userOpen) }}
     >
       <span className={styles['headText']}>
         <span className={styles['name']}>{title}</span>
