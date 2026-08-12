@@ -5,7 +5,8 @@ problem_type: architecture_pattern
 category: architecture-patterns
 severity: medium
 title: Adding a dsh web Settings section to a standalone plugin (client half contract)
-description: Verified recipe for a standalone dsh plugin's browser half: the dsh.client declaration (nested under dsh, post-20da39e), closure-factory CJS bundle served from /plugins/<id>/client.js, CSS-modules inline injection with style-tag lifecycle, settings.section slot registration, and the frozen externals/purity/JSX contracts — plus the host-side settings namespace wiring it edits.
+description: Verified recipe for a standalone dsh plugin's browser half: the dsh.client declaration (nested under dsh, post-20da39e), closure-factory CJS bundle served from /plugins/<id>/client.js, CSS-modules inline injection with style-tag lifecycle, settings.section slot registration (LEGACY for the advisor — the configuration surface now registers a settings.plugin.item card, see architecture-patterns/dsh-plugin-config-card-surface.md), and the frozen externals/purity/JSX contracts — plus the host-side settings namespace wiring it edits.
+last_updated: 2026-08-12
 tags:
   - dsh
   - plugin
@@ -57,6 +58,19 @@ To style a section with the shell's design language (CSS modules + `--dsw-alias-
 ### Client plugin entry (`src/client/index.ts`)
 
 Mirror `ui-models`: `inject = ['slots','locale','connection']`; `ctx.effect(() => ctx.locale.register(NS, { zh, en }))`; `ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: '<section-id>', order: 20, label: () => t('nav'), inject: injected }, SectionComponent))`. Store via `createSnapshotStore` + `bindSnapshotSelector`; refresh on settings-changed and models-changed frames (coalesce with a microtask debounce).
+
+> **LEGACY for the advisor (since iteration iter-20260811-dsh-advisor-n6)**:
+> the standalone `settings.section` registration is the retired surface for
+> the advisor — the web configuration UI now registers a `settings.plugin.item`
+> card on the "插件配置" page (id `advisor`, order 30) using the generator +
+> `yield` shape with `locale: NS` and a business-only inject face. The current
+> card recipe (registration shape, PropsRuntime + PropsLocale + InjectFace
+> contract, type-only peer dependency, load-on-mount invariant,
+> settings-scope vs GatewayService data-channel routes) is documented in
+> `{KNOWLEDGE_DIR}/architecture-patterns/dsh-plugin-config-card-surface.md`.
+> The `settings.section` mechanics in this section stay correct for
+> host-integrated plugins, but a third-party plugin should prefer the card
+> surface; the section recipe is kept here as the historical record.
 
 ### Settings section data flow
 
