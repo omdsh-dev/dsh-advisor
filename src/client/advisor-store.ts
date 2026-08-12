@@ -147,9 +147,17 @@ export interface AdvisorSettingsState {
    * Whether the `advisor.get` gateway endpoint was reachable on the last load
    * (KD-G3/G5): success = a writable form; failure (gateway not ready, no
    * settings service on the host) = the card shows the config-channel
-   * notice instead of a writable-looking form and never offers Apply.
+   * notice instead of a writable-looking form and never offers Save.
    */
   advisorPresent: boolean
+  /**
+   * Whether the draft holds edits a save would write — the "unsaved" pill
+   * and the save/discard disabled semantics (upstream CardShell.dirty). The
+   * card reads it; the derivation (`patchFor` non-empty, recomputed on
+   * load/mutation/discard/apply) is task 2 of plan
+   * dsh-advisor-plugin-config-card-ux — until it lands this stays false.
+   */
+  dirty: boolean
   /** The form draft (seeded from the resolved config; never re-seeded by refreshes). */
   draft: AdvisorDraft
   /** Apply lifecycle feedback. */
@@ -225,6 +233,10 @@ export class AdvisorSettingsStore {
     modelsEmptyReason: {},
     namespaces: {},
     advisorPresent: false,
+    // TASK 2 handoff: the dirty derivation (patchFor non-empty, recomputed on
+    // load/mutation/discard/apply) lands with task 2 of plan
+    // dsh-advisor-plugin-config-card-ux; until then the card reads false.
+    dirty: false,
     draft: defaultDraft(),
     applyState: { kind: 'idle' },
   })

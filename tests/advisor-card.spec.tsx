@@ -1,12 +1,20 @@
 // @vitest-environment jsdom
 /**
- * Advisor settings card (plan dsh-advisor-plugin-config-card, task 2) —
+ * Advisor settings card (plan dsh-advisor-plugin-config-card-ux, task 1) —
  * component behavior over a scripted wire face (fake `settings`/`llm` api for
  * the provider directory + a fake connection RPC caller for the `advisor`
  * gateway channel), mirroring the dsh-private ui-models component specs
- * (preloaded store + @testing-library/react). This is the card-form
- * successor of the n5 advisor-section spec: the section component is removed
- * and the card registers into `settings.plugin.item` instead.
+ * (preloaded store + @testing-library/react). This spec extends the
+ * card-form suite (plan dsh-advisor-plugin-config-card) with the upstream
+ * PluginCard chrome contract (plan dsh-advisor-plugin-config-card-ux, KD-U1):
+ * the card is a collapsible box — a header button (name over description,
+ * dirty "unsaved" pill, rotating chevron, aria-expanded/aria-label), a
+ * divider under the header, then the form content and a footer with the
+ * failed message + Discard/Save (upstream disabled semantics: save =
+ * `!dirty || invalid || saving`, discard = `!dirty || saving`). Degraded /
+ * error / loading states keep the same chrome and put the notice/error +
+ * retry in the body (KD-U3, AC-3) — the documented divergence from
+ * upstream's unavailable→nothing.
  *
  * The advisor config is NOT part of `settings.describe` — the card
  * reads/writes it through `rpc.call('/api', 'advisor/get' | 'advisor/set')`
@@ -24,6 +32,12 @@
  * hook reads the current snapshot per render (no uSES subscription), so
  * assertions after a store mutation re-render the card explicitly
  * (`rerender`), exactly like the ui-models specs do.
+ *
+ * TASK 2 handoff (plan dsh-advisor-plugin-config-card-ux, task 2): the
+ * store's `dirty` derivation (`patchFor` non-empty) lands in task 2; until
+ * then every assertion marked `// TASK2` fails by design — the card already
+ * consumes `state.dirty` per the interface (the pill, and the save/discard
+ * disabled terms), and task 2 flips those assertions to green.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -180,6 +194,23 @@ async function mountCard(options: Parameters<typeof scriptedApi>[0] = {}, preloa
 }
 
 /**
+ * The card's header disclosure button. The accessible name is the upstream
+ * aria-label — `collapse/expand: title` — which flips with the open state.
+ */
+function headerButton(open: boolean): HTMLElement {
+  const label = `${open ? en.collapse : en.expand}: ${en.title}`
+  return screen.getByRole('button', { name: new RegExp(`^${label}$`) })
+}
+
+/** Toggle the card open/closed through its header button. */
+function toggleCard(): void {
+  const button = screen.getByRole('button', {
+    name: new RegExp(`^(${en.expand}|${en.collapse}): ${en.title}$`),
+  })
+  fireEvent.click(button)
+}
+
+/**
  * A minimal fake of the client slots service + context for the registration
  * ledger test: `inject(name, generator)` runs the generator and records every
  * `register` call (the real runtime does the same through ctx.effect), and
@@ -261,11 +292,25 @@ describe('AdvisorCard registration (settings.plugin.item)', () => {
   })
 })
 
-describe('AdvisorCard', () => {
-  it('renders the enabled switch off by default with the plain fields and no provider/model selects', async () => {
-    await mountCard()
-    expect(screen.getByText(en.title)).toBeTruthy()
-    expect(screen.getByText(en.intro)).toBeTruthy()
+describe('AdvisorCard chrome (upstream PluginCard contract)', () => {
+  it('renders collapsed by default: the header copy and chevron, no form', async () => {
+    const { view, props } = await mountCard()
+    // Collapsed: only the header button — name over description + chevron.
+    const header = headerButton(false)
+    expect(header.getAttribute('aria-expanded')).toBe('false')
+    expect(header.getAttribute('aria-label')).toBe(`${en.expand}: ${en.title}`)
+    expect(within(header).getByText(en.title)).toBeTruthy()
+    expect(within(header).getByText(en.intro)).toBeTruthy()
+    expect(header.querySelector('svg')).toBeTruthy() // the chevron icon
+    expect(screen.queryByLabelText(en.enabled)).toBeNull()
+    expect(screen.queryByRole('button', { name: en.save })).toBeNull()
+    expect(screen.queryByRole('button', { name: en.discard })).toBeNull()
+
+    // Expanding reveals the plain fields and the footer actions.
+    toggleCard()
+    view.rerender(<AdvisorCard {...props} />)
+    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
+    expect(headerButton(true).getAttribute('aria-label')).toBe(`${en.collapse}: ${en.title}`)
     const toggle = screen.getByLabelText(en.enabled) as HTMLInputElement
     expect(toggle.checked).toBe(false)
     expect(screen.getByLabelText(en.systemPrompt)).toBeTruthy()
@@ -275,6 +320,60 @@ describe('AdvisorCard', () => {
     expect(screen.queryByLabelText(en.model)).toBeNull()
   })
 
+  it('flips aria-expanded and toggles the body on repeated header clicks', async () => {
+    await mountCard()
+    expect(headerButton(false).getAttribute('aria-expanded')).toBe('false')
+    toggleCard()
+    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByLabelText(en.enabled)).toBeTruthy()
+    toggleCard()
+    expect(headerButton(false).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByLabelText(en.enabled)).toBeNull()
+  })
+
+  it('shows the unsaved pill after an edit and keeps it while collapsed', async () => {
+    // TASK2: state.dirty is task 2's derivation (patchFor non-empty); until
+    // it lands the pill never appears and these assertions fail by design.
+    const { view, props } = await mountCard()
+    toggleCard()
+    fireEvent.change(screen.getByLabelText(en.systemPrompt), { target: { value: 'review terser' } })
+    view.rerender(<AdvisorCard {...props} />)
+    expect(screen.getByText(en.unsaved)).toBeTruthy() // TASK2
+    // Staged edits outlive collapsing — the pill rides the header (upstream).
+    toggleCard()
+    expect(screen.getByText(en.unsaved)).toBeTruthy() // TASK2
+  })
+
+  it('clears the unsaved pill after discard', async () => {
+    // TASK2: needs the dirty derivation — the pill appears once the edit
+    // stages (first assertion) and the discard button enables (click below).
+    const { view, props } = await mountCard()
+    toggleCard()
+    fireEvent.change(screen.getByLabelText(en.systemPrompt), { target: { value: 'review terser' } })
+    view.rerender(<AdvisorCard {...props} />)
+    expect(screen.getByText(en.unsaved)).toBeTruthy() // TASK2
+    fireEvent.click(screen.getByRole('button', { name: en.discard })) // TASK2
+    view.rerender(<AdvisorCard {...props} />)
+    expect(screen.queryByText(en.unsaved)).toBeNull()
+  })
+
+  it('disables Save and Discard when clean, enables both once the draft is dirty', async () => {
+    const { view, props } = await mountCard()
+    toggleCard()
+    // Clean (no edits): neither action is offered (upstream semantics —
+    // save = !dirty || invalid || saving; discard = !dirty || saving).
+    expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: en.discard }) as HTMLButtonElement).disabled).toBe(true)
+    // One staged edit → both actions become available.
+    // TASK2: the dirty derivation flips these two assertions to green.
+    fireEvent.change(screen.getByLabelText(en.systemPrompt), { target: { value: 'review terser' } })
+    view.rerender(<AdvisorCard {...props} />)
+    expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false) // TASK2
+    expect((screen.getByRole('button', { name: en.discard }) as HTMLButtonElement).disabled).toBe(false) // TASK2
+  })
+})
+
+describe('AdvisorCard', () => {
   it('loads on mount when the store has not loaded yet (status idle → load)', async () => {
     // The plugin-config page mounts the card lazily; the first mount must
     // trigger the first gateway load (KD-3), not wait for a manual refresh.
@@ -283,8 +382,9 @@ describe('AdvisorCard', () => {
     await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
   })
 
-  it('reveals required provider/model selects when enabled and blocks Apply with the gate copy', async () => {
+  it('reveals required provider/model selects when enabled and blocks Save with the gate copy', async () => {
     const { view, props } = await mountCard()
+    toggleCard()
     fireEvent.click(screen.getByLabelText(en.enabled))
     view.rerender(<AdvisorCard {...props} />)
     expect(screen.getByLabelText(en.enabled)).toBeTruthy()
@@ -294,11 +394,12 @@ describe('AdvisorCard', () => {
     // model hint appears once a provider is chosen.
     expect(screen.getByText(en.providerRequired)).toBeTruthy()
     expect(screen.queryByText(en.modelRequired)).toBeNull()
-    expect((screen.getByRole('button', { name: en.apply }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('lists only configured providers from the store join', async () => {
     const { view, props } = await mountCard()
+    toggleCard()
     fireEvent.click(screen.getByLabelText(en.enabled))
     view.rerender(<AdvisorCard {...props} />)
     const select = screen.getByLabelText(en.provider) as HTMLSelectElement
@@ -310,6 +411,7 @@ describe('AdvisorCard', () => {
 
   it('shows the no-configured-providers guidance when the join is empty', async () => {
     const { view, props } = await mountCard({ entries: [ZOMBIE] })
+    toggleCard()
     fireEvent.click(screen.getByLabelText(en.enabled))
     view.rerender(<AdvisorCard {...props} />)
     expect(screen.getByText(en.noProviders)).toBeTruthy()
@@ -321,10 +423,16 @@ describe('AdvisorCard', () => {
     const { view, props } = await mountCard({
       config: { enabled: true, provider: 'zombie', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
+    toggleCard()
     expect(screen.getByText(en.staleProvider)).toBeTruthy()
-    // The warning does not block Apply: the user keeps the stored value or
-    // reselects (documented in the card header).
-    expect((screen.getByRole('button', { name: en.apply }) as HTMLButtonElement).disabled).toBe(false)
+    // The warning does not gate the save: once an edit is staged the save is
+    // enabled even while the provider is stale (keep or reselect — the
+    // upstream contract disables a clean form's save, so the enabled
+    // assertion needs the dirty derivation first).
+    // TASK2: flips to green once state.dirty derives.
+    fireEvent.change(screen.getByLabelText(en.systemPrompt), { target: { value: 'x' } })
+    view.rerender(<AdvisorCard {...props} />)
+    expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false) // TASK2
     // Reselecting a valid provider clears the warning.
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek-official' } })
     view.rerender(<AdvisorCard {...props} />)
@@ -335,6 +443,7 @@ describe('AdvisorCard', () => {
     const { view, controller, props } = await mountCard({
       config: { enabled: true, provider: 'deepseek-official', model: 'ds-c', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
+    toggleCard()
     // load() kicks the model resolution for the stored provider; wait for it.
     await waitFor(() => {
       expect(controller.store.getSnapshot().modelsByProvider['deepseek-official']?.length).toBe(2)
@@ -346,6 +455,7 @@ describe('AdvisorCard', () => {
 
   it('links the model select to the chosen provider and shows guidance when it has no models', async () => {
     const { view, controller, props } = await mountCard()
+    toggleCard()
     fireEvent.click(screen.getByLabelText(en.enabled))
     view.rerender(<AdvisorCard {...props} />)
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek-official' } })
@@ -370,6 +480,7 @@ describe('AdvisorCard', () => {
 
   it('applies the full flow and shows the saved feedback with the gateway set payload', async () => {
     const { view, controller, scripted, props } = await mountCard()
+    toggleCard()
     fireEvent.click(screen.getByLabelText(en.enabled))
     view.rerender(<AdvisorCard {...props} />)
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek-official' } })
@@ -381,7 +492,11 @@ describe('AdvisorCard', () => {
     view.rerender(<AdvisorCard {...props} />)
     fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'ds-b' } })
     view.rerender(<AdvisorCard {...props} />)
-    fireEvent.click(screen.getByRole('button', { name: en.apply }))
+    // TASK2: the save button is disabled while the form is clean
+    // (!dirty || invalid || saving) — the staged edits above enable it once
+    // task 2 derives dirty; until then this click is a no-op and the flow
+    // below fails by design.
+    fireEvent.click(screen.getByRole('button', { name: en.save })) // TASK2
     await waitFor(() => expect(scripted.set).toHaveBeenCalled())
     // The write is a minimal patch over the gateway channel: only the changed
     // keys (enabled + the new pair); the untouched scalars stay out.
@@ -391,19 +506,21 @@ describe('AdvisorCard', () => {
     await waitFor(() => expect(controller.store.getSnapshot().applyState.kind).toBe('saved'))
     view.rerender(<AdvisorCard {...props} />)
     expect(screen.getByRole('status').textContent).toBe(en.saved)
-    // Card chrome: the discard sibling renders next to Apply (Save-only was
-    // the section's choice; the card mirrors the upstream Save/Discard pair).
+    // Card chrome: the footer renders the Save/Discard pair (the upstream
+    // contract this card replicates).
     expect(screen.getByRole('button', { name: en.discard })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
   })
 
   it('disables the Discard control while a save is in flight', async () => {
-    // F-7 (qc3 N-3): the disabled={busy} binding (busy = !writable || saving)
-    // pins the N-2 invariant — Discard is disabled while the gateway write is
-    // pending, so a mid-apply discard cannot be triggered from the UI.
+    // F-7 (qc3 N-3): the upstream disabled semantics (discard = !dirty ||
+    // saving) pins the N-2 invariant — Discard is disabled while the gateway
+    // write is pending, so a mid-apply discard cannot be triggered from the
+    // UI.
     const { view, controller, scripted, props } = await mountCard()
     let release!: (value: RpcResult<{ config: AdvisorConfigView }>) => void
     scripted.set.mockReturnValueOnce(new Promise<RpcResult<{ config: AdvisorConfigView }>>((resolve) => { release = resolve }))
+    toggleCard()
     fireEvent.click(screen.getByLabelText(en.enabled))
     view.rerender(<AdvisorCard {...props} />)
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek-official' } })
@@ -414,12 +531,14 @@ describe('AdvisorCard', () => {
     view.rerender(<AdvisorCard {...props} />)
     fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'ds-a' } })
     view.rerender(<AdvisorCard {...props} />)
-    fireEvent.click(screen.getByRole('button', { name: en.apply }))
+    // TASK2: needs the dirty derivation so the save button enables and the
+    // in-flight state is reachable (until then the click is a no-op).
+    fireEvent.click(screen.getByRole('button', { name: en.save })) // TASK2
     view.rerender(<AdvisorCard {...props} />)
     // Save in flight (the set promise is still pending): the Discard control
-    // is disabled alongside Apply.
+    // is disabled alongside Save.
     expect((screen.getByRole('button', { name: en.discard }) as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByRole('button', { name: en.applying }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: en.saving }) as HTMLButtonElement).disabled).toBe(true)
     // Release the write; the flow completes to saved.
     release(okResult({ config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 } }))
     await waitFor(() => expect(controller.store.getSnapshot().applyState.kind).toBe('saved'))
@@ -432,17 +551,21 @@ describe('AdvisorCard', () => {
     const { view, controller, scripted, props } = await mountCard({
       config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
+    toggleCard()
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'openai' } })
     view.rerender(<AdvisorCard {...props} />)
     fireEvent.click(screen.getByLabelText(en.enabled))
     view.rerender(<AdvisorCard {...props} />)
     expect(controller.store.getSnapshot().draft.enabled).toBe(false)
     expect(controller.store.getSnapshot().draft.provider).toBe('openai')
-    fireEvent.click(screen.getByRole('button', { name: en.discard }))
+    // TASK2: the discard button is disabled while the form is clean
+    // (!dirty || saving); the edits above make the draft dirty once task 2
+    // derives it, enabling the click that rewinds the draft.
+    fireEvent.click(screen.getByRole('button', { name: en.discard })) // TASK2
     view.rerender(<AdvisorCard {...props} />)
-    expect(controller.store.getSnapshot().draft.enabled).toBe(true)
-    expect(controller.store.getSnapshot().draft.provider).toBe('deepseek-official')
-    expect(controller.store.getSnapshot().draft.model).toBe('ds-a')
+    expect(controller.store.getSnapshot().draft.enabled).toBe(true) // TASK2
+    expect(controller.store.getSnapshot().draft.provider).toBe('deepseek-official') // TASK2
+    expect(controller.store.getSnapshot().draft.model).toBe('ds-a') // TASK2
     // Discard is a client-side rewind — no gateway write happened.
     expect(scripted.set).not.toHaveBeenCalled()
   })
@@ -452,9 +575,10 @@ describe('AdvisorCard', () => {
     expect(scripted.call).toHaveBeenCalledWith('/api', 'advisor/get', { args: {} })
   })
 
-  it('shows the wire failure message when Apply is rejected', async () => {
+  it('shows the wire failure message when Save is rejected', async () => {
     const { view, controller, scripted, props } = await mountCard()
     scripted.set.mockReturnValueOnce(Promise.resolve(failResult('host refused')))
+    toggleCard()
     fireEvent.click(screen.getByLabelText(en.enabled))
     view.rerender(<AdvisorCard {...props} />)
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek-official' } })
@@ -466,23 +590,29 @@ describe('AdvisorCard', () => {
     view.rerender(<AdvisorCard {...props} />)
     fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'ds-a' } })
     view.rerender(<AdvisorCard {...props} />)
-    fireEvent.click(screen.getByRole('button', { name: en.apply }))
+    // TASK2: needs the dirty derivation so the save button enables and the
+    // rejection is reachable (until then the click is a no-op).
+    fireEvent.click(screen.getByRole('button', { name: en.save })) // TASK2
     await waitFor(() => expect(controller.store.getSnapshot().applyState.kind).toBe('error'))
     view.rerender(<AdvisorCard {...props} />)
     expect(screen.getByText('host refused')).toBeTruthy()
     // The gateway merge has no revision guard: a plain rejection keeps the
-    // form editable for a retry.
-    expect((screen.getByRole('button', { name: en.apply }) as HTMLButtonElement).disabled).toBe(false)
+    // form editable for a retry — the save stays enabled while the draft is
+    // dirty (TASK2: the dirty derivation enables it; a clean form's save is
+    // disabled by the upstream contract).
+    expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false) // TASK2
   })
 
   it('shows the system-prompt placeholder telling the user empty means default', async () => {
     await mountCard()
+    toggleCard()
     const prompt = screen.getByLabelText(en.systemPrompt) as HTMLTextAreaElement
     expect(prompt.placeholder).toBe(en.systemPromptPlaceholder)
   })
 
   it('keeps a cleared number input empty instead of forcing 0', async () => {
     const { view, props } = await mountCard()
+    toggleCard()
     const input = screen.getByLabelText(en.immuneTurns) as HTMLInputElement
     expect(input.value).toBe('3')
     fireEvent.change(input, { target: { value: '' } })
@@ -495,18 +625,21 @@ describe('AdvisorCard', () => {
     expect((screen.getByLabelText(en.maxDeltaMessages) as HTMLInputElement).value).toBe('')
   })
 
-  it('shows the read-only notice and disables writes when the settings provider is read-only', async () => {
+  it('shows the read-only notice in the body and disables writes when the settings provider is read-only', async () => {
     await mountCard({ writable: false })
+    toggleCard()
     expect(screen.getByText(en.readOnly)).toBeTruthy()
-    expect((screen.getByRole('button', { name: en.apply }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByLabelText(en.enabled) as HTMLInputElement).disabled).toBe(true)
   })
 
-  it('shows the config-channel notice and never offers Apply when the gateway is unreachable', async () => {
+  it('shows the config-channel notice in the card chrome and never offers Save when the gateway is unreachable', async () => {
     // The gateway channel is down (get fails — no settings service on the
     // host, or the channel is unreachable): the card must not present
-    // defaults + a writable Apply that the host would refuse — the notice
-    // replaces it (KD-G5, the n2-era C-1 mitigation).
+    // defaults + a writable Save that the host would refuse — the notice
+    // replaces it (KD-G5, the n2-era C-1 mitigation). The card stays visible
+    // with the chrome and the notice in the body (KD-U3/AC-3, documented
+    // divergence from upstream's unavailable→nothing).
     await mountCard({ config: null })
     const notice = screen.getByText(en.namespaceUnavailable)
     expect(notice).toBeTruthy()
@@ -517,7 +650,7 @@ describe('AdvisorCard', () => {
     expect(notice.textContent).toContain('/advisor')
     expect(notice.textContent).toMatch(/only toggles the advisor per session/i)
     expect(notice.textContent).toMatch(/cannot supply provider\/model/i)
-    expect(screen.queryByRole('button', { name: en.apply })).toBeNull()
+    expect(screen.queryByRole('button', { name: en.save })).toBeNull()
     expect(screen.queryByRole('button', { name: en.discard })).toBeNull()
     expect(screen.queryByLabelText(en.enabled)).toBeNull()
     expect(screen.queryByLabelText(en.provider)).toBeNull()
@@ -550,10 +683,10 @@ describe('AdvisorCard', () => {
     render(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
     expect(screen.getByText(en.saved)).toBeTruthy()
     expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: en.apply })).toBeNull()
+    expect(screen.queryByRole('button', { name: en.save })).toBeNull()
   })
 
-  it('renders the load failure with a working retry', async () => {
+  it('renders the load failure in the card chrome with a working retry', async () => {
     const scripted = scriptedApi()
     scripted.describe.mockRejectedValueOnce(new Error('transport down'))
     const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc)
@@ -563,6 +696,7 @@ describe('AdvisorCard', () => {
     fireEvent.click(screen.getByRole('button', { name: en.retry }))
     await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
     view.rerender(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
+    // The error-started card stays open after recovery — the form is visible.
     expect(screen.getByLabelText(en.enabled)).toBeTruthy()
   })
 })

@@ -1,63 +1,208 @@
-/* Advisor settings card, in the settings-panel design language (the n3
- * section vocabulary carried over to the card form): 16/24 title, 14/22
- * intro, 12/18 captions and hints, 32px fields, capsule controls (h36 r18),
- * and `border-l2` hairlines — the vocabulary ModelsSection and the
- * Button/Input primitives already use.
- *
- * Every color resolves through a `--dsw-alias-*` token (light/dark
- * adaptive). Bare `--border` / `--surface` / `--text-*` names, which nothing
+/* Advisor settings card — chrome aligned to the upstream PluginCard
+ * (packages/client/ui-plugin-config/src/client/PluginCard.module.css, shape
+ * snapshot 5d49d016), form-field styles kept from the card-form design
+ * language. Every color resolves through a `--dsw-alias-*` token (light/dark
+ * adaptive); bare `--border` / `--surface` / `--text-*` names, which nothing
  * in this app defines, would render the light-mode literals written as their
- * fallbacks and stay light under the dark theme. */
+ * fallbacks and stay light under the dark theme.
+ *
+ * The card is one <li> in the plugin-config section's card list (the section
+ * owns the column width); the chrome is the upstream contract: a bordered
+ * box whose header is a button (name over description, dirty pill, rotating
+ * chevron) and whose open state shows a divided body — divider, readOnly /
+ * form content, footer divider with the failed message + Discard/Save. */
 
-/* The card is one <li> in the plugin-config section's card list: the whole
-   editing surface reads as one compact card in the settings column. */
+/* The card box. */
 .card {
+  list-style: none;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-3);
+  transition: border-color .16s, background .16s;
+}
+
+.card:hover {
+  border-color: var(--dsw-alias-label-dimmed);
+}
+
+/* An open card reads as the one being worked on, not merely taller. */
+.cardOpen {
+  background: var(--dsw-alias-bg-layer-2);
+  border-color: var(--dsw-alias-label-dimmed);
+}
+
+/* The disclosure header: a full-width button stacking name over description. */
+.header {
+  width: 100%;
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 12px;
+}
+
+.header:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: -2px;
+}
+
+/* Name over description: the description is what tells two plugins apart, so
+   it gets its own line rather than trailing the name. */
+.headText {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  max-width: 720px;
+  gap: 4px;
+}
+
+.name {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
   color: var(--dsw-alias-label-primary);
 }
 
-.title {
-  margin: 0;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 500;
-  color: var(--dsw-alias-label-primary);
-}
-
-.intro {
-  margin: 0;
-  font-size: 14px;
-  line-height: 22px;
+.description {
+  font-size: 13px;
+  line-height: 1.5;
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* Warn-toned card notices: read-only environment, namespace unavailable. */
-.notice {
+.chevron {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  transition: transform .16s;
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+}
+
+/* The open body: a divider under the header, then the card content. */
+.body {
+  border-top: 1px solid var(--dsw-alias-border-l2);
+  margin: 0 16px;
+  padding-bottom: 8px;
+}
+
+.readOnly {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Carried on the header so a collapsed card still says it holds edits. */
+.pending {
+  flex: none;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 17px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 0 4px;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}
+
+.failed {
+  flex: 1;
+  min-width: 0;
   margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-error);
+}
+
+.discard,
+.save {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 5px 14px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.discard {
+  border-color: var(--dsw-alias-border-l2);
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.discard:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-label-dimmed);
+}
+
+.save {
+  background: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-bg-layer-3);
+}
+
+.discard:disabled,
+.save:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.discard:focus-visible,
+.save:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}
+
+/* Body-level notices (KD-U3: degraded/error states keep the card chrome and
+   put the notice/error in the body): warn-toned for the config-channel
+   notice, success for the saved feedback, error tone for the load error. */
+.notice {
+  margin: 12px 0 0;
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-state-warn-label);
 }
 
 .savedNotice {
-  margin: 0;
+  margin: 12px 0 0;
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-state-success-primary);
 }
 
-/* The compact form grouped as one outlined surface on the panel fill, so the
-   editing surface reads as a unit. */
+.error {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* The form fields sit directly in the card body (the upstream cards stack
+   their controls in the body); the container only paces them below the
+   divider. */
 .form {
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
-  padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  padding: 12px 0 0;
 }
 
 /* The enabled switch: a real checkbox, tinted with the brand accent so it
@@ -218,67 +363,4 @@ select.input {
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-state-warn-label);
-}
-
-.error {
-  margin: 0;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-state-error-primary);
-}
-
-/* Save/Discard footer: the same h36 r18 capsules as the models page — the
-   primary button carries the brand fill, Discard is the outlined sibling. */
-.editorActions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.primaryButton,
-.secondaryButton {
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 36px;
-  padding: 0 14px;
-  border: none;
-  border-radius: 18px;
-  font: inherit;
-  font-size: 14px;
-  line-height: 22px;
-  cursor: pointer;
-}
-
-.primaryButton {
-  background: var(--dsw-alias-button-primary-fill);
-  color: var(--dsw-alias-label-primary-foreground);
-}
-
-.primaryButton:hover:not(:disabled) {
-  background: var(--dsw-alias-button-primary-hover);
-}
-
-.secondaryButton {
-  border: 1px solid var(--dsw-alias-border-l2);
-  background: transparent;
-  color: var(--dsw-alias-label-primary);
-}
-
-.secondaryButton:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover-solid);
-}
-
-.primaryButton:disabled,
-.secondaryButton:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.primaryButton:focus-visible,
-.secondaryButton:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--dsw-alias-border-l3);
 }
