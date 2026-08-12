@@ -1,0 +1,10 @@
+# pnpm 11+ reads all non-auth settings from pnpm-workspace.yaml (not .npmrc).
+# Migrated from .npmrc: auto-install-peers + node-linker were silently ignored
+# there, causing pnpm to install the @deepseek-ai/* peers from the registry
+# instead of leaving them for setup-dsh-links.mjs to wire from the dsh source
+# tree (the plugin's design).
+autoInstallPeers: false
+nodeLinker: hoisted
+
+allowBuilds:
+  esbuild: true
