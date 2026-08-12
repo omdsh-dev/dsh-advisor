@@ -61,6 +61,8 @@ Tarball install and uninstall are covered in [docs/install.md](docs/install.md).
 
 ## Config
 
+![Advisor card on the dsh web Settings (插件配置) page](docs/screenshots/advisor-settings-card.webp)
+
 The advisor is off by default. When enabled, `provider` and `model` are
 **mandatory**: `enabled: true` without both is a hard gate — the advisor never
 starts a model call and reports a disabled-with-reason status. Unknown config
@@ -94,8 +96,6 @@ Both persisted surfaces share the same hard gate: `enabled: true` with empty
 `provider`/`model` never starts a model call (disabled-with-reason). The
 Settings page additionally blocks saving while enabled with a required field
 empty; the host-side gate stays the final line of defense on every path.
-
-![Advisor card on the dsh web Settings (插件配置) page](docs/screenshots/advisor-settings-card.webp)
 
 Plugin-row config:
 

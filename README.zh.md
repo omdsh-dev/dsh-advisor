@@ -44,6 +44,8 @@ tarball 安装与卸载见 [docs/install.zh.md](docs/install.zh.md)。
 
 ## 配置
 
+![dsh web Settings（"插件配置"）页上的 Advisor 卡片](docs/screenshots/advisor-settings-card.webp)
+
 advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabled: true` 而缺少两者之一是一个硬门禁 —— advisor 不会发起任何模型调用，并报告带原因的禁用状态（disabled-with-reason）。未知配置键会被拒绝。
 
 配置在**三个配置面**之间合成（后一层覆盖前一层；各处使用同一组键）：
@@ -53,8 +55,6 @@ advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabl
 3. **`/advisor` 指令** —— 按会话且临时：翻转的是会话级 override，从不修改持久化配置（见[用法](#用法)）。
 
 两个持久化配置面共享同一个硬门禁：`enabled: true` 而 `provider`/`model` 为空时绝不发起模型调用（disabled-with-reason）。Settings 页还会在 enabled 且必填字段为空时阻止保存；宿主侧硬门禁始终是所有路径上的最后防线。
-
-![dsh web Settings（"插件配置"）页上的 Advisor 卡片](docs/screenshots/advisor-settings-card.webp)
 
 插件行配置：
 
