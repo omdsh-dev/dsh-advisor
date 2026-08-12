@@ -89,22 +89,22 @@ profile module fallback — no extra install step.
 The dsh web Settings page's **"插件配置" (Plugin Configuration)** page renders
 one card per plugin that registers into the `settings.plugin.item` card slot.
 The Advisor card (`id advisor`, rendered after the upstream bash / agent-loop /
-web-search cards) reads and writes settings namespaces through the dsh host's
-apiproxy, which exposes only an allowlist of namespaces to configuration
-clients: model-provider namespaces plus product namespaces (locale /
-permission / ui-conversation / ui-theme / ui-onboarding / agent-presets).
-**Upstream dsh has no registration-level opt-in** (`exposeToWebClients` does
-not exist in upstream `SettingsRegisterOptions` — verified against the
-pristine 20da39e snapshot), so the `advisor` namespace is **not on the
-apiproxy allowlist**. The Advisor card does not depend on that allowlist: it
-talks to the host through the **official `GatewayService` RPC channel** — the
-plugin registers `AdvisorConfigGateway` (a `GatewayService` with
-`@Remote('get')`/`@Remote('set')` methods), the host's typertGateway claims
-`/api/advisor/get` + `/api/advisor/set` (the same mechanism the dsh `goals`
-service uses), and the card calls them via `connection.rpc`. The in-process
-write (`ctx.settings.update`) carries no exposed-namespace check, so saving
-works on any dsh build that ships the GatewayService channel. No host patching
-is applied or required.
+web-search cards) reads the provider directory through the dsh host's apiproxy
+`describe` (the exposed `llm-*` namespaces), but reads and writes the advisor
+config EXCLUSIVELY through the **official `GatewayService` RPC channel** — it
+does not depend on the apiproxy allowlist, which exposes only an allowlist of
+namespaces to configuration clients: model-provider namespaces plus product
+namespaces (locale / permission / ui-conversation / ui-theme / ui-onboarding /
+agent-presets). **Upstream dsh has no registration-level opt-in**
+(`exposeToWebClients` does not exist in upstream `SettingsRegisterOptions` —
+verified against the pristine 20da39e snapshot), so the `advisor` namespace is
+**not on the apiproxy allowlist**. The plugin registers `AdvisorConfigGateway`
+(a `GatewayService` with `@Remote('get')`/`@Remote('set')` methods), the
+host's typertGateway claims `/api/advisor/get` + `/api/advisor/set` (the same
+mechanism the dsh `goals` service uses), and the card calls them via
+`connection.rpc`. The in-process write (`ctx.settings.update`) carries no
+exposed-namespace check, so saving works on any dsh build that ships the
+GatewayService channel. No host patching is applied or required.
 
 ## 5. Verify
 

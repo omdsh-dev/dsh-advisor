@@ -397,6 +397,34 @@ describe('AdvisorCard', () => {
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
   })
 
+  it('disables the Discard control while a save is in flight', async () => {
+    // F-7 (qc3 N-3): the disabled={busy} binding (busy = !writable || saving)
+    // pins the N-2 invariant — Discard is disabled while the gateway write is
+    // pending, so a mid-apply discard cannot be triggered from the UI.
+    const { view, controller, scripted, props } = await mountCard()
+    let release!: (value: RpcResult<{ config: AdvisorConfigView }>) => void
+    scripted.set.mockReturnValueOnce(new Promise<RpcResult<{ config: AdvisorConfigView }>>((resolve) => { release = resolve }))
+    fireEvent.click(screen.getByLabelText(en.enabled))
+    view.rerender(<AdvisorCard {...props} />)
+    fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek-official' } })
+    view.rerender(<AdvisorCard {...props} />)
+    await waitFor(() => {
+      expect(controller.store.getSnapshot().modelsByProvider['deepseek-official']?.length).toBe(2)
+    })
+    view.rerender(<AdvisorCard {...props} />)
+    fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'ds-a' } })
+    view.rerender(<AdvisorCard {...props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.apply }))
+    view.rerender(<AdvisorCard {...props} />)
+    // Save in flight (the set promise is still pending): the Discard control
+    // is disabled alongside Apply.
+    expect((screen.getByRole('button', { name: en.discard }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: en.applying }) as HTMLButtonElement).disabled).toBe(true)
+    // Release the write; the flow completes to saved.
+    release(okResult({ config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 } }))
+    await waitFor(() => expect(controller.store.getSnapshot().applyState.kind).toBe('saved'))
+  })
+
   it('discards the draft edits back to the last-known host config', async () => {
     // The store seed pins enabled+provider+model; the user edits the provider
     // and toggles enabled off — discard must rewind the draft to the seed (no

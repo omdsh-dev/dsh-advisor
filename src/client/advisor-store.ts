@@ -1,5 +1,5 @@
 /**
- * Advisor settings page store (plan dsh-advisor-settings-gateway-n5, task 2).
+ * Advisor settings card store (plan dsh-advisor-settings-gateway-n5, task 2).
  * One snapshot over the wire faces the card renders from; the host stays the
  * single fact source — every mutation writes through the host `advisor` config
  * gateway (`connection.rpc.call('/api', 'advisor/get' | 'advisor/set', …)`),
@@ -212,7 +212,7 @@ function profileModels(profile: unknown): readonly ModelOption[] | undefined {
 }
 
 /**
- * The advisor settings page controller (one per settings surface).
+ * The advisor settings card controller (one per settings surface).
  */
 export class AdvisorSettingsStore {
   /** The snapshot the card renders from (uSES-safe store). */
@@ -573,6 +573,14 @@ export class AdvisorSettingsStore {
    * rewinds the draft instead of dropping a staging layer. Pure client-side
    * revert — no gateway write (the host stays the single fact source; a
    * follow-up apply diffs against the restored seed and sends nothing).
+   *
+   * Invariant (qc3 N-2): a mid-apply discard is UNGUARDED at the store level
+   * BY DESIGN — the UI disables Discard while a save is in flight
+   * (`disabled={busy}` on the card, `busy = !writable || saving`), so the
+   * interleaving cannot occur from the UI and no behavior guard is added
+   * here. A programmatic mid-apply discard would only rewind the draft before
+   * the in-flight apply adopts the returned config as the new seed — the
+   * host write is unaffected.
    */
   discard(): void {
     this.store.update((s) => {
@@ -643,9 +651,9 @@ export class AdvisorSettingsStore {
 }
 
 /**
- * Refetch the page snapshot only after its first load: an unopened Advisor
- * page must not fetch on background invalidations.
- * @param controller - the page store.
+ * Refetch the card snapshot only after its first load: an unopened Advisor
+ * card must not fetch on background invalidations.
+ * @param controller - the card store.
  */
 export function refreshIfLoaded(controller: AdvisorSettingsStore): void {
   if (controller.store.getSnapshot().status === 'idle') return

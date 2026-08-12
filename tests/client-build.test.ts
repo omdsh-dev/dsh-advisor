@@ -160,7 +160,7 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     expect(pkg.dsh?.client?.inject).toEqual(
       expect.arrayContaining([
         '@deepseek-ai/dsh-client-runtime',
-        '@deepseek-ai/dsh-client-ui-settings',
+        '@deepseek-ai/dsh-client-ui-plugin-config',
         '@deepseek-ai/dsh-client-locale',
       ]),
     )

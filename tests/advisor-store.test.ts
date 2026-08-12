@@ -21,7 +21,7 @@
  *    merge has no revision guard).
  * ⑤ gateway availability (KD-G5): get success → advisorPresent; get failure
  *    (ok:false or transport throw) → advisorPresent=false with status 'ready'
- *    (the section shows the config-channel notice — never a hard load error).
+ *    (the card shows the config-channel notice — never a hard load error).
  * ⑥ invalidations: `refreshIfLoaded` refetches a loaded store and skips an
  *    idle (never-loaded) one.
  * ⑦ discard (T2 store add, T3 review): the card's Discard rewinds the draft to

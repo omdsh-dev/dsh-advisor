@@ -147,12 +147,16 @@ const result = await build({
           minify: true,
         })
         const classMap = {}
-        for (const [local, exp] of Object.entries(cssExports ?? {})) classMap[local] = exp.name
+        // Deterministic emit (F-2, QC consolidated): sort the export entries by
+        // local name so the class-map JSON literal's key order is byte-stable
+        // across consecutive builds (lightningcss insertion order is
+        // nondeterministic → M7/M9 bundle non-idempotency).
+        for (const [local, exp] of Object.entries(cssExports ?? {}).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) classMap[local] = exp.name
         // One <style data-plugin> per module file; idempotent under re-evaluation.
         // The emitted stub is the EXACT mirror of the dsh tsdown preset's
         // dsh-css-modules-inline load() output: the guard is only the
         // `typeof document` + `data-plugin-css` presence check, and the class
-        // map rides the default export as a JSON literal. The advisor section
+        // map rides the default export as a JSON literal. The advisor card
         // imports that default binding and consumes its classes in JSX, so
         // the export — and the whole stub — survives bundling unchanged.
         //

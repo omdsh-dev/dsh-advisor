@@ -85,6 +85,14 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
   // Load-on-mount (KD-3): the plugin-config page mounts the card lazily when
   // the user opens the settings panel, so the first mount triggers the first
   // gateway load — same idle→load() pattern the section used.
+  // Loop-guard invariant (qc3 N-1): load() synchronously flips status
+  // idle→loading BEFORE its first await (advisor-store.ts load() — the first
+  // store.update, no await in between), which is what terminates this mount
+  // trigger: the re-render reads 'loading' and the idle branch no longer
+  // fires, so there is no loop — and a StrictMode double render sees the
+  // already-flipped snapshot, so there is no duplicate fetch. Do NOT
+  // restructure into a useEffect: a deps-`[]` effect would refetch on every
+  // remount, changing the load-once semantics.
   if (state.status === 'idle') void controller.load()
   if (state.status === 'error') {
     // A post-apply reload failure must not mask a landed write: the saved
