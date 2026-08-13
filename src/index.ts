@@ -30,9 +30,10 @@
  * without a restart.
  * Config gateway (plan dsh-advisor-settings-gateway-n5): `apply` also
  * registers the host-side `AdvisorConfigGateway` (`src/gateway.ts`) — the
- * `/api/advisor/get` + `/api/advisor/set` Remote endpoints (typertGateway
- * SRC claims) that make the Settings card truly readable/writable from
- * the web client.
+ * `/api/advisor/get` + `/api/advisor/set` endpoints (explicit
+ * `ctx.typert.register` contribution — the host typertGateway claims
+ * `ctx.typert.local` first, so link-plugin module identity never matters)
+ * that make the Settings card truly readable/writable from the web client.
  *
  * @module dsh-advisor
  */
@@ -47,7 +48,7 @@ import type {} from '@deepseek-ai/dsh-commands'
 import { resolveAdvisorConfig } from './config.js'
 import type { AdvisorConfig, ResolvedAdvisorConfig } from './config.js'
 import { installAdvisorSettings } from './settings.js'
-import { AdvisorConfigGateway } from './gateway.js'
+import { AdvisorConfigGateway, advisorTypertContribution } from './gateway.js'
 import { SessionTranscriptObserver } from './transcript.js'
 import type { Delta } from './transcript.js'
 import { AdvisorRuntime } from './advisor-runtime.js'
@@ -101,23 +102,44 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // disabled-with-reason resolution.
   const bridge = installAdvisorSettings(ctx, config)
   // n5 (plan dsh-advisor-settings-gateway-n5): the host-side `advisor` config
-  // gateway — the `/api/advisor/get` + `/api/advisor/set` Remote endpoints
-  // (typertGateway SRC claims from `ctx.reflect.props` + `remoteMethods`).
+  // gateway — the `/api/advisor/get` + `/api/advisor/set` endpoints. The
+  // endpoints are registered EXPLICITLY through `ctx.typert.register(...)`
+  // (NOT the @Remote SRC markers): the host typertGateway checks
+  // `ctx.typert.local` FIRST for claim + dispatch, while SRC discovery reads
+  // a module-private marker table that a locally-linked plugin can never
+  // share with the host installation (link plugins resolve their peers from
+  // their real directory, physically separate from the dlx host tree — the
+  // observed failure was zero claimed endpoints → `/api/advisor/*` 404).
   // It reads the SAME bridge the runtime reads, so get/set always operate on
   // the live composed config. Multi-fiber dedupe mirrors the settings
   // registration (qc1 W-5): the cordis Service registration fails loud on a
   // duplicate key, so the catch lets the FIRST fiber own the `advisor` service
-  // key while later fibers fall back (no gateway) — the typertGateway claim
-  // set dedupes, so claims never conflict. The registration is a fiber effect
-  // (unregistered when this fiber disposes), so a re-apply/re-mount can take
-  // over. The instance needs no handle here: the typertGateway dispatches
-  // through `ctx.get('advisor')`.
+  // key while later fibers fall back (no gateway) — a later fiber's typert
+  // re-registration fails the same way (`already registered`). The
+  // registrations are fiber effects (unregistered when this fiber disposes),
+  // so a re-apply/re-mount can take over. The instance needs no handle here:
+  // the typertGateway dispatches through `ctx.get('advisor')`.
   try {
     new AdvisorConfigGateway(ctx, bridge)
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes('has been registered')) throw error
     ctx.logger('advisor').debug('advisor gateway already registered — no gateway on this fiber (multi-fiber dedupe)')
   }
+  // The typert endpoint registration is OPTIONAL, like the settings service:
+  // it activates through a conditional inject child, so compositions without
+  // a typert registry (headless/standalone/integration harnesses) keep the
+  // advisor runtime working and simply omit the /api endpoints. The child
+  // disposer is the registration's own effect disposer, so the endpoints
+  // withdraw when this fiber (or the typert service) goes away.
+  ctx.inject(['typert'], (tctx) => {
+    try {
+      return tctx.typert.register(advisorTypertContribution())
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('already registered')) throw error
+      tctx.logger('advisor').debug('advisor typert endpoints already registered — no endpoints on this fiber (multi-fiber dedupe)')
+      return () => {}
+    }
+  })
   const sourceConfig = (): AdvisorConfig => bridge.source()
   const resolved = (): ResolvedAdvisorConfig => resolveAdvisorConfig(sourceConfig())
   // qc2 W-1 containment: a settings user layer the resolver rejects (e.g. an

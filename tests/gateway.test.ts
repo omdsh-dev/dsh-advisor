@@ -1,7 +1,8 @@
 /**
  * T1 (plan dsh-advisor-settings-gateway-n5) — host-side `advisor` config
- * gateway (`/api/advisor/get` + `/api/advisor/set` via typertGateway SRC
- * claims).
+ * gateway (`/api/advisor/get` + `/api/advisor/set` via explicit
+ * `ctx.typert.register` contribution — `ctx.typert.local` is what the
+ * typertGateway claims first).
  *
  * Contract under test (`AdvisorConfigGateway`, src/gateway.ts):
  * ① No settings service (plain cordis ctx) — `get` returns the entry
@@ -15,8 +16,8 @@
  *    (unknown-key rejection unchanged) and nothing is persisted.
  * ④ Hard gate regression: settings-enabled without provider/model still
  *    resolves to disabled-with-reason (no model call — SSOT unchanged).
- * ⑤ Endpoint claims: the typertGateway SRC discovery (the same
- *    `ctx.reflect.props` + `remoteMethods` walk `claimsEndpoint` uses) claims
+ * ⑤ Endpoint claims: the explicit typert registration (the same
+ *    `ctx.typert.local` store `claimsEndpoint` checks) claims
  *    `/api/advisor/get` + `/api/advisor/set`; the payload contract is exactly
  *    one plain-object `args` field; dispatch through the recorded `/api`
  *    interceptor and direct `ctx.typertGateway.invoke` both work.
@@ -33,7 +34,7 @@ import { MemorySettings } from './support/memory-settings'
 import TypertGatewayService from '@deepseek-ai/dsh-api-gateway'
 import { TypertRegistry } from '@deepseek-ai/dsh-typert-registry'
 import { ADVISOR_SETTINGS_NAMESPACE, installAdvisorSettings } from '../src/settings'
-import { AdvisorConfigGateway } from '../src/gateway'
+import { AdvisorConfigGateway, advisorTypertContribution } from '../src/gateway'
 import { resolveAdvisorConfig } from '../src/config'
 import type { AdvisorConfig, ResolvedAdvisorConfig } from '../src/config'
 import * as advisorPlugin from '../src/index'
@@ -336,7 +337,7 @@ describe('hard gate regression (resolveAdvisorConfig stays the SSOT)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// ⑤ endpoint claims (typertGateway SRC discovery + payload contract)
+// ⑤ endpoint claims (explicit typert registration + payload contract)
 // ---------------------------------------------------------------------------
 
 type FakeRpcResult =
@@ -397,17 +398,21 @@ describe('typertGateway endpoint claims + payload contract', () => {
     await ctx.plugin(TypertGatewayService)
     const bridge = installAdvisorSettings(ctx, entryConfig({ systemPrompt: 'entry prompt', immuneTurns: 5 }))
     new AdvisorConfigGateway(ctx, bridge)
+    ctx.typert.register(advisorTypertContribution())
     await waitRegistered(ctx)
     const connection = ctx.get('connection') as unknown as FakeConnectionService
     await vi.waitFor(() => expect(connection.channel).toBe('/api'))
     return { ctx, connection }
   }
 
-  it('claims /api/advisor/get + /api/advisor/set through the SRC discovery (reflect.props + remoteMethods)', async () => {
+  it('claims /api/advisor/get + /api/advisor/set through the explicit typert registration (ctx.typert.local)', async () => {
     const { ctx, connection } = await composeGatewayHarness()
-    // The same discovery claimsEndpoint uses: the service appears in the
-    // shared reflection and carries the typertGateway binding + Remote markers.
+    // The registration writes invocation descriptors into `ctx.typert.local`
+    // — the store `claimsEndpoint` checks FIRST — and the gateway remains a
+    // registered cordis service.
     expect(ctx.reflect.props['advisor']).toEqual({ type: 'service' })
+    expect(ctx.typert.local.get('advisor/get')).toMatchObject({ service: 'advisor', namespace: 'advisor', method: 'get' })
+    expect(ctx.typert.local.get('advisor/set')).toMatchObject({ service: 'advisor', namespace: 'advisor', method: 'set' })
     expect(connection.authority).toBe('trusted-host')
     expect(connection.matches!('advisor/get')).toBe(true)
     expect(connection.matches!('advisor/set')).toBe(true)
@@ -466,7 +471,7 @@ describe('typertGateway endpoint claims + payload contract', () => {
     if (!unknownWire.ok) expect(unknownWire.error.message).toContain('args fields do not match the descriptor')
   })
 
-  it('invokes directly through ctx.typertGateway (same SRC descriptor path)', async () => {
+  it('invokes directly through ctx.typertGateway (same strict descriptor path)', async () => {
     const { ctx } = await composeGatewayHarness()
     const result = await ctx.typertGateway.invoke({ namespace: 'advisor', method: 'get', args: {} })
     expect(result).toMatchObject({ config: { enabled: false, immuneTurns: 5 } })

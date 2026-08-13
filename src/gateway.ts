@@ -39,7 +39,8 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { SettingsProvider } from '@deepseek-ai/dsh-settings'
-import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
+import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
+import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { ADVISOR_SETTINGS_NAMESPACE } from './settings.js'
 import type { AdvisorSettingsBridge } from './settings.js'
 import { resolveAdvisorConfig } from './config.js'
@@ -51,8 +52,19 @@ export type AdvisorConfigPatch = Partial<AdvisorConfig>
 /**
  * The host-side `advisor` config gateway (`/api/advisor/get` +
  * `/api/advisor/set`). Registered as the cordis service key `'advisor'`
- * (namespace defaults to the service key), so the typertGateway SRC discovery
- * claims the `advisor/<method>` endpoints.
+ * (namespace defaults to the service key). The `TypertRemoteService` base is
+ * kept ONLY for its `typertRemote` binding — the typertGateway's dispatch
+ * `validateBinding` requires the visible binding on the live service (a pure
+ * instance property, no module-private state). Endpoints are registered
+ * EXPLICITLY through `ctx.typert.register(advisorTypertContribution())`
+ * (see `apply` in `src/index.ts`) instead of the `@Remote` SRC markers:
+ * SRC discovery reads `remoteMethods()` — a module-private WeakMap in
+ * `@deepseek-ai/dsh-typert-protocol` — so a locally-linked plugin whose
+ * peers resolve outside the host installation never shares that table with
+ * the host typertGateway (zero claimed endpoints, `/api/advisor/*` 404).
+ * The explicit `TypertRegistry.register` path writes the invocation
+ * descriptors into `ctx.typert.local`, which `claimsEndpoint` checks FIRST,
+ * so claim + dispatch work regardless of module identity.
  */
 export class AdvisorConfigGateway extends TypertRemoteService {
   private readonly bridge: AdvisorSettingsBridge
@@ -86,7 +98,6 @@ export class AdvisorConfigGateway extends TypertRemoteService {
    * user layer) through the hard gate.
    * @returns the resolved config (incl. disabledReason when the gate blocks).
    */
-  @Remote('get')
   get(): { config: ResolvedAdvisorConfig } {
     return { config: this.readConfig() }
   }
@@ -100,7 +111,6 @@ export class AdvisorConfigGateway extends TypertRemoteService {
    * @throws when the patch fails `Config` validation, or when no settings
    *   service is composed (KD-G5: the write channel is unavailable).
    */
-  @Remote('set')
   async set(patch: AdvisorConfigPatch): Promise<{ config: ResolvedAdvisorConfig }> {
     // Unknown-key rejection + type/bounds validation. The settings service
     // schema is non-strict (unknown keys merge through), so the explicit
@@ -167,5 +177,47 @@ export class AdvisorConfigGateway extends TypertRemoteService {
     if (config.model !== undefined) wire.model = config.model
     if (config.disabledReason !== undefined) wire.disabledReason = config.disabledReason
     return wire as unknown as ResolvedAdvisorConfig
+  }
+}
+
+/**
+ * The explicit typert contribution for the `advisor` gateway endpoints —
+ * registered via `ctx.typert.register(...)` (see `apply` in `src/index.ts`).
+ * The descriptors mirror exactly what the former SRC discovery derived from
+ * the `@Remote` markers (`src:advisor#<endpoint>` identity shape, direct
+ * receiver, JSON wire params with `src-json` codec), so the host
+ * typertGateway claim + dispatch behavior is byte-for-byte the same — the
+ * only difference is the registration does not depend on the module-private
+ * `remoteMethods` marker table, which a locally-linked plugin can never
+ * share with the host installation.
+ */
+export function advisorTypertContribution(): TypertContribution {
+  return {
+    package: 'dsh-advisor',
+    face: 'host',
+    schemas: [],
+    model: { services: [], events: [], objects: [] },
+    invocations: [
+      {
+        id: 'dsh-advisor#advisor/get',
+        service: 'advisor',
+        namespace: 'advisor',
+        method: 'get',
+        invocation: { kind: 'direct' },
+        parameters: [],
+        result: { mode: 'src-json' },
+      },
+      {
+        id: 'dsh-advisor#advisor/set',
+        service: 'advisor',
+        namespace: 'advisor',
+        method: 'set',
+        invocation: { kind: 'direct' },
+        parameters: [
+          { name: 'patch', wire: 'patch', source: 'json', codec: { mode: 'src-json' } },
+        ],
+        result: { mode: 'src-json' },
+      },
+    ],
   }
 }
