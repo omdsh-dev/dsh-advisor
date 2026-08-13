@@ -12,9 +12,9 @@
 ## 1. 一条命令的 git 安装
 
 ```sh
-dsh plugin --profile web add github:dsh-external/dsh-advisor   # <name> = 你的 profile 名；用 #<sha> 钉住 commit
+dsh plugin --profile web add github:btspoony/dsh-advisor   # <name> = 你的 profile 名；用 #<sha> 钉住 commit
 # 完整 URL 形式等价：
-# dsh plugin --profile web add https://github.com/dsh-external/dsh-advisor.git
+# dsh plugin --profile web add https://github.com/btspoony/dsh-advisor.git
 ```
 
 git 安装拉取的是**源码而非构建产物**，因此组合包会在安装时自行构建。注意点：

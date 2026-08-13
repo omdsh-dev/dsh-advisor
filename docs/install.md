@@ -17,9 +17,9 @@ uninstall. The quick version lives in the [README](../README.md#install).
 ## 1. One-line git install
 
 ```sh
-dsh plugin --profile web add github:dsh-external/dsh-advisor   # <name> = your profile name; pin a commit with #<sha>
+dsh plugin --profile web add github:btspoony/dsh-advisor   # <name> = your profile name; pin a commit with #<sha>
 # The full URL form works equivalently:
-# dsh plugin --profile web add https://github.com/dsh-external/dsh-advisor.git
+# dsh plugin --profile web add https://github.com/btspoony/dsh-advisor.git
 ```
 
 A git install fetches **sources, not built artifacts**, so the bundle builds

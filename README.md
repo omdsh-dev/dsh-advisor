@@ -16,7 +16,7 @@ itself.
 Install with a single command (pnpm ≥ 10 needs one build-allow step — see [Install](#install)):
 
 ```sh
-dsh plugin --profile web add github:dsh-external/dsh-advisor   # <name> = your profile name; pin a commit with #<sha>
+dsh plugin --profile web add github:btspoony/dsh-advisor   # <name> = your profile name; pin a commit with #<sha>
 ```
 
 **Advisory only.** The advisor never approves or rejects the primary agent's
@@ -30,7 +30,7 @@ policy) so it can never stall or pollute the primary loop.
 ### One-line git install
 
 ```sh
-dsh plugin --profile web add github:dsh-external/dsh-advisor   # <name> = your profile name; pin a commit with #<sha>
+dsh plugin --profile web add github:btspoony/dsh-advisor   # <name> = your profile name; pin a commit with #<sha>
 ```
 
 A git install fetches **sources, not built artifacts**, so the bundle builds

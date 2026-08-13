@@ -11,7 +11,7 @@
 一条命令即可安装（pnpm ≥ 10 需要一次构建放行步骤 —— 见[安装](#安装)）：
 
 ```sh
-dsh plugin --profile web add github:dsh-external/dsh-advisor   # <name> = 你的 profile 名；用 #<sha> 钉住 commit
+dsh plugin --profile web add github:btspoony/dsh-advisor   # <name> = 你的 profile 名；用 #<sha> 钉住 commit
 ```
 
 **仅作建议。** advisor 从不批准或否决主 agent 的动作，也绝不会像主 agent 那样发出命令。每条送达的消息都是自我描述的 advisory 内容；一个行为异常的评审者会被端到端约束（emission guard、immuneTurns 冷却、failure policy），因此它永远不会卡住或污染主循环。
@@ -21,7 +21,7 @@ dsh plugin --profile web add github:dsh-external/dsh-advisor   # <name> = 你的
 ### 一条命令的 git 安装
 
 ```sh
-dsh plugin --profile web add github:dsh-external/dsh-advisor   # <name> = 你的 profile 名；用 #<sha> 钉住 commit
+dsh plugin --profile web add github:btspoony/dsh-advisor   # <name> = 你的 profile 名；用 #<sha> 钉住 commit
 ```
 
 git 安装拉取的是**源码而非构建产物**，因此组合包会在安装时自行构建（`prepare` 自建）。pnpm ≥ 10 默认拦截 git 依赖的 `prepare`：第一次 `add` 会报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，pnpm 会打印出确切的包 key —— 在 profile 的 `pnpm-workspace.yaml` 中放行构建（`onlyBuiltDependencies: [dsh-advisor]`，或运行 `dsh plugin --profile web approve-builds`），然后重新执行 `add`。请把这次放行当作它本来的样子：允许该包的代码在安装时于你的机器上执行；并钉住 commit（`#<sha>`），这样之后的 push 无法悄悄改变实际运行的代码。
