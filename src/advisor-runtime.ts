@@ -45,9 +45,9 @@ import type {
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
-import { createEmissionGuard } from './emission-guard'
-import type { EmissionGuard } from './emission-guard'
-import type { Delta } from './transcript'
+import { createEmissionGuard } from './emission-guard.js'
+import type { EmissionGuard } from './emission-guard.js'
+import type { Delta } from './transcript.js'
 
 // ---------------------------------------------------------------------------
 // Contracts

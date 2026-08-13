@@ -5,7 +5,13 @@
     "declaration": true,
     "sourceMap": true,
     "outDir": "lib",
-    "rootDir": "src"
+    "rootDir": "src",
+    // Node ESM loads plugin lib/ directly: relative imports MUST carry
+    // explicit .js extensions. nodenext enforces this at build time
+    // (bundler resolution would silently emit extensionless imports
+    // that fail with ERR_MODULE_NOT_FOUND at runtime).
+    "module": "nodenext",
+    "moduleResolution": "nodenext"
   },
   "include": ["src"]
 }

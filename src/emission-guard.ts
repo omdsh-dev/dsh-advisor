@@ -37,7 +37,7 @@
  * @module dsh-advisor/emission-guard
  */
 
-import type { AdviceNote, AdviceSeverity } from './advisor-runtime'
+import type { AdviceNote, AdviceSeverity } from './advisor-runtime.js'
 
 /**
  * FIFO dedupe history bound (omp parity: 4096). Deliberately capped — a
