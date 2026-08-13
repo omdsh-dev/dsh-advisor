@@ -41,7 +41,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { MemorySettings } from './support/memory-settings'
-import { LlmAdapter, LlmService, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { LlmAdapter, LlmRuntime, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -62,7 +62,7 @@ beforeEach(() => {
 
 
 // ---------------------------------------------------------------------------
-// Stub adapter (T4/T8 pattern: real LlmService + ctx.llm.registerAdapter)
+// Stub adapter (T4/T8 pattern: real LlmRuntime + ctx.llm.registerAdapter)
 // ---------------------------------------------------------------------------
 
 /** Chunk script for a successful text reply. */
@@ -75,7 +75,7 @@ const textReply = (text: string): readonly StreamChunk[] => [
  * Stub `LlmAdapter`: records every `GenerateOptions` it receives and replays a
  * scripted reply per call (indexed by call order). Registered for BOTH the
  * entry provider (`'stub'`) and the post-edit provider (`'other'`) — the
- * LlmService stub dispatches by provider route, and the live re-apply test
+ * LlmRuntime stub dispatches by provider route, and the live re-apply test
  * must observe a call actually routed to the new provider.
  */
 class StubAdapter extends LlmAdapter {
@@ -173,7 +173,7 @@ function fullConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
 /**
  * Compose the real plugin into a cordis context with the settings service
  * mounted: `MemorySettings` first (the `installSettingsSection` consumer child
- * then activates once the advisor plugin loads), real `LlmService` + the stub
+ * then activates once the advisor plugin loads), real `LlmRuntime` + the stub
  * adapter on both provider routes, fake `sessions`/`agents` services so the
  * plugin's top-level inject list resolves, then load the plugin through the
  * registry (`ctx.plugin`) — config schema validation + apply included. Returns
@@ -195,7 +195,7 @@ async function composeLiveHarness(
 ): Promise<{ ctx: Context; adapter: LlmAdapter & AdapterProbe }> {
   const ctx = new Context()
   await ctx.plugin(MemorySettings)
-  await ctx.plugin(LlmService)
+  await ctx.plugin(LlmRuntime)
   const adapter = adapterOverride ?? new StubAdapter(replies)
   ctx.llm.registerAdapter(['stub', 'other'], adapter)
   ctx.provide('sessions', {} as never)

@@ -23,7 +23,7 @@
  * pristine 20da39e snapshot; `SettingsRegisterOptions` has no
  * `exposeToWebClients` key). The advisor namespace is therefore always absent
  * from `settings.describe` on the web configuration boundary — but the web
- * card reaches the config through the GatewayService channel instead (plan
+ * card reaches the config through the TypertRemoteService channel instead (plan
  * dsh-advisor-settings-gateway-n5: `AdvisorConfigGateway` claims
  * `/api/advisor/get` + `/api/advisor/set`, and the client calls
  * `connection.rpc.call('/api', …)`; the in-process `ctx.settings.update`
@@ -89,7 +89,7 @@ export interface AdvisorSettingsBridge {
  * registration-level opt-in (its `exposedNamespaces()` unions model-provider
  * plus product namespaces only), so the advisor namespace stays off the
  * apiproxy web configuration boundary on every current dsh build. Web clients
- * reach the config through the GatewayService channel instead (plan
+ * reach the config through the TypertRemoteService channel instead (plan
  * dsh-advisor-settings-gateway-n5 — `/api/advisor/get` + `/api/advisor/set`);
  * the in-process settings service is the write target behind the gateway's
  * `set`. (A previous iteration believed the opt-in existed upstream and
@@ -128,7 +128,7 @@ export function installAdvisorSettings(ctx: Context, entry: AdvisorConfig): Advi
         // has no such key, and the host's `exposedNamespaces()` unions only
         // model-provider plus product namespaces). The namespace stays off
         // the apiproxy web configuration boundary; web clients reach the
-        // config through the GatewayService channel (advisor/get +
+        // config through the TypertRemoteService channel (advisor/get +
         // advisor/set), and the runtime reads the entry exactly as it would
         // without a settings service.
       })

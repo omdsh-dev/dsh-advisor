@@ -2,7 +2,7 @@
  * T8 — integration test: the composed plugin loop (spec §7 Integration).
  *
  * Composes the real dsh-advisor plugin into a real cordis `Context` with:
- * - a real `LlmService` plus a stub `LlmAdapter` registered via
+ * - a real `LlmRuntime` plus a stub `LlmAdapter` registered via
  *   `ctx.llm.registerAdapter(['stub'], adapter)` (the T4 established pattern);
  * - fake `sessions` / `agents` services (`ctx.provide`) so the plugin's
  *   top-level `inject: ['sessions', 'agents', 'llm']` resolves and `apply`
@@ -35,7 +35,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { CallId, LlmAdapter, LlmService, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { CallId, LlmAdapter, LlmRuntime, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, StreamChunk, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -56,7 +56,7 @@ beforeEach(() => {
 
 
 // ---------------------------------------------------------------------------
-// Stub adapter (T4 pattern: real LlmService + ctx.llm.registerAdapter)
+// Stub adapter (T4 pattern: real LlmRuntime + ctx.llm.registerAdapter)
 // ---------------------------------------------------------------------------
 
 /** Chunk script for a successful text reply. */
@@ -137,7 +137,7 @@ interface Harness {
 }
 
 /**
- * Compose the real plugin into a cordis context: real `LlmService` + stub
+ * Compose the real plugin into a cordis context: real `LlmRuntime` + stub
  * adapter for provider `'stub'`, fake `sessions`/`agents` services so the
  * plugin's top-level inject list resolves, then load the plugin through the
  * registry (`ctx.plugin`) — config schema validation + apply included.
@@ -147,7 +147,7 @@ async function composeHarness(
   replies: ReadonlyArray<readonly StreamChunk[]>,
 ): Promise<Harness> {
   const ctx = new Context()
-  await ctx.plugin(LlmService)
+  await ctx.plugin(LlmRuntime)
   const adapter = new StubAdapter(replies)
   ctx.llm.registerAdapter(['stub'], adapter)
   // The plugin declares inject ['sessions', 'agents', 'llm']; `apply` never
@@ -967,7 +967,7 @@ describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix w
 //
 // The NO_ADAPTER root cause: a plugin fiber composed in an isolated scope
 // resolves a LOCAL `llm` service that lacks the provider adapters (they live
-// on the application ROOT's LlmService). `ensureRuntime` resolves the llm
+// on the application ROOT's LlmRuntime). `ensureRuntime` resolves the llm
 // from `ctx.root.get('llm')` first, so the advisor call must reach the root
 // adapter while the child's own llm is never touched. This is the automated
 // regression test for the host-verified fix — the previously missing
@@ -977,13 +977,13 @@ describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix w
 describe('integration — root-llm resolution from an isolated child scope (qc1 W-3)', () => {
   it('a plugin on a child whose local llm has no adapters still reaches the ROOT adapter', async () => {
     const root = new Context()
-    await root.plugin(LlmService)
+    await root.plugin(LlmRuntime)
     const adapter = new StubAdapter([[...textReply('{"note":"root adapter reached","severity":"concern"}')]])
     root.llm.registerAdapter(['stub'], adapter)
 
     // Child scope with an ISOLATED llm: the child's own llm service is a bare
     // stub that throws if ever called (no adapter registrations — the exact
-    // deployment scenario behind NO_ADAPTER). Only the root LlmService carries
+    // deployment scenario behind NO_ADAPTER). Only the root LlmRuntime carries
     // the registered adapter, and `ensureRuntime` must reach it.
     const child = root.isolate('llm')
     child.provide('llm', {

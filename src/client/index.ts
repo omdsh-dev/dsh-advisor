@@ -20,7 +20,7 @@ import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 // type-only import pattern as the old ui-settings one: it loads the module's
 // types (the ./client entry re-exports the slot-contract merge) without any
 // value import.
-import type {} from '@deepseek-ai/dsh-client-ui-plugin-config/client'
+import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { AdvisorCard } from './advisor-card.tsx'
