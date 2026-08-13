@@ -85,7 +85,7 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     expect(offenders, 'no @deepseek-ai value import outside the frozen externals table').toEqual([])
     // The type-only packages must never surface as runtime requires.
     for (const forbidden of [
-      'dsh-client-connection', 'dsh-client-locale', 'dsh-client-ui-settings', 'dsh-client-ui-plugin-config',
+      'dsh-client-connection', 'dsh-client-locale', 'dsh-client-ui-settings', 'dsh-client-ui-settings-plugins',
     ]) {
       expect(bundle, `no require of @deepseek-ai/${forbidden}`).not.toContain(`require("@deepseek-ai/${forbidden}`)
     }
@@ -164,7 +164,7 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     expect(pkg.dsh?.client?.inject).toEqual(
       expect.arrayContaining([
         '@deepseek-ai/dsh-client-runtime',
-        '@deepseek-ai/dsh-client-ui-plugin-config',
+        '@deepseek-ai/dsh-client-ui-settings-plugins',
         '@deepseek-ai/dsh-client-locale',
       ]),
     )

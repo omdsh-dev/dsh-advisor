@@ -5,7 +5,7 @@
  * Transport: the typertGateway `/api` interceptor is the single host-wide RPC
  * slot (a plugin must NOT `connection.rpc.intercept('/api')` again — it would
  * throw). Instead this service declares a typertGateway binding (via the
- * `GatewayService` base) plus `@Remote` method markers; the gateway's SRC
+ * `TypertRemoteService` base) plus `@Remote` method markers; the gateway's SRC
  * discovery (`claimsEndpoint` — `ctx.reflect.props` + `remoteMethods`) claims
  * `/api/advisor/get` and `/api/advisor/set`, and the payload contract is
  * exactly one plain-object `args` field whose keys are the method parameter
@@ -38,8 +38,8 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { Settings } from '@deepseek-ai/dsh-settings'
-import { GatewayService, Remote } from '@deepseek-ai/dsh-type-meta'
+import type { SettingsProvider } from '@deepseek-ai/dsh-settings'
+import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
 import { ADVISOR_SETTINGS_NAMESPACE } from './settings'
 import type { AdvisorSettingsBridge } from './settings'
 import { resolveAdvisorConfig } from './config'
@@ -54,10 +54,10 @@ export type AdvisorConfigPatch = Partial<AdvisorConfig>
  * (namespace defaults to the service key), so the typertGateway SRC discovery
  * claims the `advisor/<method>` endpoints.
  */
-export class AdvisorConfigGateway extends GatewayService {
+export class AdvisorConfigGateway extends TypertRemoteService {
   private readonly bridge: AdvisorSettingsBridge
   /** The live settings service once the optional inject child activates. */
-  private settings: Settings | undefined
+  private settings: SettingsProvider | undefined
 
   /**
    * @param ctx - owning context (the plugin fiber's ctx inside `apply`).

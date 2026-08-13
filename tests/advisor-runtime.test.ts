@@ -22,15 +22,15 @@
  *
  * Most tests drive the runtime directly with an injected fake `llm.stream`
  * (per the brief); one composed test registers a stub `LlmAdapter` on a real
- * `LlmService` to prove the registration/dispatch path.
+ * `LlmRuntime` to prove the registration/dispatch path.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 // The overlay shim (`export *`) forwards named exports but not the package
-// default, so `LlmService` (named export of @deepseek-ai/dsh-llm) is imported
+// default, so `LlmRuntime` (named export of @deepseek-ai/dsh-llm) is imported
 // by name, not as the default.
-import { LlmService, LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { LlmRuntime, LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmFailure, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { AdvisorRuntime, ADVISOR_MAX_TOKENS, ADVISOR_NOTE_MAX_CHARS, extractAdviceNote } from '../src/advisor-runtime'
@@ -594,7 +594,7 @@ describe('AdvisorRuntime — dispose (KD-5 in-flight abort)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Composed contexts — real LlmService + stub adapter registration
+// Composed contexts — real LlmRuntime + stub adapter registration
 // ---------------------------------------------------------------------------
 
 class RecordingAdapter extends LlmAdapter {
@@ -619,10 +619,10 @@ class RecordingAdapter extends LlmAdapter {
   }
 }
 
-describe('AdvisorRuntime — composed with a real LlmService + registered adapter', () => {
+describe('AdvisorRuntime — composed with a real LlmRuntime + registered adapter', () => {
   it('dispatches through ctx.llm.registerAdapter with the expected options', async () => {
     const ctx = new Context()
-    await ctx.plugin(LlmService)
+    await ctx.plugin(LlmRuntime)
     const adapter = new RecordingAdapter([...textReply('{"note":"registered adapter works"}')])
     ctx.llm.registerAdapter(['test-provider'], adapter)
 
@@ -652,7 +652,7 @@ describe('AdvisorRuntime — composed with a real LlmService + registered adapte
 
   it('never starts a model call when the config is disabled (explicit gate, S4)', async () => {
     const ctx = new Context()
-    await ctx.plugin(LlmService)
+    await ctx.plugin(LlmRuntime)
     const adapter = new RecordingAdapter([...textReply('{"note":"should never be called"}')])
     ctx.llm.registerAdapter(['test-provider'], adapter)
 
@@ -682,10 +682,10 @@ class NoReasoningAdapter extends LlmAdapter {
   }
 }
 
-describe('AdvisorRuntime — capability-gated reasoningEffort against a real LlmService (W-1)', () => {
+describe('AdvisorRuntime — capability-gated reasoningEffort against a real LlmRuntime (W-1)', () => {
   it('a registered adapter WITHOUT reasoning metadata yields a note with no reasoningEffort sent', async () => {
     const ctx = new Context()
-    await ctx.plugin(LlmService)
+    await ctx.plugin(LlmRuntime)
     const adapter = new NoReasoningAdapter([...textReply('{"note":"plain model works","severity":"nit"}')])
     ctx.llm.registerAdapter(['plain'], adapter)
 
@@ -700,7 +700,7 @@ describe('AdvisorRuntime — capability-gated reasoningEffort against a real Llm
     runtime.enqueue(delta('### Session update\n\n**agent**: wrote the tests'))
     await runtime.waitForDrain()
 
-    // The real LlmService would throw UNSUPPORTED_REASONING_EFFORT if the
+    // The real LlmRuntime would throw UNSUPPORTED_REASONING_EFFORT if the
     // runtime sent an explicit effort for this model — the capability gate
     // omits it, resolveCallFor materializes nothing, and the note arrives.
     expect(notes).toEqual([{ note: 'plain model works', severity: 'nit' }])

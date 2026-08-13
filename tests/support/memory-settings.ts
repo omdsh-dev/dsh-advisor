@@ -9,9 +9,9 @@
  * settings semantics against a synchronous in-memory document.
  */
 
-import { Settings, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import { SettingsProvider, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 
-export class MemorySettings extends Settings {
+export class MemorySettings extends SettingsProvider {
   /** In-memory storage never refuses a write. */
   readonly writable = true
 

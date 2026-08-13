@@ -72,13 +72,13 @@ export interface AdviceNote {
  */
 export type AdvisorRuntimeStatus = 'running' | 'paused' | 'quota_exhausted' | 'halted' | 'disabled'
 
-/** Minimal `ctx.llm` surface the runtime drives (satisfied by `LlmService`). */
+/** Minimal `ctx.llm` surface the runtime drives (satisfied by `LlmRuntime`). */
 export interface AdvisorLlm {
   stream(options: GenerateOptions): AsyncIterable<StreamChunk>
   /**
-   * Optional capability query (LlmService exposes it; injected fakes may not).
+   * Optional capability query (LlmRuntime exposes it; injected fakes may not).
    * Used to capability-gate `reasoningEffort` (qc2 W-1 / qc1 W-1 / qc3 F-3):
-   * the dsh LlmService rejects an explicit effort for any model whose adapter
+   * the dsh LlmRuntime rejects an explicit effort for any model whose adapter
    * does not declare it, so the runtime resolves the model's declared efforts
    * and passes `'off'` only when the model supports it. Absent → the option
    * is omitted and `resolveCallFor` materializes the adapter default.
@@ -677,7 +677,7 @@ export class AdvisorRuntime {
       // reasoning is not needed. Capability-gated (qc2 W-1 / qc1 W-1 / qc3
       // F-3): `resolveReasoningEffort` passes the branded 'off' ONLY when the
       // resolved model declares it; otherwise the option is omitted entirely
-      // (the dsh LlmService would reject an explicit effort for a model whose
+      // (the dsh LlmRuntime would reject an explicit effort for a model whose
       // adapter lacks reasoning metadata with UNSUPPORTED_REASONING_EFFORT,
       // silently killing the advisor for non-deepseek models — pre-n4 these
       // worked because no effort was sent).
