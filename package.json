@@ -1,6 +1,6 @@
 {
   "name": "dsh-advisor",
-  "version": "0.0.1-rc.5",
+  "version": "0.1.0",
   "type": "module",
   "description": "dsh plugin bundle porting the omp advisor subsystem: a per-session reviewer model that observes the primary transcript and injects severity-ranked advice (nit/concern/blocker).",
   "keywords": [
