@@ -28,7 +28,7 @@
  */
 
 import type { CommandDefinition, CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
-import type { AdvisorRuntimeStatus } from './advisor-runtime'
+import type { AdvisorRuntimeStatus } from './advisor-runtime.js'
 
 // ---------------------------------------------------------------------------
 // Command parse

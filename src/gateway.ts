@@ -40,10 +40,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
-import { ADVISOR_SETTINGS_NAMESPACE } from './settings'
-import type { AdvisorSettingsBridge } from './settings'
-import { resolveAdvisorConfig } from './config'
-import type { AdvisorConfig, ResolvedAdvisorConfig } from './config'
+import { ADVISOR_SETTINGS_NAMESPACE } from './settings.js'
+import type { AdvisorSettingsBridge } from './settings.js'
+import { resolveAdvisorConfig } from './config.js'
+import type { AdvisorConfig, ResolvedAdvisorConfig } from './config.js'
 
 /** Patch shape accepted by `advisor.set` — any subset of the config keys. */
 export type AdvisorConfigPatch = Partial<AdvisorConfig>

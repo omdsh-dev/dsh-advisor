@@ -61,7 +61,7 @@ import {
   isSurfaceEvent,
 } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { isAdvisorMessage } from './kinds'
+import { isAdvisorMessage } from './kinds.js'
 
 // ---------------------------------------------------------------------------
 // Contracts

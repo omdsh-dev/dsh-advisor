@@ -44,18 +44,18 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 // Type-only edge: resolves `ctx.commands` for the optional command child
 // (T7 — conditional `ctx.inject(['commands'], ...)` activation).
 import type {} from '@deepseek-ai/dsh-commands'
-import { resolveAdvisorConfig } from './config'
-import type { AdvisorConfig, ResolvedAdvisorConfig } from './config'
-import { installAdvisorSettings } from './settings'
-import { AdvisorConfigGateway } from './gateway'
-import { SessionTranscriptObserver } from './transcript'
-import type { Delta } from './transcript'
-import { AdvisorRuntime } from './advisor-runtime'
-import type { AdviceNote } from './advisor-runtime'
-import { AdvisorDelivery } from './delivery'
-import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts'
-import { AdvisorSessionOverrides, registerAdvisorCommands } from './commands'
-import type { AdvisorCommandController } from './commands'
+import { resolveAdvisorConfig } from './config.js'
+import type { AdvisorConfig, ResolvedAdvisorConfig } from './config.js'
+import { installAdvisorSettings } from './settings.js'
+import { AdvisorConfigGateway } from './gateway.js'
+import { SessionTranscriptObserver } from './transcript.js'
+import type { Delta } from './transcript.js'
+import { AdvisorRuntime } from './advisor-runtime.js'
+import type { AdviceNote } from './advisor-runtime.js'
+import { AdvisorDelivery } from './delivery.js'
+import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts.js'
+import { AdvisorSessionOverrides, registerAdvisorCommands } from './commands.js'
+import type { AdvisorCommandController } from './commands.js'
 
 export const name = 'dsh-advisor'
 
@@ -63,8 +63,8 @@ export const name = 'dsh-advisor'
 export const inject = ['sessions', 'agents', 'llm']
 
 /** Loader schema (schemastery, strict) — validated by the cordis Loader. */
-export { Config } from './config'
-export type { AdvisorConfig, ResolvedAdvisorConfig } from './config'
+export { Config } from './config.js'
+export type { AdvisorConfig, ResolvedAdvisorConfig } from './config.js'
 
 /** n4 QC F-6: single-reviewer guard. The host composes multiple dsh-advisor
  * fibers (observed: 3 active); with the global session/event subscription every

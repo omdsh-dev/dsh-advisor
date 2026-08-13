@@ -36,8 +36,8 @@
 
 import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
-import { ADVISOR_SOURCE_KIND } from './kinds'
-import type { AdviceNote, AdviceSeverity } from './advisor-runtime'
+import { ADVISOR_SOURCE_KIND } from './kinds.js'
+import type { AdviceNote, AdviceSeverity } from './advisor-runtime.js'
 
 /** The channel one accepted note is delivered on (spec §6). */
 export type DeliveryChannel = 'inject' | 'steer'
