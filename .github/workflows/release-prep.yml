@@ -168,8 +168,19 @@ jobs:
           if gh pr view "$BRANCH" >/dev/null 2>&1; then
             STATE="$(gh pr view "$BRANCH" --json state --jq .state)"
             if [ "$STATE" = "CLOSED" ]; then
-              gh pr reopen "$BRANCH"
-              echo "Reopened previously closed release PR for $BRANCH"
+              if gh pr reopen "$BRANCH" 2>/dev/null; then
+                echo "Reopened previously closed release PR for $BRANCH"
+              else
+                # GitHub rejects reopening a closed PR whose head branch was
+                # force-pushed (reopenPullRequest error). The release branch is
+                # force-pushed by the Commit step above, so a stale closed PR
+                # from an earlier prep run hits this. Degrade: open a fresh PR
+                # on the same branch (the old closed PR stays as history).
+                echo "::warning::cannot reopen closed release PR for $BRANCH (head force-pushed?) — opening a fresh PR"
+                gh pr create --base main --head "$BRANCH" --title "$TITLE" \
+                  --body-file /tmp/pr-body.md --label release
+                exit 0
+              fi
             fi
             gh pr edit "$BRANCH" --title "$TITLE" --body-file /tmp/pr-body.md --add-label release
             echo "Updated existing release PR for $BRANCH"
