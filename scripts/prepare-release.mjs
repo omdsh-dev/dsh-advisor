@@ -153,11 +153,11 @@ function updateChangelog(version, notes) {
   } catch {
     content = CHANGELOG_HEADER
   }
-  // A 0-byte CHANGELOG.md (e.g. manual truncation) is treated as missing:
-  // an empty file must still bootstrap with the standard header, otherwise
-  // the new section would land at the top with leading blank lines and no
-  // `# Changelog` header.
-  if (content === '') {
+  // A 0-byte or whitespace-only CHANGELOG.md (e.g. manual truncation) is
+  // treated as missing: such a file must still bootstrap with the standard
+  // header, otherwise the new section would land at the top with leading
+  // blank lines and no `# Changelog` header.
+  if (content.trim() === '') {
     content = CHANGELOG_HEADER
   }
 
