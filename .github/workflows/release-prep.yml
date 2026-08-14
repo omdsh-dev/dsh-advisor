@@ -59,9 +59,11 @@ jobs:
           # First-line guard: validate an explicit input before it is echoed
           # into GITHUB_OUTPUT or passed to git rev-parse. prepare-release.mjs
           # still validates downstream; this is defense in depth. Accepts
-          # X.Y.Z or X.Y.Z-prerelease (semver; prerelease chars
-          # [0-9A-Za-z.-]+), e.g. 0.2.0, 0.1.1-alpha.1.
-          if [ "$V" != "auto" ] && ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+          # X.Y.Z or X.Y.Z-prerelease (semver; the suffix must contain at
+          # least one digit, matching parseVersion in prepare-release.mjs),
+          # e.g. 0.2.0, 0.1.1-alpha.1; digitless suffixes like 0.1.1-alpha
+          # are rejected.
+          if [ "$V" != "auto" ] && ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]*[0-9][0-9A-Za-z.-]*)?$ ]]; then
             echo "::error::Invalid version input \"$V\". Expected X.Y.Z or X.Y.Z-prerelease (e.g. 0.2.0, 0.1.1-alpha.1)."
             exit 1
           fi
@@ -173,23 +175,36 @@ jobs:
           } > /tmp/pr-body.md
           if gh pr view "$BRANCH" >/dev/null 2>&1; then
             STATE="$(gh pr view "$BRANCH" --json state --jq .state)"
-            if [ "$STATE" = "CLOSED" ]; then
-              if gh pr reopen "$BRANCH" 2>/dev/null; then
-                echo "Reopened previously closed release PR for $BRANCH"
-              else
-                # GitHub rejects reopening a closed PR whose head branch was
-                # force-pushed (reopenPullRequest error). The release branch is
-                # force-pushed by the Commit step above, so a stale closed PR
-                # from an earlier prep run hits this. Degrade: open a fresh PR
-                # on the same branch (the old closed PR stays as history).
-                echo "::warning::cannot reopen closed release PR for $BRANCH (head force-pushed?) — opening a fresh PR"
+            case "$STATE" in
+              OPEN)
+                gh pr edit "$BRANCH" --title "$TITLE" --body-file /tmp/pr-body.md --add-label release
+                echo "Updated existing release PR for $BRANCH"
+                ;;
+              CLOSED)
+                if gh pr reopen "$BRANCH" 2>/dev/null; then
+                  echo "Reopened previously closed release PR for $BRANCH"
+                  gh pr edit "$BRANCH" --title "$TITLE" --body-file /tmp/pr-body.md --add-label release
+                  echo "Updated existing release PR for $BRANCH"
+                else
+                  # GitHub rejects reopening a closed PR whose head branch was
+                  # force-pushed (reopenPullRequest error). The release branch is
+                  # force-pushed by the Commit step above, so a stale closed PR
+                  # from an earlier prep run hits this. Degrade: open a fresh PR
+                  # on the same branch (the old closed PR stays as history).
+                  echo "::warning::cannot reopen closed release PR for $BRANCH (head force-pushed?) — opening a fresh PR"
+                  gh pr create --base main --head "$BRANCH" --title "$TITLE" \
+                    --body-file /tmp/pr-body.md --label release
+                fi
+                ;;
+              MERGED)
+                # An earlier release PR with this branch name was merged; the
+                # branch has been force-pushed with new content — open a fresh
+                # PR (old one stays closed as history).
+                echo "::warning::release PR for $BRANCH was previously merged — opening a fresh PR for the new branch state"
                 gh pr create --base main --head "$BRANCH" --title "$TITLE" \
                   --body-file /tmp/pr-body.md --label release
-                exit 0
-              fi
-            fi
-            gh pr edit "$BRANCH" --title "$TITLE" --body-file /tmp/pr-body.md --add-label release
-            echo "Updated existing release PR for $BRANCH"
+                ;;
+            esac
           else
             gh pr create --base main --head "$BRANCH" --title "$TITLE" \
               --body-file /tmp/pr-body.md --label release

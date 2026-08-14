@@ -77,13 +77,15 @@ jobs:
             exit 1
           fi
           # Version guard (mirror release-prep): X.Y.Z or X.Y.Z-prerelease
-          # (semver; prerelease chars [0-9A-Za-z.-]+). The version flows into
-          # an awk regex anchor below; reject metacharacters up front so a
-          # malformed package.json version cannot break the extraction (awk
-          # exit-2) after publish. '-' is a literal character in awk ERE
-          # outside a character class, so prerelease suffixes need no extra
-          # escaping there.
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+          # (semver; the suffix must contain at least one digit, matching
+          # parseVersion in prepare-release.mjs — digitless suffixes like
+          # 0.1.1-alpha are rejected). The version flows into an awk regex
+          # anchor below; reject metacharacters up front so a malformed
+          # package.json version cannot break the extraction (awk exit-2)
+          # after publish. '-' is a literal character in awk ERE outside a
+          # character class, so prerelease suffixes need no extra escaping
+          # there.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]*[0-9][0-9A-Za-z.-]*)?$ ]]; then
             echo "::error::Invalid version \"$VERSION\" in package.json. Expected X.Y.Z or X.Y.Z-prerelease (e.g. 0.2.0, 0.1.1-alpha.1)."
             exit 1
           fi
@@ -195,4 +197,8 @@ jobs:
           name: v${{ steps.ver.outputs.version }}
           body_path: /tmp/notes.md
           draft: false
-          prerelease: false
+          # A version containing '-' (e.g. 0.1.1-alpha.1) is a prerelease —
+          # mark the GitHub Release as pre-release so it is never presented as
+          # the latest stable release, matching the npm prerelease dist-tag
+          # used by the publish step above.
+          prerelease: ${{ contains(steps.ver.outputs.version, '-') }}
