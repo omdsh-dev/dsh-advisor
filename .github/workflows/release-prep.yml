@@ -1,0 +1,128 @@
+name: Release prep
+
+# Manual entry point: Actions → "Release prep" → Run workflow (optionally pass
+# an explicit X.Y.Z). Bumps package.json (+ lockfile sync), validates the
+# build, and opens a `release vX.Y.Z` PR. Merging that PR runs the Release
+# workflow, which publishes dsh-advisor@X.Y.Z, pushes tag vX.Y.Z, and creates
+# the GitHub Release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Target version (e.g. 0.2.0). Leave empty for auto patch bump."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: release-prep
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so `git describe --tags` can find the previous
+          # release tag (nearest ancestor tag of HEAD).
+          fetch-depth: 0
+
+      # pnpm/action-setup must run before setup-node so that setup-node's
+      # `cache: pnpm` can locate the pnpm store path (same order as ci.yml).
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Reject already-released version
+        id: want
+        run: |
+          V="${{ inputs.version }}"
+          if [ -z "$V" ]; then V="auto"; fi
+          if [ "$V" != "auto" ] && git rev-parse "v$V" >/dev/null 2>&1; then
+            echo "::error::Tag v$V already exists."
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version
+        id: ver
+        run: |
+          V="${{ steps.want.outputs.version }}"
+          if [ "$V" = "auto" ]; then
+            OUT="$(node scripts/prepare-release.mjs)"
+          else
+            OUT="$(node scripts/prepare-release.mjs "$V")"
+          fi
+          echo "$OUT"
+          echo "version=${OUT#VERSION=}" >> "$GITHUB_OUTPUT"
+
+      - name: Sync lockfile
+        run: pnpm install --lockfile-only
+
+      - name: Sanity gate (typecheck + build + test)
+        run: |
+          pnpm run typecheck
+          pnpm run build
+          pnpm run test
+
+      - name: Extract release notes
+        run: |
+          # Previous release = nearest ancestor tag of HEAD. Do NOT use
+          # "v$VERSION^": the version string is not a git ref — the bump
+          # commit is not tagged yet, and the ancestor tag is the only
+          # correct base for "commits since the last release".
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "")
+          git log --oneline --first-parent ${PREV_TAG:+$PREV_TAG..}HEAD > /tmp/notes.md
+          if [ ! -s /tmp/notes.md ]; then
+            echo "No commits between releases." > /tmp/notes.md
+          fi
+
+      - name: Commit prepared release
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BRANCH="release/v${{ steps.ver.outputs.version }}"
+          git checkout -B "$BRANCH"
+          git add -A
+          git commit -m "chore(release): prepare v${{ steps.ver.outputs.version }}"
+          git push --force-with-lease origin "$BRANCH"
+
+      - name: Ensure release label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh label create release --if-not-exists --color 0E8A16 || true
+
+      - name: Open or update release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          BRANCH="release/v${VERSION}"
+          TITLE="release v${VERSION}"
+          {
+            cat /tmp/notes.md
+            echo
+            echo "Merging this PR tags v${VERSION} and publishes dsh-advisor@${VERSION} via the Release workflow."
+          } > /tmp/pr-body.md
+          if gh pr view "$BRANCH" >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" --title "$TITLE" --body-file /tmp/pr-body.md
+            echo "Updated existing release PR for $BRANCH"
+          else
+            gh pr create --base main --head "$BRANCH" --title "$TITLE" \
+              --body-file /tmp/pr-body.md --label release
+          fi
