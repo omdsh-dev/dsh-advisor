@@ -5,56 +5,33 @@ uninstall. The quick version lives in the [README](../README.md#install).
 
 ## Prerequisites
 
-- A dsh runtime environment (`$DSH_HOME`, default `~/.dsh`) whose source tree
-  is at `$DSH_SOURCE_DIR` (default `${DSH_HOME}/source/current`) — needed by
-  the dev-time link farm (the `prepare` build) and by dev-time type checking /
-  tests.
-- Builds need **node** (≥ 22) and **pnpm** (≥ 10) — the bundle self-builds in
-  `prepare` (`tsc`, no bun).
-- The target profile (e.g. `web`) is writable; restart the dsh session after
-  installing.
+- A dsh runtime environment (`$DSH_HOME`, default `~/.dsh`) and a writable
+  target profile (e.g. `web`); restart the dsh session after installing.
+- A registry install needs only pnpm on PATH (`dsh plugin` is a pnpm
+  forwarder). Building from source (git / local / tarball installs below)
+  additionally needs **node** (≥ 22) and a dsh source tree at `$DSH_SOURCE_DIR`
+  (default `${DSH_HOME}/source/current`) — the dev-time link farm (the
+  `prepare` build) and dev-time type checking / tests use it.
 
-## 1. One-line git install
+## 1. One-line registry install
 
 ```sh
-dsh plugin --profile web add github:btspoony/dsh-advisor   # <name> = your profile name; pin a commit with #<sha>
-# The full URL form works equivalently:
-# dsh plugin --profile web add https://github.com/btspoony/dsh-advisor.git
+dsh plugin --profile web add dsh-advisor   # <name> = your profile name
+# Pin an exact version for reproducibility:
+# dsh plugin --profile web add dsh-advisor@0.1.0
 ```
 
-A git install fetches **sources, not built artifacts**, so the bundle builds
-itself on install. Points to note:
+A registry install fetches the published tarball, which ships the built
+artifacts (`lib/` + `cordis.patch.yml`) and has no `install` / `postinstall`
+scripts — no `prepare` build runs and no build permission is needed. Runtime
+dependencies (`@deepseek-ai/cordis`, `schemastery`, and the `@deepseek-ai/dsh-*`
+peers) are declared as peerDependencies and resolved by the dsh installation's
+flat profile module fallback — no extra install step.
 
-- **prepare self-build**: pnpm runs the package's `prepare` script (`node
-  scripts/setup-dsh-links.mjs && pnpm build`) while installing — the dev-time
-  link farm and the build. Dev-time resolution of the private
-  `@deepseek-ai/dsh-*` packages (and the in-box `cordis` / `react` /
-  `react-dom` identities) comes from the **local dsh source tree** via
-  `$DSH_SOURCE_DIR` / `$DSH_HOME` — the same tree the host runs from — so no
-  private-registry access is needed.
-- **pnpm ≥ 10 build allowlist (every first `add`)**: pnpm ≥ 10 refuses to run a
-  git dependency's `prepare` / `postinstall` by default. The first `add` fails
-  with `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` and prints the exact package key
-  (`dsh-advisor`). Add it to the profile's `pnpm-workspace.yaml`:
-
-  ```yaml
-  # $DSH_HOME/profiles/web/pnpm-workspace.yaml
-  onlyBuiltDependencies:
-    - dsh-advisor
-  # pnpm ≥ 10.26 also accepts the allowBuilds form:
-  # allowBuilds:
-  #   dsh-advisor: true
-  ```
-
-  then re-run the `add`; alternatively `dsh plugin --profile web
-  approve-builds` selects it interactively. Treat that allowance as what it is:
-  permission to execute the package's code on your machine at install time,
-  outside any sandbox the agent runs under. Only allow packages whose source
-  you trust, and pin a commit (`#<sha>`) so a later push cannot silently change
-  what runs.
-- **Transport**: the `github:` shorthand is resolved by pnpm (HTTPS preferred,
-  SSH fallback on probe failure); the explicit https URL form pins HTTPS.
-  `#<ref>` version pinning works in both forms.
+- **Version pinning**: append `@<version>` to pin (e.g. `dsh-advisor@0.1.0`).
+  Registry packages have no commit pinning; use the [local directory
+  install](#2-local-directory-install-development--verification) to test
+  un-released changes.
 
 ## 2. Local directory install (development / verification)
 
@@ -75,7 +52,7 @@ plugin config row (see [Web Settings exposure](#4-web-settings-exposure)).
 
 ```sh
 pnpm pack
-dsh plugin --profile web add dsh-advisor-0.0.1.tgz
+dsh plugin --profile web add dsh-advisor-0.1.0.tgz
 ```
 
 A tarball ships the built artifacts (`lib/` + `cordis.patch.yml`), so no

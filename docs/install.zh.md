@@ -4,35 +4,21 @@
 
 ## 前置条件
 
-- 可用的 dsh 运行环境（`$DSH_HOME`，默认 `~/.dsh`），且其源码树在 `$DSH_SOURCE_DIR`（缺省 `${DSH_HOME}/source/current`）——开发期链接农场（`prepare` 构建）与开发期类型检查 / 测试都需要它。
-- 构建需要 **node**（≥ 22）与 **pnpm**（≥ 10）——组合包的 `prepare` 脚本自构建（`tsc`，无 bun）。
-- **Windows**：请先开启[开发者模式](https://learn.microsoft.com/windows/apps/get-started/enable-your-device-for-development)（git 安装 / `prepare` 的链接农场会创建文件符号链接；目录 junction 无需特权）。Windows 没有 `HOME`，链接农场自动回退 `USERPROFILE` 解析 dsh 源码树。
-- 目标 profile（如 `web`）可读写；安装后重启 dsh 会话。
+- 可用的 dsh 运行环境（`$DSH_HOME`，默认 `~/.dsh`）与可写的目标 profile（如 `web`）；安装后重启 dsh 会话。
+- registry 安装只需 PATH 上有 pnpm（`dsh plugin` 是 pnpm 转发器）。从源码构建（下文 git / 本地目录 / tarball 安装）另需 **node**（≥ 22）与位于 `$DSH_SOURCE_DIR`（缺省 `${DSH_HOME}/source/current`）的 dsh 源码树——开发期链接农场（`prepare` 构建）与开发期类型检查 / 测试都用它。
+- **Windows**：从源码安装（git / 本地目录）的 `prepare` 链接农场会创建文件符号链接，请先开启[开发者模式](https://learn.microsoft.com/windows/apps/get-started/enable-your-device-for-development)（目录 junction 无需特权）。Windows 没有 `HOME`，链接农场自动回退 `USERPROFILE` 解析 dsh 源码树。
 
-## 1. 一条命令的 git 安装
+## 1. 一条命令的 registry 安装
 
 ```sh
-dsh plugin --profile web add github:btspoony/dsh-advisor   # <name> = 你的 profile 名；用 #<sha> 钉住 commit
-# 完整 URL 形式等价：
-# dsh plugin --profile web add https://github.com/btspoony/dsh-advisor.git
+dsh plugin --profile web add dsh-advisor   # <name> = 你的 profile 名
+# 需要可复现安装时钉住精确版本：
+# dsh plugin --profile web add dsh-advisor@0.1.0
 ```
 
-git 安装拉取的是**源码而非构建产物**，因此组合包会在安装时自行构建。注意点：
+registry 安装拉取的是已发布的 tarball，其中自带构建产物（`lib/` + `cordis.patch.yml`）且没有 `install` / `postinstall` 脚本——不会运行 `prepare` 构建，也无需构建权限。运行时依赖（`@deepseek-ai/cordis`、`schemastery` 与 `@deepseek-ai/dsh-*` peers）声明为 peerDependencies，由 dsh 安装的扁平 profile module fallback 解析——无需额外安装步骤。
 
-- **prepare 自建**：pnpm 在安装 git 依赖时会执行包的 `prepare` 脚本（`node scripts/setup-dsh-links.mjs && pnpm build`）——开发期链接农场与构建。私有 `@deepseek-ai/dsh-*` 包（以及内置 `cordis`/`react`/`react-dom` 身份）的开发期解析来自**本地 dsh 源码树**，经 `$DSH_SOURCE_DIR` / `$DSH_HOME` —— 与宿主运行的同一棵树，因此无需访问私有 registry。
-- **pnpm ≥ 10 构建放行（每次首次 `add` 必遇）**：pnpm ≥ 10 默认不执行 git 依赖的 `prepare` / `postinstall`。第一次 `add` 会失败并打印 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，同时给出确切的包 key（`dsh-advisor`）。把它加进此 profile 的 `pnpm-workspace.yaml`：
-
-  ```yaml
-  # $DSH_HOME/profiles/web/pnpm-workspace.yaml
-  onlyBuiltDependencies:
-    - dsh-advisor
-  # pnpm ≥ 10.26 也接受 allowBuilds 形式：
-  # allowBuilds:
-  #   dsh-advisor: true
-  ```
-
-  然后重跑 `add`；也可交互式 `dsh plugin --profile web approve-builds` 选择放行。请把这次放行当作它本来的样子：允许该包的代码在安装期、在 agent 运行所在的任何沙箱之外，于你的机器上执行。只放行你信任其源码的包，并钉住 commit（`#<sha>`），防止后续 push 悄悄改变实际运行的代码。
-- **传输协议**：`github:` 简写由 pnpm 解析（通常优先 HTTPS，探测失败时退回 SSH）；显式 https URL 形式则固定 HTTPS。两种形式等价，`#<ref>` 钉版均支持。
+- **版本钉住**：追加 `@<version>` 即可（如 `dsh-advisor@0.1.0`）。registry 包没有 commit 钉住；要测试未发布改动，用下面的[本地目录安装](#2-本地目录安装开发--验证)。
 
 ## 2. 本地目录安装（开发 / 验证）
 
@@ -47,7 +33,7 @@ dsh plugin --profile web add .   # <name> = 你的 profile 名
 
 ```sh
 pnpm pack
-dsh plugin --profile web add dsh-advisor-0.0.1.tgz
+dsh plugin --profile web add dsh-advisor-0.1.0.tgz
 ```
 
 tarball 附带的是构建产物（`lib/` + `cordis.patch.yml`），因此不会运行 `prepare` 脚本，也无需构建权限。运行时依赖（`@deepseek-ai/cordis`、`schemastery` 与 `@deepseek-ai/dsh-{session,agent,llm,commands,timeout}`）声明为 peerDependencies，由 dsh 安装的扁平 profile module fallback 解析——无需额外安装步骤。

@@ -13,10 +13,10 @@ model are required), and injects severity-ranked advice (nit / concern /
 blocker) back into the session — without polluting or recursively reviewing
 itself.
 
-Install with a single command (pnpm ≥ 10 needs one build-allow step — see [Install](#install)):
+Install with a single command:
 
 ```sh
-dsh plugin --profile web add github:btspoony/dsh-advisor   # <name> = your profile name; pin a commit with #<sha>
+dsh plugin --profile web add dsh-advisor   # <name> = your profile name
 ```
 
 **Advisory only.** The advisor never approves or rejects the primary agent's
@@ -27,21 +27,18 @@ policy) so it can never stall or pollute the primary loop.
 
 ## Install
 
-### One-line git install
+### One-line registry install
 
 ```sh
-dsh plugin --profile web add github:btspoony/dsh-advisor   # <name> = your profile name; pin a commit with #<sha>
+dsh plugin --profile web add dsh-advisor   # <name> = your profile name
 ```
 
-A git install fetches **sources, not built artifacts**, so the bundle builds
-itself on install (`prepare` self-build). pnpm ≥ 10 blocks a git dependency's
-`prepare` by default: the first
-`add` fails with `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`, and pnpm prints the
-exact package key — allow the build in the profile's `pnpm-workspace.yaml`
-(`onlyBuiltDependencies: [dsh-advisor]`, or run `dsh plugin --profile web
-approve-builds`), then re-run the `add`. Treat that allowance as permission to
-execute the package's code on your machine at install time, and pin a commit
-(`#<sha>`) so a later push cannot silently change what runs.
+A registry install fetches the published tarball, which ships the built
+artifacts (`lib/` + `cordis.patch.yml`), so no `prepare` build or build
+permission is needed. Runtime dependencies (`@deepseek-ai/cordis`, `schemastery`,
+and the `@deepseek-ai/dsh-*` peers) are declared as peerDependencies and resolve
+through the dsh installation's flat profile module fallback — no extra install
+step. Pin an exact version (`dsh-advisor@0.1.0`) for reproducible installs.
 
 ### Local directory install (recommended for development / verification)
 

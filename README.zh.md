@@ -8,23 +8,23 @@
 
 一个移植 omp「advisor」子系统的独立 dsh 插件组合包：一个按会话运行的评审模型，观察主会话 transcript，用显式配置的模型（provider 与 model 均为必填）评审每个已完成的 stepped turn，并把按严重度排序的建议（nit / concern / blocker）注入回会话 —— 不污染主循环，也不递归地评审自己。
 
-一条命令即可安装（pnpm ≥ 10 需要一次构建放行步骤 —— 见[安装](#安装)）：
+一条命令即可安装：
 
 ```sh
-dsh plugin --profile web add github:btspoony/dsh-advisor   # <name> = 你的 profile 名；用 #<sha> 钉住 commit
+dsh plugin --profile web add dsh-advisor   # <name> = 你的 profile 名
 ```
 
 **仅作建议。** advisor 从不批准或否决主 agent 的动作，也绝不会像主 agent 那样发出命令。每条送达的消息都是自我描述的 advisory 内容；一个行为异常的评审者会被端到端约束（emission guard、immuneTurns 冷却、failure policy），因此它永远不会卡住或污染主循环。
 
 ## 安装
 
-### 一条命令的 git 安装
+### 一条命令的 registry 安装
 
 ```sh
-dsh plugin --profile web add github:btspoony/dsh-advisor   # <name> = 你的 profile 名；用 #<sha> 钉住 commit
+dsh plugin --profile web add dsh-advisor   # <name> = 你的 profile 名
 ```
 
-git 安装拉取的是**源码而非构建产物**，因此组合包会在安装时自行构建（`prepare` 自建）。pnpm ≥ 10 默认拦截 git 依赖的 `prepare`：第一次 `add` 会报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，pnpm 会打印出确切的包 key —— 在 profile 的 `pnpm-workspace.yaml` 中放行构建（`onlyBuiltDependencies: [dsh-advisor]`，或运行 `dsh plugin --profile web approve-builds`），然后重新执行 `add`。请把这次放行当作它本来的样子：允许该包的代码在安装时于你的机器上执行；并钉住 commit（`#<sha>`），这样之后的 push 无法悄悄改变实际运行的代码。
+registry 安装拉取的是已发布的 tarball，其中自带构建产物（`lib/` + `cordis.patch.yml`），因此不会运行 `prepare` 构建，也无需构建放行。运行时依赖（`@deepseek-ai/cordis`、`schemastery` 与 `@deepseek-ai/dsh-*` peers）声明为 peerDependencies，由 dsh 安装的扁平 profile module fallback 解析——无需额外安装步骤。需要可复现安装时用 `dsh-advisor@0.1.0` 钉住精确版本。
 
 ### 本地目录安装（推荐用于开发 / 验证）
 
