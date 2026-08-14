@@ -22,8 +22,8 @@
 1. **校验**：检出合并提交（`merge_commit_sha`），读取 `package.json` 版本号并确认非空。
 2. **构建**：`pnpm run typecheck && pnpm run build && pnpm run test`（与 CI 相同的校验命令）。
 3. **发布**：`npm publish --access public`，向 npm 发布 `dsh-advisor@X.Y.Z`（认证走 `NPM_TOKEN` secret）。
-4. **打 tag**：以 `github-actions[bot]` 身份创建并推送注解 tag `vX.Y.Z`（commit message `Release vX.Y.Z`）；若该 tag 已存在，tag 步骤会跳过。**tag 跳过只覆盖 tag**——npm 不允许重复发布同一版本（`npm error ... previously published versions`），发布成功后重跑工作流会在 `npm publish` 步骤失败，而不是照常发布；仅当 tag 已存在但版本尚未成功发布（例如 tag 推送后、GitHub Release 步骤失败）时，重跑才会继续完成发布。
-5. **创建 GitHub Release**：以 `vX.Y.Z` 为 tag 与标题创建 Release，正文为自上一个 tag 以来的提交记录（`git log --oneline --first-parent`，取最近祖先 tag 为基准）。
+4. **打 tag**：以 `github-actions[bot]` 身份创建并推送注解 tag `vX.Y.Z`（commit message `Release vX.Y.Z`）；若该 tag 已存在，tag 步骤会跳过。**tag 跳过只覆盖 tag**——npm 不允许重复发布同一版本（`npm error ... previously published versions`），因此重跑工作流只在 **`npm publish` 步骤本身失败**（尚未发布任何版本、也未创建 tag）时才能继续完成发布；如果发布已经成功（例如随后 tag 或 GitHub Release 步骤失败），重跑会在 `npm publish` 步骤失败，而不是照常发布。**注意「已发布但未打 tag」的缺口**：发布成功后若 tag 步骤失败，仓库中没有任何 `vX.Y.Z` tag（基于 tag 的重复版本检查也拦不住该版本），此时重跑会卡在 `npm publish`；恢复只能人工处理——用 `gh release create vX.Y.Z --generate-notes`（或 `gh release create` 手动编辑正文）为已发布版本补建 tag 与 GitHub Release，或 bump 一个新版本重新走发布流程。
+5. **创建 GitHub Release**：以 `vX.Y.Z` 为 tag 与标题创建 Release，正文为自上一个 tag 以来的提交记录（`git log --oneline --first-parent`，取最近祖先 tag 为基准）。注意：Release 正文在**合并提交**上提取，会包含 `chore(release): prepare` 提交以及合并前合入的其它提交，因此可能与 PR 正文的发布说明（在 prep 时提取）略有不同——这是设计使然。
 
 ## 3. 版本策略
 

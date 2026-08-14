@@ -51,8 +51,16 @@ jobs:
       - name: Reject already-released version
         id: want
         run: |
+          set -euo pipefail
           V="${{ inputs.version }}"
           if [ -z "$V" ]; then V="auto"; fi
+          # First-line guard: validate an explicit input before it is echoed
+          # into GITHUB_OUTPUT or passed to git rev-parse. prepare-release.mjs
+          # still validates downstream; this is defense in depth.
+          if [ "$V" != "auto" ] && ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version input \"$V\". Expected X.Y.Z (e.g. 0.2.0)."
+            exit 1
+          fi
           if [ "$V" != "auto" ] && git rev-parse "v$V" >/dev/null 2>&1; then
             echo "::error::Tag v$V already exists."
             exit 1
@@ -62,6 +70,7 @@ jobs:
       - name: Bump version
         id: ver
         run: |
+          set -euo pipefail
           V="${{ steps.want.outputs.version }}"
           if [ "$V" = "auto" ]; then
             OUT="$(node scripts/prepare-release.mjs)"
@@ -76,12 +85,14 @@ jobs:
 
       - name: Sanity gate (typecheck + build + test)
         run: |
+          set -euo pipefail
           pnpm run typecheck
           pnpm run build
           pnpm run test
 
       - name: Extract release notes
         run: |
+          set -euo pipefail
           # Previous release = nearest ancestor tag of HEAD. Do NOT use
           # "v$VERSION^": the version string is not a git ref — the bump
           # commit is not tagged yet, and the ancestor tag is the only
@@ -94,6 +105,7 @@ jobs:
 
       - name: Commit prepared release
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           BRANCH="release/v${{ steps.ver.outputs.version }}"
@@ -112,6 +124,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
+          set -euo pipefail
           BRANCH="release/v${VERSION}"
           TITLE="release v${VERSION}"
           {
@@ -120,7 +133,12 @@ jobs:
             echo "Merging this PR tags v${VERSION} and publishes dsh-advisor@${VERSION} via the Release workflow."
           } > /tmp/pr-body.md
           if gh pr view "$BRANCH" >/dev/null 2>&1; then
-            gh pr edit "$BRANCH" --title "$TITLE" --body-file /tmp/pr-body.md
+            STATE="$(gh pr view "$BRANCH" --json state --jq .state)"
+            if [ "$STATE" = "CLOSED" ]; then
+              gh pr reopen "$BRANCH"
+              echo "Reopened previously closed release PR for $BRANCH"
+            fi
+            gh pr edit "$BRANCH" --title "$TITLE" --body-file /tmp/pr-body.md --add-label release
             echo "Updated existing release PR for $BRANCH"
           else
             gh pr create --base main --head "$BRANCH" --title "$TITLE" \

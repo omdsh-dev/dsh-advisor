@@ -41,8 +41,11 @@ jobs:
 
       - name: Assert packed tarball contents
         run: |
-          # npm pack --dry-run prints the Tarball Contents listing; fail the
-          # job if the built entrypoint or the cordis bundle patch is missing.
-          npm pack --dry-run --ignore-scripts | tee "$RUNNER_TEMP/pack-listing.txt"
+          set -euo pipefail
+          # npm pack --dry-run prints the Tarball Contents listing to STDERR on
+          # npm 11 (stdout carries only the tarball filename), so capture both
+          # streams; fail the job if the built entrypoint or the cordis bundle
+          # patch is missing.
+          npm pack --dry-run --ignore-scripts 2>&1 | tee "$RUNNER_TEMP/pack-listing.txt"
           grep -Eq "lib/index\.js( |$)" "$RUNNER_TEMP/pack-listing.txt"
           grep -Eq "cordis\.patch\.yml( |$)" "$RUNNER_TEMP/pack-listing.txt"

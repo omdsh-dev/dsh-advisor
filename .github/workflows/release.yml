@@ -30,6 +30,7 @@ jobs:
     if: >
       github.event.pull_request.merged == true
       && startsWith(github.event.pull_request.title, 'release v')
+      && startsWith(github.event.pull_request.head.ref, 'release/v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout merge commit
@@ -80,6 +81,17 @@ jobs:
 
       # npm auth: setup-node wrote `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
       # into .npmrc; this step supplies the token from the NPM_TOKEN secret.
+      - name: Assert packed tarball contents (pre-publish guard)
+        run: |
+          set -euo pipefail
+          # Same guard as ci.yml: npm 11 writes the Tarball Contents listing to
+          # STDERR (stdout carries only the tarball filename), so capture both
+          # streams; refuse to publish a tarball missing the built entrypoint
+          # or the cordis bundle patch.
+          npm pack --dry-run --ignore-scripts 2>&1 | tee "$RUNNER_TEMP/pack-listing.txt"
+          grep -Eq "lib/index\.js( |$)" "$RUNNER_TEMP/pack-listing.txt"
+          grep -Eq "cordis\.patch\.yml( |$)" "$RUNNER_TEMP/pack-listing.txt"
+
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
