@@ -23,7 +23,7 @@
 2. **构建**：`pnpm run typecheck && pnpm run build && pnpm run test`（与 CI 相同的校验命令）。
 3. **发布**：`npm publish --access public`，向 npm 发布 `dsh-advisor@X.Y.Z`（认证走 `NPM_TOKEN` secret）。
 4. **打 tag**：以 `github-actions[bot]` 身份创建并推送注解 tag `vX.Y.Z`（commit message `Release vX.Y.Z`）；若该 tag 已存在，tag 步骤会跳过。**tag 跳过只覆盖 tag**——npm 不允许重复发布同一版本（`npm error ... previously published versions`），因此重跑工作流只在 **`npm publish` 步骤本身失败**（尚未发布任何版本、也未创建 tag）时才能继续完成发布；如果发布已经成功（例如随后 tag 或 GitHub Release 步骤失败），重跑会在 `npm publish` 步骤失败，而不是照常发布。**注意「已发布但未打 tag」的缺口**：发布成功后若 tag 步骤失败，仓库中没有任何 `vX.Y.Z` tag（基于 tag 的重复版本检查也拦不住该版本），此时重跑会卡在 `npm publish`；恢复只能人工处理——用 `gh release create vX.Y.Z --generate-notes`（或 `gh release create` 手动编辑正文）为已发布版本补建 tag 与 GitHub Release，或 bump 一个新版本重新走发布流程。
-5. **创建 GitHub Release**：以 `vX.Y.Z` 为 tag 与标题创建 Release，正文取自 `CHANGELOG.md` 中对应版本的 `## [X.Y.Z]` 小节（该小节由 **Release prep** 写入并随发布 PR 提交），仅包含该小节本身；PR 正文取自同一小节（提取来源相同），并额外附一行合并说明（见 [§1 步骤 4](#1-发布流程)）。若该小节缺失（例如在引入 `CHANGELOG.md` 之前准备的旧发布 PR），则回退为自上一个 tag 以来的提交记录（`git log --oneline --first-parent`，取最近祖先 tag 为基准；无 tag 时为完整历史）。
+5. **创建 GitHub Release**：以 `vX.Y.Z` 为 tag 与标题创建 Release，正文取自 `CHANGELOG.md` 中对应版本的 `## [X.Y.Z]` 小节（该小节由 **Release prep** 写入并随发布 PR 提交），仅包含该小节本身；PR 正文取自同一小节（提取来源相同），并额外附一行合并说明（见 [§1 步骤 4](#1-发布流程)）。若该小节缺失（例如在引入 `CHANGELOG.md` 之前准备的旧发布 PR），则回退为自上一个 tag 以来的提交记录（`git log --oneline --first-parent`，取最近祖先 tag 为基准；无 tag 时为完整历史）。注：在 `CHANGELOG.md` 引入之前就已打开的在途发布 PR（例如本次变更时在途的 0.1.1 PR）合并后，其 Release 正文经回退逻辑以 git-log 格式生成，且该版本不会在 `CHANGELOG.md` 中留下小节（同版本不可重复准备）；从下一个版本起，Release 正文恢复为对应 `## [X.Y.Z]` 小节。
 
 ## 3. 版本策略
 

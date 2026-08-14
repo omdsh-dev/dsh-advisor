@@ -107,7 +107,13 @@ jobs:
           # e.g. a release PR prepared before CHANGELOG.md existed.
           VERSION="${{ steps.ver.outputs.version }}"
           if [ -f CHANGELOG.md ]; then
+            # Escape regex metacharacters in the version inside awk (the gsub
+            # runs after `-v` argument escape processing, which would strip
+            # backslashes from a shell-escaped value) so the anchor matches
+            # literally: dots must not act as any-char. VERSION is strict
+            # X.Y.Z upstream, so only dots are ever present.
             awk -v v="$VERSION" '
+              BEGIN { gsub(/\./, "\\\\&", v) }
               /^## \[/ { if (in_section) exit }
               $0 ~ "^## \\[" v "\\]" { in_section = 1 }
               in_section

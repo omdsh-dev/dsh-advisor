@@ -113,6 +113,13 @@ function updateChangelog(version) {
   } catch {
     content = CHANGELOG_HEADER
   }
+  // A 0-byte CHANGELOG.md (e.g. manual truncation) is treated as missing:
+  // an empty file must still bootstrap with the standard header, otherwise
+  // the new section would land at the top with leading blank lines and no
+  // `# Changelog` header.
+  if (content === '') {
+    content = CHANGELOG_HEADER
+  }
 
   if (content.includes(`## [${version}]`)) {
     return

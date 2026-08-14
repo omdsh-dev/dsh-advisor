@@ -68,6 +68,14 @@ jobs:
             echo "::error::package.json version is empty; refusing to release."
             exit 1
           fi
+          # Strict X.Y.Z guard (mirror release-prep): the version flows into
+          # an awk regex anchor below; reject metacharacters up front so a
+          # malformed package.json version cannot break the extraction (awk
+          # exit-2) after publish.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version \"$VERSION\" in package.json. Expected X.Y.Z."
+            exit 1
+          fi
           # Tag-exists policy (mirror mstar-harness): publish proceeds even if
           # v$VERSION already exists (e.g. re-run after a partial failure); the
           # tag step below skips creation when the tag is already present.
@@ -117,7 +125,13 @@ jobs:
           # e.g. a release PR prepared before CHANGELOG.md existed.
           VERSION="${{ steps.ver.outputs.version }}"
           if [ -f CHANGELOG.md ]; then
+            # Escape regex metacharacters in the version inside awk (the gsub
+            # runs after `-v` argument escape processing, which would strip
+            # backslashes from a shell-escaped value) so the anchor matches
+            # literally: dots must not act as any-char. VERSION is strict
+            # X.Y.Z upstream, so only dots are ever present.
             awk -v v="$VERSION" '
+              BEGIN { gsub(/\./, "\\\\&", v) }
               /^## \[/ { if (in_section) exit }
               $0 ~ "^## \\[" v "\\]" { in_section = 1 }
               in_section

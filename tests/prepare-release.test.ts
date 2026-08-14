@@ -216,4 +216,106 @@ describe('scripts/prepare-release.mjs', () => {
     const changelog = readFileSync(join(fixture, 'CHANGELOG.md'), 'utf8')
     expect(changelog.match(/^## \[0\.1\.1\] - /gm)).toHaveLength(1)
   })
+
+  it('CHANGELOG.md: missing file is created with the standard header and the new section', () => {
+    makeFixture('0.1.0')
+    writeFileSync(join(fixture, 'log-lines.txt'), 'abc1234 some commit\n', 'utf8')
+    // No CHANGELOG.md in the fixture — the script must bootstrap the file
+    // with the standard header, then insert the section under it (no leading
+    // blank lines, header first).
+    const { status, stdout } = runScript(['0.1.1'], [])
+    expect(status).toBe(0)
+    expect(stdout.trim()).toBe('VERSION=0.1.1')
+    const changelog = readFileSync(join(fixture, 'CHANGELOG.md'), 'utf8')
+    expect(changelog.startsWith('# Changelog\n')).toBe(true)
+    expect(changelog).toContain(
+      'All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.',
+    )
+    expect(changelog).toMatch(/^# Changelog\n\nAll notable changes[^\n]*\n\n## \[0\.1\.1\] - \d{4}-\d{2}-\d{2}\n\n- abc1234 some commit\n$/)
+  })
+
+  it('CHANGELOG.md: header-only file (trailing newline) gets the section appended after exactly one blank line', () => {
+    makeFixture('0.1.0')
+    writeFileSync(join(fixture, 'log-lines.txt'), 'abc1234 some commit\n', 'utf8')
+    const headerOnly = [
+      '# Changelog',
+      '',
+      'All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.',
+      '',
+    ].join('\n')
+    writeFileSync(join(fixture, 'CHANGELOG.md'), headerOnly, 'utf8')
+    const { status } = runScript(['0.1.1'], [])
+    expect(status).toBe(0)
+    const changelog = readFileSync(join(fixture, 'CHANGELOG.md'), 'utf8')
+    // One blank line separates the header block from the new section; the
+    // section is the last content and the file keeps its trailing newline.
+    expect(changelog).toMatch(/^# Changelog\n\nAll notable changes[^\n]*\n\n## \[0\.1\.1\] - \d{4}-\d{2}-\d{2}\n\n- abc1234 some commit\n$/)
+  })
+
+  it('CHANGELOG.md: header-only file (no trailing newline) gets the section appended with a blank-line separator', () => {
+    makeFixture('0.1.0')
+    writeFileSync(join(fixture, 'log-lines.txt'), 'abc1234 some commit\n', 'utf8')
+    const headerOnly = [
+      '# Changelog',
+      '',
+      'All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.',
+    ].join('\n')
+    writeFileSync(join(fixture, 'CHANGELOG.md'), headerOnly, 'utf8')
+    const { status } = runScript(['0.1.1'], [])
+    expect(status).toBe(0)
+    const changelog = readFileSync(join(fixture, 'CHANGELOG.md'), 'utf8')
+    expect(changelog).toMatch(/^# Changelog\n\nAll notable changes[^\n]*\n\n## \[0\.1\.1\] - \d{4}-\d{2}-\d{2}\n\n- abc1234 some commit\n$/)
+  })
+
+  it('CHANGELOG.md: 0-byte file is bootstrapped like a missing file (header + section, no leading blank lines)', () => {
+    makeFixture('0.1.0')
+    writeFileSync(join(fixture, 'log-lines.txt'), 'abc1234 some commit\n', 'utf8')
+    // An existing-but-empty CHANGELOG.md must take the missing-file path:
+    // pre-fix, the append branch produced a headerless file that starts with
+    // blank lines instead of `# Changelog`.
+    writeFileSync(join(fixture, 'CHANGELOG.md'), '', 'utf8')
+    const { status } = runScript(['0.1.1'], [])
+    expect(status).toBe(0)
+    const changelog = readFileSync(join(fixture, 'CHANGELOG.md'), 'utf8')
+    expect(changelog.startsWith('# Changelog\n')).toBe(true)
+    expect(changelog).toMatch(/^# Changelog\n\nAll notable changes[^\n]*\n\n## \[0\.1\.1\] - \d{4}-\d{2}-\d{2}\n\n- abc1234 some commit\n$/)
+  })
+
+  it('CHANGELOG.md: nearest ancestor tag — notes use the <tag>..HEAD range and the section lists only post-tag commits', () => {
+    makeFixture('0.1.0')
+    // The fake git shim echoes `git describe` from describe-tag.txt and
+    // asserts `git log` receives the `v0.1.0..HEAD` range (exit 2 otherwise),
+    // so a regression to e.g. `v$VERSION^` fails the run.
+    writeFileSync(join(fixture, 'describe-tag.txt'), 'v0.1.0\n', 'utf8')
+    writeFileSync(
+      join(fixture, 'log-lines.txt'),
+      'b0b1c2d post-tag commit 2\na1a2b3c post-tag commit 1\n',
+      'utf8',
+    )
+    // Realistic pre-existing file: the released 0.1.0 section is already
+    // committed; preparing 0.1.1 lists only commits after the v0.1.0 tag.
+    const original = [
+      '# Changelog',
+      '',
+      'All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.',
+      '',
+      '## [0.1.0] - 2026-08-13',
+      '',
+      '- 9d293c0 Merge pull request #16 from dsh-external/chore/release-0.1.0',
+      '',
+    ].join('\n')
+    writeFileSync(join(fixture, 'CHANGELOG.md'), original, 'utf8')
+    const { status, stdout } = runScript(['0.1.1'], [])
+    expect(status).toBe(0)
+    expect(stdout.trim()).toBe('VERSION=0.1.1')
+    const changelog = readFileSync(join(fixture, 'CHANGELOG.md'), 'utf8')
+    const newSection = changelog.slice(changelog.indexOf('## [0.1.1]'), changelog.indexOf('## [0.1.0]'))
+    // Only post-tag commits (the v0.1.0..HEAD range) are listed as bullets,
+    // in git-log order (newest first: log-lines.txt line 1 → first bullet).
+    expect(newSection).toContain('- b0b1c2d post-tag commit 2\n- a1a2b3c post-tag commit 1')
+    expect(newSection).not.toContain('9d293c0')
+    // The pre-existing 0.1.0 section survives byte-for-byte below.
+    const originalSectionText = original.slice(original.indexOf('## [0.1.0]'))
+    expect(changelog.slice(changelog.indexOf('## [0.1.0]'))).toBe(originalSectionText)
+  })
 })
