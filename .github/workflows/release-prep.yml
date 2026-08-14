@@ -96,10 +96,12 @@ jobs:
           # PR body source: the `## [<version>]` section of CHANGELOG.md,
           # written by the Bump version step above (prepare-release.mjs) and
           # committed in this release PR. Same guarded extraction as the
-          # Release workflow, so the PR body and the GitHub Release body are
-          # byte-identical (both = the CHANGELOG section). Guard on the file
-          # existing: under `set -e`, awk on a missing CHANGELOG.md exits 2
-          # and aborts the step before the fallback could run.
+          # Release workflow, so the PR body and the GitHub Release body
+          # share the same extraction source (the same CHANGELOG section);
+          # the PR body additionally appends a merge-instruction line when
+          # the PR is opened below. Guard on the file existing: under
+          # `set -e`, awk on a missing CHANGELOG.md exits 2 and aborts the
+          # step before the fallback could run.
           # Fall back to git log (nearest ancestor tag of HEAD, full history
           # when no tag exists) only when the file or the section is missing,
           # e.g. a release PR prepared before CHANGELOG.md existed.
