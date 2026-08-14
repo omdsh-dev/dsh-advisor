@@ -43,6 +43,12 @@ describe('registry peer contract (rc.6 from npm, no link farm)', () => {
     }
   })
 
+  it('uses the scoped schemastery peer supplied by DSH rc.6', () => {
+    expect(root.peerDependencies?.['@deepseek-ai/schemastery']).toBe('^3.18.1')
+    expect(root.peerDependencies?.schemastery).toBeUndefined()
+    expect(root.devDependencies?.schemastery).toBeUndefined()
+  })
+
   it('autoInstallPeers is enabled (registry resolution, no link farm)', () => {
     const workspace = readFileSync(resolve(repo, 'pnpm-workspace.yaml'), 'utf8')
     expect(workspace).toMatch(/autoInstallPeers\s*:\s*true/)

@@ -35,7 +35,7 @@ dsh plugin --profile web add dsh-advisor   # <name> = your profile name
 
 A registry install fetches the published tarball, which ships the built
 artifacts (`lib/` + `cordis.patch.yml`), so no `prepare` build or build
-permission is needed. Runtime dependencies (`@deepseek-ai/cordis`, `schemastery`,
+permission is needed. Runtime dependencies (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`,
 and the `@deepseek-ai/dsh-*` peers) are declared as peerDependencies and resolve
 through the dsh installation's flat profile module fallback — no extra install
 step. Pin an exact version (`dsh-advisor@0.1.0`) for reproducible installs.
@@ -277,7 +277,7 @@ bin-less cordis shim at `node_modules/@deepseek-ai/cordis` answers the scoped
 name and resolves to the vendored files, because the real packages type and
 run against the vendored build and module identity requires dev-time
 `import '@deepseek-ai/cordis'` to resolve to the same files. The public
-devDependencies (`schemastery`, `react`, …) resolve from the npm registry as
+devDependencies (`@deepseek-ai/schemastery`, `react`, …) resolve from the npm registry as
 usual.
 
 `prepack` runs `pnpm build`; `prepare` runs the link farm and the build, so
