@@ -151,20 +151,17 @@ describe('scripts/prepare-release.mjs', () => {
       '9d293c0 Merge pull request #16 from dsh-external/chore/release-0.1.0\naf86f22 Merge pull request #15 from dsh-external/chore/deps-bump-rc3\n',
       'utf8',
     )
-    writeFileSync(
-      join(fixture, 'CHANGELOG.md'),
-      [
-        '# Changelog',
-        '',
-        'All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.',
-        '',
-        '## [0.1.0] - 2026-08-13',
-        '',
-        '- 9d293c0 Merge pull request #16 from dsh-external/chore/release-0.1.0',
-        '',
-      ].join('\n'),
-      'utf8',
-    )
+    const originalChangelog = [
+      '# Changelog',
+      '',
+      'All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.',
+      '',
+      '## [0.1.0] - 2026-08-13',
+      '',
+      '- 9d293c0 Merge pull request #16 from dsh-external/chore/release-0.1.0',
+      '',
+    ].join('\n')
+    writeFileSync(join(fixture, 'CHANGELOG.md'), originalChangelog, 'utf8')
     const { status, stdout } = runScript([], [])
     expect(status).toBe(0)
     expect(stdout.trim()).toBe('VERSION=0.1.1')
@@ -176,8 +173,37 @@ describe('scripts/prepare-release.mjs', () => {
     expect(changelog).toContain(
       '- 9d293c0 Merge pull request #16 from dsh-external/chore/release-0.1.0\n- af86f22 Merge pull request #15 from dsh-external/chore/deps-bump-rc3',
     )
-    // Pre-existing section survives byte-for-byte.
-    expect(changelog).toContain('## [0.1.0] - 2026-08-13\n\n- 9d293c0 Merge pull request #16 from dsh-external/chore/release-0.1.0')
+    // The pre-existing section survives byte-for-byte (F-003): everything at
+    // and below the `## [0.1.0]` header of the pre-run file is present
+    // verbatim, and the post-insert tail equals the pre-run tail exactly —
+    // same byte offset into the file, including the trailing newline.
+    const originalSectionText = originalChangelog.slice(originalChangelog.indexOf('## [0.1.0]'))
+    expect(changelog).toContain(originalSectionText)
+    expect(changelog.slice(changelog.indexOf('## [0.1.0]'))).toBe(originalSectionText)
+  })
+
+  it('CHANGELOG.md: byte-for-byte tail preservation when the file has no trailing newline', () => {
+    makeFixture('0.1.0')
+    writeFileSync(join(fixture, 'log-lines.txt'), 'abc1234 some commit\n', 'utf8')
+    // The pre-run file deliberately has NO trailing newline — the pre-fix
+    // split('\n')/splice/join('\n') path would append one after insertion
+    // and change the tail bytes.
+    const original = [
+      '# Changelog',
+      '',
+      'All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.',
+      '',
+      '## [0.1.0] - 2026-08-13',
+      '',
+      '- 9d293c0 Merge pull request #16 from dsh-external/chore/release-0.1.0',
+    ].join('\n')
+    writeFileSync(join(fixture, 'CHANGELOG.md'), original, 'utf8')
+    const { status } = runScript(['0.1.1'], [])
+    expect(status).toBe(0)
+    const changelog = readFileSync(join(fixture, 'CHANGELOG.md'), 'utf8')
+    const originalSectionText = original.slice(original.indexOf('## [0.1.0]'))
+    expect(changelog).toContain(originalSectionText)
+    expect(changelog.slice(changelog.indexOf('## [0.1.0]'))).toBe(originalSectionText)
   })
 
   it('CHANGELOG.md: re-run for the same version is a no-op — the section is not duplicated', () => {

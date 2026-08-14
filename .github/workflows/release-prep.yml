@@ -93,14 +93,30 @@ jobs:
       - name: Extract release notes
         run: |
           set -euo pipefail
-          # Previous release = nearest ancestor tag of HEAD. Do NOT use
-          # "v$VERSION^": the version string is not a git ref — the bump
-          # commit is not tagged yet, and the ancestor tag is the only
-          # correct base for "commits since the last release".
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "")
-          git log --oneline --first-parent ${PREV_TAG:+$PREV_TAG..}HEAD > /tmp/notes.md
+          # PR body source: the `## [<version>]` section of CHANGELOG.md,
+          # written by the Bump version step above (prepare-release.mjs) and
+          # committed in this release PR. Same guarded extraction as the
+          # Release workflow, so the PR body and the GitHub Release body are
+          # byte-identical (both = the CHANGELOG section). Guard on the file
+          # existing: under `set -e`, awk on a missing CHANGELOG.md exits 2
+          # and aborts the step before the fallback could run.
+          # Fall back to git log (nearest ancestor tag of HEAD, full history
+          # when no tag exists) only when the file or the section is missing,
+          # e.g. a release PR prepared before CHANGELOG.md existed.
+          VERSION="${{ steps.ver.outputs.version }}"
+          if [ -f CHANGELOG.md ]; then
+            awk -v v="$VERSION" '
+              /^## \[/ { if (in_section) exit }
+              $0 ~ "^## \\[" v "\\]" { in_section = 1 }
+              in_section
+            ' CHANGELOG.md > /tmp/notes.md
+          fi
           if [ ! -s /tmp/notes.md ]; then
-            echo "No commits between releases." > /tmp/notes.md
+            PREV_TAG=$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "")
+            git log --oneline --first-parent ${PREV_TAG:+$PREV_TAG..}HEAD > /tmp/notes.md
+            if [ ! -s /tmp/notes.md ]; then
+              echo "No commits between releases." > /tmp/notes.md
+            fi
           fi
 
       - name: Commit prepared release

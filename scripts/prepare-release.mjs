@@ -127,17 +127,24 @@ function updateChangelog(version) {
           .split('\n')
           .map((line) => `- ${line}`)
           .join('\n')
+  // The section's own trailing `\n` plus the inserted `\n` below form the
+  // blank-line separator between the new section and the existing sections.
   const section = `${sectionHeader}\n\n${sectionBody}\n`
 
-  const lines = content.split('\n')
-  const firstSection = lines.findIndex((line) => line.startsWith('## ['))
+  // Insert on the first `## [` section header via string slice: everything
+  // at and below the insertion point — including the file's exact trailing
+  // newline — is preserved byte-for-byte. (A split('\n')/splice/join('\n')
+  // round-trip would re-normalize line breaks and could alter the tail, e.g.
+  // appending a trailing newline that was not in the source file.)
+  const firstSectionMatch = /^## \[/m.exec(content)
+  const firstSectionIdx = firstSectionMatch === null ? -1 : firstSectionMatch.index
   let next
-  if (firstSection === -1) {
-    // No sections yet — append the new section after the header block.
-    next = `${content.trimEnd()}\n\n${section}`
+  if (firstSectionIdx === -1) {
+    // No sections yet — append the new section after the header block,
+    // keeping the file's own trailing-newline state.
+    next = content.endsWith('\n') ? `${content}\n${section}` : `${content}\n\n${section}`
   } else {
-    lines.splice(firstSection, 0, section)
-    next = lines.join('\n')
+    next = `${content.slice(0, firstSectionIdx)}${section}\n${content.slice(firstSectionIdx)}`
   }
 
   try {

@@ -108,15 +108,21 @@ jobs:
           # Release body source: the `## [<version>]` section of CHANGELOG.md,
           # written by prepare-release.mjs during release-prep and committed in
           # the release PR — so the GitHub Release body matches the PR body.
+          # Guard on the file existing: under `set -e`, awk on a missing
+          # CHANGELOG.md exits 2 and aborts the step before the fallback could
+          # run. The version anchor is prefix-safe: the pattern is anchored at
+          # `^## \[<version>\]`, so `0.1.1` cannot match a `## [0.1.10]` header.
           # Fall back to git log (nearest ancestor tag of HEAD, full history
-          # when no tag exists) only when the section is missing, e.g. a
-          # release PR prepared before CHANGELOG.md existed.
+          # when no tag exists) only when the file or the section is missing,
+          # e.g. a release PR prepared before CHANGELOG.md existed.
           VERSION="${{ steps.ver.outputs.version }}"
-          awk -v v="$VERSION" '
-            /^## \[/ { if (in_section) exit }
-            $0 ~ "^## \\[" v "\\]" { in_section = 1 }
-            in_section
-          ' CHANGELOG.md > /tmp/notes.md
+          if [ -f CHANGELOG.md ]; then
+            awk -v v="$VERSION" '
+              /^## \[/ { if (in_section) exit }
+              $0 ~ "^## \\[" v "\\]" { in_section = 1 }
+              in_section
+            ' CHANGELOG.md > /tmp/notes.md
+          fi
           if [ ! -s /tmp/notes.md ]; then
             PREV_TAG=$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "")
             git log --oneline --first-parent ${PREV_TAG:+$PREV_TAG..}HEAD > /tmp/notes.md
