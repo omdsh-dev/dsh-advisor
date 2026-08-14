@@ -2,6 +2,10 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.1.2] - 2026-08-14
+
+- 0317094 Merge pull request #30 from omdsh-dev/fix/release-merge-state
+
 ## [0.1.1-alpha.1] - 2026-08-14
 
 - cd970f0 Merge pull request #26 from omdsh-dev/fix/release-oidc
