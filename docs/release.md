@@ -1,6 +1,6 @@
 # 发布指南
 
-本文介绍如何发布新版 `dsh-advisor` 到 npm 并创建 GitHub Release。发布流程是 **PR 驱动**的：先由 **Release prep** 工作流准备版本号并打开 `release vX.Y.Z` PR，合并该 PR 后由 **Release** 工作流自动完成发布、打 tag 与 GitHub Release。安装与卸载见[安装指南](install.zh.md)。
+本文介绍如何发布新版 `dsh-advisor` 到 npm 并创建 GitHub Release。发布流程是 **PR 驱动**的：先由 **Release prep** 工作流准备版本号、自动生成 `CHANGELOG.md` 并打开 `release vX.Y.Z` PR（CHANGELOG 随该 PR 一起提交），合并该 PR 后由 **Release** 工作流自动完成发布、打 tag 与 GitHub Release（PR 正文与 Release 正文同源于已提交的 `CHANGELOG.md` 对应小节：PR 正文为该小节并附一行合并说明，Release 正文仅含该小节）。安装与卸载见[安装指南](install.zh.md)。
 
 ## 前置条件
 
@@ -12,7 +12,7 @@
 1. 打开仓库 **Actions** 页，在左侧选择 **Release prep** 工作流。
 2. （可选）在 **Run workflow** 表单的 `version` 输入框填写目标版本号（如 `0.2.0`）；**留空则自动打 patch 版本**（见[版本策略](#3-版本策略)）。
 3. 点击 **Run workflow** 触发发布准备。
-4. 等待 **Release prep** 运行完成：它会把版本号写入 `package.json` 并同步 `pnpm-lock.yaml`，跑一遍 typecheck / build / test 校验，然后创建 `release/vX.Y.Z` 分支并打开标题为 **`release vX.Y.Z`** 的 PR（PR 正文带自上一个 tag 以来的提交记录）。
+4. 等待 **Release prep** 运行完成：它会把版本号写入 `package.json` 并同步 `pnpm-lock.yaml`，把自上一个 tag 以来的提交记录以 `## [X.Y.Z]` 小节写入 `CHANGELOG.md`（自动生成，已有小节保持不变；重复运行同一版本不会重复写入），跑一遍 typecheck / build / test 校验，然后创建 `release/vX.Y.Z` 分支并打开标题为 **`release vX.Y.Z`** 的 PR（PR 正文 = `CHANGELOG.md` 中该版本的 `## [X.Y.Z]` 小节 + 一行合并说明；合并后 GitHub Release 正文仅取同一小节、不含合并说明——两者提取来源相同；CHANGELOG 随提交一起进入该 PR）。
 5. 合并该 **`release vX.Y.Z`** PR。**合并即发布**——不需要再手动运行任何工作流。
 
 ## 2. 合并后自动发生什么
@@ -23,7 +23,7 @@
 2. **构建**：`pnpm run typecheck && pnpm run build && pnpm run test`（与 CI 相同的校验命令）。
 3. **发布**：`npm publish --access public`，向 npm 发布 `dsh-advisor@X.Y.Z`（认证走 `NPM_TOKEN` secret）。
 4. **打 tag**：以 `github-actions[bot]` 身份创建并推送注解 tag `vX.Y.Z`（commit message `Release vX.Y.Z`）；若该 tag 已存在，tag 步骤会跳过。**tag 跳过只覆盖 tag**——npm 不允许重复发布同一版本（`npm error ... previously published versions`），因此重跑工作流只在 **`npm publish` 步骤本身失败**（尚未发布任何版本、也未创建 tag）时才能继续完成发布；如果发布已经成功（例如随后 tag 或 GitHub Release 步骤失败），重跑会在 `npm publish` 步骤失败，而不是照常发布。**注意「已发布但未打 tag」的缺口**：发布成功后若 tag 步骤失败，仓库中没有任何 `vX.Y.Z` tag（基于 tag 的重复版本检查也拦不住该版本），此时重跑会卡在 `npm publish`；恢复只能人工处理——用 `gh release create vX.Y.Z --generate-notes`（或 `gh release create` 手动编辑正文）为已发布版本补建 tag 与 GitHub Release，或 bump 一个新版本重新走发布流程。
-5. **创建 GitHub Release**：以 `vX.Y.Z` 为 tag 与标题创建 Release，正文为自上一个 tag 以来的提交记录（`git log --oneline --first-parent`，取最近祖先 tag 为基准）。注意：Release 正文在**合并提交**上提取，会包含 `chore(release): prepare` 提交以及合并前合入的其它提交，因此可能与 PR 正文的发布说明（在 prep 时提取）略有不同——这是设计使然。
+5. **创建 GitHub Release**：以 `vX.Y.Z` 为 tag 与标题创建 Release，正文取自 `CHANGELOG.md` 中对应版本的 `## [X.Y.Z]` 小节（该小节由 **Release prep** 写入并随发布 PR 提交），仅包含该小节本身；PR 正文取自同一小节（提取来源相同），并额外附一行合并说明（见 [§1 步骤 4](#1-发布流程)）。若该小节缺失（例如在引入 `CHANGELOG.md` 之前准备的旧发布 PR），则回退为自上一个 tag 以来的提交记录（`git log --oneline --first-parent`，取最近祖先 tag 为基准；无 tag 时为完整历史）。注：在 `CHANGELOG.md` 引入之前就已打开的在途发布 PR（例如本次变更时在途的 0.1.1 PR）合并后，其 Release 正文经回退逻辑以 git-log 格式生成，且该版本不会在 `CHANGELOG.md` 中留下小节（同版本不可重复准备）；从下一个版本起，Release 正文恢复为对应 `## [X.Y.Z]` 小节。
 
 ## 3. 版本策略
 
