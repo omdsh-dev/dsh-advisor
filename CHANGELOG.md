@@ -2,6 +2,10 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.1.3-alpha.3] - 2026-08-14
+
+- 4b1f484 Merge pull request #37 from omdsh-dev/fix/changelog-whitespace
+
 ## [0.1.3-alpha.2] - 2026-08-14
 
 - c88c52a Merge pull request #35 from omdsh-dev/docs/release-oidc-alpha
