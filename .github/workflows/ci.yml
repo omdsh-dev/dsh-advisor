@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm/action-setup must run before setup-node so that
+      # setup-node's `cache: pnpm` can locate the pnpm store path.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Test
+        run: pnpm run test
+
+      - name: Assert packed tarball contents
+        run: |
+          set -euo pipefail
+          # npm pack --dry-run prints the Tarball Contents listing to STDERR on
+          # npm 11 (stdout carries only the tarball filename), so capture both
+          # streams; fail the job if the built entrypoint or the cordis bundle
+          # patch is missing.
+          npm pack --dry-run --ignore-scripts 2>&1 | tee "$RUNNER_TEMP/pack-listing.txt"
+          grep -Eq "lib/index\.js( |$)" "$RUNNER_TEMP/pack-listing.txt"
+          grep -Eq "cordis\.patch\.yml( |$)" "$RUNNER_TEMP/pack-listing.txt"
