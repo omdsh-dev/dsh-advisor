@@ -145,7 +145,9 @@ jobs:
           set -euo pipefail
           # Release body source: the `## [<version>]` section of CHANGELOG.md,
           # written by prepare-release.mjs during release-prep and committed in
-          # the release PR — so the GitHub Release body matches the PR body.
+          # the release PR — the same section the PR body uses (the PR body
+          # additionally appends a merge-instruction line; the Release body is
+          # the section only).
           # Guard on the file existing: under `set -e`, awk on a missing
           # CHANGELOG.md exits 2 and aborts the step before the fallback could
           # run. The version anchor is prefix-safe: the pattern is anchored at
