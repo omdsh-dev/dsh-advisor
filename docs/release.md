@@ -31,7 +31,7 @@
 >
 > **发布触发标准：仅当合并内容包含实质变更（代码 / 行为 / 用户可见的文档或配置变更）时才发起发布；纯注释、格式化、工作流注释等 trivial 变更直接合入 main，随下一个实质版本一起发布（空范围守卫只拦截零提交，不拦截 trivial 提交）。判断标准由维护者把握。**
 
-- **留空 = 自动 patch**：`scripts/prepare-release.mjs` 读取当前 `package.json` 版本并把 patch 位 +1，同时**丢弃 prerelease 后缀**（`0.1.3-alpha.1` → `0.1.4`）。**注意**：自动 patch 产出的是**正式版本号**——alpha 规则生效期间，留空会绕过 alpha 规则发出正式版本，因此**必须显式填写 alpha 版本**（如 `0.1.4-alpha.1`），不要留空。
+- **留空 = 自动 patch**：`scripts/prepare-release.mjs` 读取当前 `package.json` 版本：正式版本（无 prerelease）patch 位 +1（`0.1.2` → `0.1.3`）；prerelease 版本在**原 prerelease 线上自增**（`0.1.3-alpha.3` → `0.1.3-alpha.4`，保持 alpha 线，不会丢后缀退化为正式版本）；非数字 prerelease 尾（如 `0.1.0-alpha`）无法自动自增，会报错并提示显式填写版本。
 - **显式版本**：在 `version` 输入框填写完整 semver，支持 `X.Y.Z`（如 `0.2.0`、`1.0.0`）与 `X.Y.Z-alpha.N`（如 `0.1.4-alpha.1`）。需要 minor / major 升级、或想跳过中间 patch 版本时用这个方式；alpha 规则生效期间一律用 `X.Y.Z-alpha.N` 形式。
 - **prerelease 不污染 `latest`**：`X.Y.Z-alpha.N` 发布到 `alpha` dist-tag（`npm install dsh-advisor@alpha` 可安装），不会更新 `latest`；只有正式版本 `X.Y.Z` 才会更新 `latest`。
 - **空版本范围会被拒绝**：若自上一个 release tag 以来没有新提交（没有可发布内容），Release prep 会直接报错退出（exit 1），不会产生空版本 / 空发布 PR。
