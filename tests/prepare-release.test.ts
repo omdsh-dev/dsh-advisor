@@ -404,14 +404,52 @@ describe('scripts/prepare-release.mjs', () => {
     expect(changelog.slice(changelog.indexOf('## [0.1.0]'))).toBe(originalSectionText)
   })
 
-  it('auto patch bump on a prerelease base drops the suffix: 0.1.1-alpha.1 -> 0.1.2', () => {
+  it('auto patch bump on a prerelease base stays on the prerelease line: 0.1.1-alpha.1 -> 0.1.1-alpha.2', () => {
+    // Sibling dsh-llm-fallbacks semantics: a prerelease current version auto
+    // bumps WITHIN its prerelease line (bumping only the numeric tail) —
+    // it must never drop the suffix to a stable version, which would bypass
+    // the alpha-only release rule.
     makeFixture('0.1.1-alpha.1')
     writeFileSync(join(fixture, 'log-lines.txt'), 'abc1234 some commit\n', 'utf8')
     const { status, stdout, stderr } = runScript([], [])
     expect(status).toBe(0)
-    expect(stdout.trim()).toBe('VERSION=0.1.2')
+    expect(stdout.trim()).toBe('VERSION=0.1.1-alpha.2')
     expect(stderr).toBe('')
-    expect(fixtureVersion()).toBe('0.1.2')
+    expect(fixtureVersion()).toBe('0.1.1-alpha.2')
+  })
+
+  it('auto patch bump on a formal version: 0.1.2 -> 0.1.3', () => {
+    makeFixture('0.1.2')
+    writeFileSync(join(fixture, 'log-lines.txt'), 'abc1234 some commit\n', 'utf8')
+    const { status, stdout, stderr } = runScript([], [])
+    expect(status).toBe(0)
+    expect(stdout.trim()).toBe('VERSION=0.1.3')
+    expect(stderr).toBe('')
+    expect(fixtureVersion()).toBe('0.1.3')
+  })
+
+  it('auto patch bump on a prerelease base: 0.1.3-alpha.3 -> 0.1.3-alpha.4', () => {
+    makeFixture('0.1.3-alpha.3')
+    writeFileSync(join(fixture, 'log-lines.txt'), 'abc1234 some commit\n', 'utf8')
+    const { status, stdout, stderr } = runScript([], [])
+    expect(status).toBe(0)
+    expect(stdout.trim()).toBe('VERSION=0.1.3-alpha.4')
+    expect(stderr).toBe('')
+    expect(fixtureVersion()).toBe('0.1.3-alpha.4')
+  })
+
+  it('auto patch bump on a non-numeric prerelease tail is rejected: 0.1.0-alpha -> exit 1', () => {
+    // The tail must be numeric to auto-bump (sibling semantics); a digitless
+    // suffix like "alpha" cannot be incremented, so the script demands an
+    // explicit version instead — no file mutations.
+    makeFixture('0.1.0-alpha')
+    writeFileSync(join(fixture, 'log-lines.txt'), 'abc1234 some commit\n', 'utf8')
+    const { status, stdout, stderr } = runScript([], [])
+    expect(status).toBe(1)
+    expect(stdout).toBe('')
+    expect(stderr).toContain('prerelease tail "alpha" is not numeric')
+    expect(stderr).toContain('Pass an explicit version')
+    expect(fixtureVersion()).toBe('0.1.0-alpha')
   })
 
   it('invalid prerelease versions are rejected: exit 1 + stderr message, package.json untouched', () => {

@@ -63,16 +63,42 @@ if (process.argv[2] !== undefined) {
     process.exit(1)
   }
 } else {
-  const current = parseVersion(pkg.version)
-  if (current === null) {
+  // Auto patch bump (mirrors sibling dsh-llm-fallbacks autoBumpPatch): parse
+  // the current version as X.Y.Z or X.Y.Z-pre, then:
+  //  - formal version X.Y.Z            -> X.Y.(Z+1)       (0.1.2 -> 0.1.3)
+  //  - prerelease with numeric tail    -> bump only the tail, staying on the
+  //    prerelease line (0.1.3-alpha.3 -> 0.1.3-alpha.4)
+  //  - prerelease with non-numeric tail (e.g. 0.1.0-alpha) -> cannot auto
+  //    bump; require an explicit version argument.
+  // The looser regex is deliberate: parseVersion (explicit args) requires a
+  // digit in the suffix, so it cannot tell "alpha" from a malformed version;
+  // this path needs the raw suffix to reject non-numeric tails with the
+  // explicit-version hint.
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/.exec(pkg.version)
+  if (!m) {
     console.error(`Error: cannot parse current package.json version "${pkg.version}".`)
     process.exit(1)
   }
-  // Auto patch bump: bump the numeric patch part and DROP any prerelease
-  // suffix (a prerelease base 0.1.1-alpha.1 with no explicit arg -> 0.1.2,
-  // i.e. the next formal patch after the 0.1.1 line). An explicit prerelease
-  // argument is the way to prepare another prerelease (e.g. 0.1.1-alpha.2).
-  target = { major: current.major, minor: current.minor, patch: current.patch + 1 }
+  const [, major, minor, patch, pre] = m
+  if (pre === undefined) {
+    target = { major: Number(major), minor: Number(minor), patch: Number(patch) + 1 }
+  } else {
+    const tail = pre.split('.').at(-1)
+    if (tail === undefined || !/^\d+$/.test(tail)) {
+      console.error(
+        `Error: cannot auto-bump "${pkg.version}": prerelease tail "${pre}" is not numeric. ` +
+          'Pass an explicit version instead (e.g. `node scripts/prepare-release.mjs 0.1.1-alpha.1`).',
+      )
+      process.exit(1)
+    }
+    const prefix = pre.slice(0, pre.length - tail.length) // "alpha." for "alpha.1"
+    target = {
+      major: Number(major),
+      minor: Number(minor),
+      patch: Number(patch),
+      prerelease: `${prefix}${Number(tail) + 1}`,
+    }
+  }
 }
 
 const version =
