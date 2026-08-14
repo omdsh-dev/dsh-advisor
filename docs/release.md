@@ -4,7 +4,7 @@
 
 ## 前置条件
 
-- **`NPM_TOKEN` secret 必须存在**：Release 工作流通过 `NODE_AUTH_TOKEN` 环境变量（取自仓库 **Settings → Secrets and variables → Actions** 的 `NPM_TOKEN`）向 npm registry 认证。token 缺失或失效时，`npm publish` 会因 401 失败。除 `NPM_TOKEN` 外，默认流程不需要其它 secret——tag 与 GitHub Release 都用工作流自带的 `GITHUB_TOKEN`（需 `contents: write` 权限，Release 工作流已声明）。
+- **npm 发布走 OIDC trusted publishing，无需任何 npm secret**：Release 工作流声明了 `id-token: write` 权限，`npm publish` 用 OIDC 令牌交换短时发布凭证（并生成 provenance），仓库**不需要**配置 `NPM_TOKEN` / `NODE_AUTH_TOKEN`。但 npmjs 侧必须为 `dsh-advisor` 配置 trusted publisher（绑定本仓库 + Release 工作流；见 https://docs.npmjs.com/generating-provenance-statements），配置缺失或失效时 `npm publish` 会因 401 失败。除此之外默认流程不需要其它 secret——tag 与 GitHub Release 都用工作流自带的 `GITHUB_TOKEN`（需 `contents: write` 权限，Release 工作流已声明）。
 - 仓库启用 GitHub Actions；发布 PR 需通过仓库的分支保护检查（CI 校验 + review）才能合并。
 
 ## 1. 发布流程
@@ -21,14 +21,18 @@
 
 1. **校验**：检出合并提交（`merge_commit_sha`），读取 `package.json` 版本号并确认非空。
 2. **构建**：`pnpm run typecheck && pnpm run build && pnpm run test`（与 CI 相同的校验命令）。
-3. **发布**：`npm publish --access public`，向 npm 发布 `dsh-advisor@X.Y.Z`（认证走 `NPM_TOKEN` secret）。
+3. **发布**：`npm publish --access public`，向 npm 发布 `dsh-advisor@X.Y.Z`（认证走 OIDC trusted publishing，无需任何 secret）。版本号含 `-` 的 prerelease（如 `0.1.3-alpha.1`）自动带 `--tag <前缀>`（前缀 = 首个 `-` 之后到首个 `.` 之前的文本，如 `alpha`），发布到 `alpha` dist-tag；正式版本（`X.Y.Z`）不带 `--tag`，默认发布到 `latest`。
 4. **打 tag**：以 `github-actions[bot]` 身份创建并推送注解 tag `vX.Y.Z`（commit message `Release vX.Y.Z`）；若该 tag 已存在，tag 步骤会跳过。**tag 跳过只覆盖 tag**——npm 不允许重复发布同一版本（`npm error ... previously published versions`），因此重跑工作流只在 **`npm publish` 步骤本身失败**（尚未发布任何版本、也未创建 tag）时才能继续完成发布；如果发布已经成功（例如随后 tag 或 GitHub Release 步骤失败），重跑会在 `npm publish` 步骤失败，而不是照常发布。**注意「已发布但未打 tag」的缺口**：发布成功后若 tag 步骤失败，仓库中没有任何 `vX.Y.Z` tag（基于 tag 的重复版本检查也拦不住该版本），此时重跑会卡在 `npm publish`；恢复只能人工处理——用 `gh release create vX.Y.Z --generate-notes`（或 `gh release create` 手动编辑正文）为已发布版本补建 tag 与 GitHub Release，或 bump 一个新版本重新走发布流程。
-5. **创建 GitHub Release**：以 `vX.Y.Z` 为 tag 与标题创建 Release，正文取自 `CHANGELOG.md` 中对应版本的 `## [X.Y.Z]` 小节（该小节由 **Release prep** 写入并随发布 PR 提交），仅包含该小节本身；PR 正文取自同一小节（提取来源相同），并额外附一行合并说明（见 [§1 步骤 4](#1-发布流程)）。若该小节缺失（例如在引入 `CHANGELOG.md` 之前准备的旧发布 PR），则回退为自上一个 tag 以来的提交记录（`git log --oneline --first-parent`，取最近祖先 tag 为基准；无 tag 时为完整历史）。注：在 `CHANGELOG.md` 引入之前就已打开的在途发布 PR（例如本次变更时在途的 0.1.1 PR）合并后，其 Release 正文经回退逻辑以 git-log 格式生成，且该版本不会在 `CHANGELOG.md` 中留下小节（同版本不可重复准备）；从下一个版本起，Release 正文恢复为对应 `## [X.Y.Z]` 小节。
+5. **创建 GitHub Release**：以 `vX.Y.Z` 为 tag 与标题创建 Release，正文取自 `CHANGELOG.md` 中对应版本的 `## [X.Y.Z]` 小节（该小节由 **Release prep** 写入并随发布 PR 提交），仅包含该小节本身；PR 正文取自同一小节（提取来源相同），并额外附一行合并说明（见 [§1 步骤 4](#1-发布流程)）。版本号含 `-`（如 `0.1.3-alpha.1`）时，该 Release 会被标记为 **Pre-release**，不会作为最新稳定版展示。若该小节缺失（例如在引入 `CHANGELOG.md` 之前准备的旧发布 PR），则回退为自上一个 tag 以来的提交记录（`git log --oneline --first-parent`，取最近祖先 tag 为基准；无 tag 时为完整历史）。注：在 `CHANGELOG.md` 引入之前就已打开的在途发布 PR（例如本次变更时在途的 0.1.1 PR）合并后，其 Release 正文经回退逻辑以 git-log 格式生成，且该版本不会在 `CHANGELOG.md` 中留下小节（同版本不可重复准备）；从下一个版本起，Release 正文恢复为对应 `## [X.Y.Z]` 小节。
 
 ## 3. 版本策略
 
-- **留空 = 自动 patch**：`scripts/prepare-release.mjs` 读取当前 `package.json` 版本并把 patch 位 +1（`0.1.0` → `0.1.1` → `0.1.2`…）。
-- **显式 X.Y.Z**：在 `version` 输入框填写完整 semver（如 `0.2.0`、`1.0.0`）。需要 minor / major 升级、或想跳过中间 patch 版本时用这个方式。
+> **当前策略：发布流程恢复正常之前，一律使用 alpha 预发布版本发版（显式填写如 `0.2.0-alpha.1`），禁止发布正式版本；何时恢复正常由维护者明确宣布。**
+
+- **留空 = 自动 patch**：`scripts/prepare-release.mjs` 读取当前 `package.json` 版本并把 patch 位 +1，同时**丢弃 prerelease 后缀**（`0.1.3-alpha.1` → `0.1.4`）。**注意**：自动 patch 产出的是**正式版本号**——alpha 规则生效期间，留空会绕过 alpha 规则发出正式版本，因此**必须显式填写 alpha 版本**（如 `0.1.4-alpha.1`），不要留空。
+- **显式版本**：在 `version` 输入框填写完整 semver，支持 `X.Y.Z`（如 `0.2.0`、`1.0.0`）与 `X.Y.Z-alpha.N`（如 `0.1.4-alpha.1`）。需要 minor / major 升级、或想跳过中间 patch 版本时用这个方式；alpha 规则生效期间一律用 `X.Y.Z-alpha.N` 形式。
+- **prerelease 不污染 `latest`**：`X.Y.Z-alpha.N` 发布到 `alpha` dist-tag（`npm install dsh-advisor@alpha` 可安装），不会更新 `latest`；只有正式版本 `X.Y.Z` 才会更新 `latest`。
+- **空版本范围会被拒绝**：若自上一个 release tag 以来没有新提交（没有可发布内容），Release prep 会直接报错退出（exit 1），不会产生空版本 / 空发布 PR。
 - **重复版本会被拒绝**：若 `vX.Y.Z` 对应的 git tag 已存在（该版本已发布过），Release prep 会直接报错退出，请改填一个新版本号再跑。
 
 ## 4. 回滚 / 修正
