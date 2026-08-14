@@ -1,0 +1,123 @@
+name: Release
+
+# PR-driven release. Merging a `release vX.Y.Z` PR (opened by the Release prep
+# workflow) runs the whole release inline on the pull_request event:
+# validate -> sanity gate -> npm publish dsh-advisor@X.Y.Z -> create+push the
+# vX.Y.Z tag (skipped if it already exists) -> GitHub Release.
+#
+# The workflow runs on the merged release PR event, so no secrets are required
+# for the default flow except NPM_TOKEN (npm registry auth for publish). The
+# tag and GitHub Release are created with the workflow's GITHUB_TOKEN.
+#
+# NOTE: publish happens BEFORE tag creation (mirror mstar-harness). If the tag
+# already exists (e.g. a re-run after a partial failure), publish still
+# proceeds and the tag step skips.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: >
+      github.event.pull_request.merged == true
+      && startsWith(github.event.pull_request.title, 'release v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout merge commit
+        uses: actions/checkout@v4
+        with:
+          # Release the exact merge commit of the merged release PR, with full
+          # history so `git describe --tags` can find the previous release tag.
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      # pnpm/action-setup must run before setup-node so that setup-node's
+      # `cache: pnpm` can locate the pnpm store path (same order as ci.yml).
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve version
+        id: ver
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Validate version
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          if [ -z "$VERSION" ]; then
+            echo "::error::package.json version is empty; refusing to release."
+            exit 1
+          fi
+          # Tag-exists policy (mirror mstar-harness): publish proceeds even if
+          # v$VERSION already exists (e.g. re-run after a partial failure); the
+          # tag step below skips creation when the tag is already present.
+          echo "Releasing dsh-advisor@${VERSION}"
+
+      - name: Sanity gate (typecheck + build + test)
+        run: |
+          pnpm run typecheck
+          pnpm run build
+          pnpm run test
+
+      # npm auth: setup-node wrote `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
+      # into .npmrc; this step supplies the token from the NPM_TOKEN secret.
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create + push tag
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists; skipping tag creation."
+            exit 0
+          fi
+          git tag -a -m "Release ${TAG}" "$TAG"
+          git push origin "$TAG"
+
+      - name: Extract release notes
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          # Previous release = nearest ancestor tag of HEAD. Do NOT use
+          # "v$VERSION^": the version string is not a git ref — the bump
+          # commit is not tagged yet, and the ancestor tag is the only
+          # correct base for "commits since the last release".
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "")
+          git log --oneline --first-parent ${PREV_TAG:+$PREV_TAG..}HEAD > /tmp/notes.md
+          if [ ! -s /tmp/notes.md ]; then
+            echo "No commits between releases." > /tmp/notes.md
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: v${{ steps.ver.outputs.version }}
+          body_path: /tmp/notes.md
+          draft: false
+          prerelease: false
