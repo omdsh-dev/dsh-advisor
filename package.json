@@ -3,6 +3,10 @@
   "version": "0.1.1-alpha.1",
   "type": "module",
   "description": "dsh plugin bundle porting the omp advisor subsystem: a per-session reviewer model that observes the primary transcript and injects severity-ranked advice (nit/concern/blocker).",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/omdsh-dev/dsh-advisor"
+  },
   "keywords": [
     "dsh",
     "dsh-plugin"
