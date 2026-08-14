@@ -12,7 +12,7 @@
  * @module dsh-advisor/config
  */
 
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
 
 /** Raw plugin row config after Loader defaults — spec §5.1. */
 export interface AdvisorConfig {

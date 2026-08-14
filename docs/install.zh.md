@@ -16,7 +16,7 @@ dsh plugin --profile web add dsh-advisor   # <name> = 你的 profile 名
 # dsh plugin --profile web add dsh-advisor@0.1.0
 ```
 
-registry 安装拉取的是已发布的 tarball，其中自带构建产物（`lib/` + `cordis.patch.yml`）且没有 `install` / `postinstall` 脚本——不会运行 `prepare` 构建，也无需构建权限。运行时依赖（`@deepseek-ai/cordis`、`schemastery` 与 `@deepseek-ai/dsh-*` peers）声明为 peerDependencies，由 dsh 安装的扁平 profile module fallback 解析——无需额外安装步骤。
+registry 安装拉取的是已发布的 tarball，其中自带构建产物（`lib/` + `cordis.patch.yml`）且没有 `install` / `postinstall` 脚本——不会运行 `prepare` 构建，也无需构建权限。运行时依赖（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery` 与 `@deepseek-ai/dsh-*` peers）声明为 peerDependencies，由 dsh 安装的扁平 profile module fallback 解析——无需额外安装步骤。
 
 - **版本钉住**：追加 `@<version>` 即可（如 `dsh-advisor@0.1.0`）。registry 包没有 commit 钉住；要测试未发布改动，用下面的[本地目录安装](#2-本地目录安装开发--验证)。
 
@@ -36,7 +36,7 @@ pnpm pack
 dsh plugin --profile web add dsh-advisor-0.1.0.tgz
 ```
 
-tarball 附带的是构建产物（`lib/` + `cordis.patch.yml`），因此不会运行 `prepare` 脚本，也无需构建权限。运行时依赖（`@deepseek-ai/cordis`、`schemastery` 与 `@deepseek-ai/dsh-{session,agent,llm,commands,timeout}`）声明为 peerDependencies，由 dsh 安装的扁平 profile module fallback 解析——无需额外安装步骤。
+tarball 附带的是构建产物（`lib/` + `cordis.patch.yml`），因此不会运行 `prepare` 脚本，也无需构建权限。运行时依赖（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery` 与 `@deepseek-ai/dsh-{session,agent,llm,commands,timeout}`）声明为 peerDependencies，由 dsh 安装的扁平 profile module fallback 解析——无需额外安装步骤。
 
 ## 4. web Settings 暴露
 

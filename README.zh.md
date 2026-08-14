@@ -24,7 +24,7 @@ dsh plugin --profile web add dsh-advisor   # <name> = 你的 profile 名
 dsh plugin --profile web add dsh-advisor   # <name> = 你的 profile 名
 ```
 
-registry 安装拉取的是已发布的 tarball，其中自带构建产物（`lib/` + `cordis.patch.yml`），因此不会运行 `prepare` 构建，也无需构建放行。运行时依赖（`@deepseek-ai/cordis`、`schemastery` 与 `@deepseek-ai/dsh-*` peers）声明为 peerDependencies，由 dsh 安装的扁平 profile module fallback 解析——无需额外安装步骤。需要可复现安装时用 `dsh-advisor@0.1.0` 钉住精确版本。
+registry 安装拉取的是已发布的 tarball，其中自带构建产物（`lib/` + `cordis.patch.yml`），因此不会运行 `prepare` 构建，也无需构建放行。运行时依赖（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery` 与 `@deepseek-ai/dsh-*` peers）声明为 peerDependencies，由 dsh 安装的扁平 profile module fallback 解析——无需额外安装步骤。需要可复现安装时用 `dsh-advisor@0.1.0` 钉住精确版本。
 
 ### 本地目录安装（推荐用于开发 / 验证）
 
@@ -149,7 +149,7 @@ pnpm pack                 # build + produce dsh-advisor-0.0.1.tgz
 
 Windows 上链接农场的目录条目以 junction 创建（无需特权），但 cordis shim 的文件条目使用文件符号链接，需要开启[开发者模式](https://learn.microsoft.com/windows/apps/get-started/enable-your-device-for-development)（或以管理员 shell 运行）——请先开启再执行 `pnpm install`。Windows 没有 `HOME`，脚本回退到 `USERPROFILE` 解析 dsh 源码树。
 
-内置 `cordis` 框架声明为 scoped peer `@deepseek-ai/cordis: ^4.0.1-rc.1`（范围必须带精确的发布 tag —— 带 prerelease 的 comparator 只匹配同 `[major, minor, patch]` tuple，`^4.0.0-rc.7` 永远不匹配 vendored 的 `4.0.1-rc.1`）；安装后链接农场的无 bin cordis shim 位于 `node_modules/@deepseek-ai/cordis`，以 scoped 名应答并解析到 vendored 文件，因为真实包是对着 vendored 构建类型化/运行的，模块身份要求开发期的 `import '@deepseek-ai/cordis'` 解析到同一份文件。其余公开 devDependencies（`schemastery`、`react` 等）照常从 npm registry 解析。
+内置 `cordis` 框架声明为 scoped peer `@deepseek-ai/cordis: ^4.0.1-rc.1`（范围必须带精确的发布 tag —— 带 prerelease 的 comparator 只匹配同 `[major, minor, patch]` tuple，`^4.0.0-rc.7` 永远不匹配 vendored 的 `4.0.1-rc.1`）；安装后链接农场的无 bin cordis shim 位于 `node_modules/@deepseek-ai/cordis`，以 scoped 名应答并解析到 vendored 文件，因为真实包是对着 vendored 构建类型化/运行的，模块身份要求开发期的 `import '@deepseek-ai/cordis'` 解析到同一份文件。其余公开 devDependencies（`@deepseek-ai/schemastery`、`react` 等）照常从 npm registry 解析。
 
 `prepack` 运行 `pnpm build`；`prepare` 运行链接农场与构建，因此 `pnpm pack` 会构建两次（每个生命周期一次）——这是为保持 git 安装可构建而接受的取舍。没有 `postinstall` 步骤：tarball 安装已带构建产物，完全跳过构建。
 

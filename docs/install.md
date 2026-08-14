@@ -24,7 +24,7 @@ dsh plugin --profile web add dsh-advisor   # <name> = your profile name
 A registry install fetches the published tarball, which ships the built
 artifacts (`lib/` + `cordis.patch.yml`) and has no `install` / `postinstall`
 scripts — no `prepare` build runs and no build permission is needed. Runtime
-dependencies (`@deepseek-ai/cordis`, `schemastery`, and the `@deepseek-ai/dsh-*`
+dependencies (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, and the `@deepseek-ai/dsh-*`
 peers) are declared as peerDependencies and resolved by the dsh installation's
 flat profile module fallback — no extra install step.
 
@@ -57,7 +57,7 @@ dsh plugin --profile web add dsh-advisor-0.1.0.tgz
 
 A tarball ships the built artifacts (`lib/` + `cordis.patch.yml`), so no
 `prepare` script runs and no build permission is needed. Runtime dependencies
-(`cordis`, `schemastery`, and `@deepseek-ai/dsh-{session,agent,llm,commands,timeout}`)
+(`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, and `@deepseek-ai/dsh-{session,agent,llm,commands,timeout}`)
 are declared as peerDependencies and resolved by the dsh installation's flat
 profile module fallback — no extra install step.
 
