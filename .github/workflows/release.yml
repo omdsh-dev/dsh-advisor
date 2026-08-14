@@ -21,6 +21,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     if: >
@@ -86,6 +90,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: Extract release notes
+        run: |
+          # Previous release = nearest ancestor tag of HEAD. Do NOT use
+          # "v$VERSION^": the version string is not a git ref — the bump
+          # commit is not tagged yet, and the ancestor tag is the only
+          # correct base for "commits since the last release".
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "")
+          git log --oneline --first-parent ${PREV_TAG:+$PREV_TAG..}HEAD > /tmp/notes.md
+          if [ ! -s /tmp/notes.md ]; then
+            echo "No commits between releases." > /tmp/notes.md
+          fi
+
       - name: Create + push tag
         env:
           VERSION: ${{ steps.ver.outputs.version }}
@@ -98,20 +114,6 @@ jobs:
           fi
           git tag -a -m "Release ${TAG}" "$TAG"
           git push origin "$TAG"
-
-      - name: Extract release notes
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: |
-          # Previous release = nearest ancestor tag of HEAD. Do NOT use
-          # "v$VERSION^": the version string is not a git ref — the bump
-          # commit is not tagged yet, and the ancestor tag is the only
-          # correct base for "commits since the last release".
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "")
-          git log --oneline --first-parent ${PREV_TAG:+$PREV_TAG..}HEAD > /tmp/notes.md
-          if [ ! -s /tmp/notes.md ]; then
-            echo "No commits between releases." > /tmp/notes.md
-          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

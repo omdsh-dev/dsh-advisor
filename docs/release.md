@@ -22,7 +22,7 @@
 1. **校验**：检出合并提交（`merge_commit_sha`），读取 `package.json` 版本号并确认非空。
 2. **构建**：`pnpm run typecheck && pnpm run build && pnpm run test`（与 CI 相同的校验命令）。
 3. **发布**：`npm publish --access public`，向 npm 发布 `dsh-advisor@X.Y.Z`（认证走 `NPM_TOKEN` secret）。
-4. **打 tag**：以 `github-actions[bot]` 身份创建并推送注解 tag `vX.Y.Z`（commit message `Release vX.Y.Z`）；若该 tag 已存在（例如发布后重跑工作流），tag 步骤会跳过——发布仍然照常进行。
+4. **打 tag**：以 `github-actions[bot]` 身份创建并推送注解 tag `vX.Y.Z`（commit message `Release vX.Y.Z`）；若该 tag 已存在，tag 步骤会跳过。**tag 跳过只覆盖 tag**——npm 不允许重复发布同一版本（`npm error ... previously published versions`），发布成功后重跑工作流会在 `npm publish` 步骤失败，而不是照常发布；仅当 tag 已存在但版本尚未成功发布（例如 tag 推送后、GitHub Release 步骤失败）时，重跑才会继续完成发布。
 5. **创建 GitHub Release**：以 `vX.Y.Z` 为 tag 与标题创建 Release，正文为自上一个 tag 以来的提交记录（`git log --oneline --first-parent`，取最近祖先 tag 为基准）。
 
 ## 3. 版本策略
