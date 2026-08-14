@@ -116,7 +116,9 @@ jobs:
 
       - name: Ensure release label
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Org blocks Actions-created PRs (createPullRequest GraphQL error);
+          # PAT bypasses. Label + PR steps need PAT, not GITHUB_TOKEN.
+          GH_TOKEN: ${{ secrets.PAT }}
         run: |
           # gh CLI has no --if-not-exists on label create (run 31790422779:
           # 'unknown flag' swallowed by || true → label missing → pr create fails).
@@ -126,7 +128,9 @@ jobs:
 
       - name: Open or update release PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Same as label step: org blocks Actions-created PRs
+          # (createPullRequest GraphQL error); PAT bypasses.
+          GH_TOKEN: ${{ secrets.PAT }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
