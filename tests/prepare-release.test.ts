@@ -111,6 +111,10 @@ function runScript(args: string[], existingTags: string[]): { status: number; st
 describe('scripts/prepare-release.mjs', () => {
   it('auto patch bump: 0.1.0 -> 0.1.1, prints VERSION=0.1.1, exits 0', () => {
     makeFixture('0.1.0')
+    // A real release has commits since the previous release: without a
+    // describe tag the notes span the full first-parent history, which must
+    // be non-empty (an empty range now fails the no-change guard).
+    writeFileSync(join(fixture, 'log-lines.txt'), 'abc1234 some commit\n', 'utf8')
     const { status, stdout, stderr } = runScript([], [])
     expect(status).toBe(0)
     expect(stdout.trim()).toBe('VERSION=0.1.1')
@@ -120,6 +124,7 @@ describe('scripts/prepare-release.mjs', () => {
 
   it('explicit version 0.2.0 is accepted and written', () => {
     makeFixture('0.1.0')
+    writeFileSync(join(fixture, 'log-lines.txt'), 'abc1234 some commit\n', 'utf8')
     const { status, stdout } = runScript(['0.2.0'], [])
     expect(status).toBe(0)
     expect(stdout.trim()).toBe('VERSION=0.2.0')
@@ -139,6 +144,43 @@ describe('scripts/prepare-release.mjs', () => {
     const { status, stderr } = runScript([], ['v0.1.1'])
     expect(status).toBe(1)
     expect(stderr).toContain('already exists')
+    expect(fixtureVersion()).toBe('0.1.0')
+  })
+
+  it('empty notes range (no commits since the previous tag) is rejected: exit 1, no file mutations', () => {
+    // (a) Realistic no-change run: a previous release tag exists but the
+    // <tag>..HEAD range has no commits (log-lines.txt absent → the git shim
+    // yields empty output). The script must fail BEFORE bumping package.json
+    // or writing CHANGELOG.md — no empty release PR can be produced.
+    makeFixture('0.1.0')
+    writeFileSync(join(fixture, 'describe-tag.txt'), 'v0.1.0\n', 'utf8')
+    const originalChangelog = [
+      '# Changelog',
+      '',
+      'All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.',
+      '',
+      '## [0.1.0] - 2026-08-13',
+      '',
+      '- 9d293c0 Merge pull request #16 from dsh-external/chore/release-0.1.0',
+      '',
+    ].join('\n')
+    writeFileSync(join(fixture, 'CHANGELOG.md'), originalChangelog, 'utf8')
+    const { status, stdout, stderr } = runScript([], [])
+    expect(status).toBe(1)
+    expect(stdout).toBe('')
+    expect(stderr).toContain('Error: no commits since previous release tag v0.1.0')
+    expect(stderr).toContain('nothing to release')
+    expect(fixtureVersion()).toBe('0.1.0')
+    expect(readFileSync(join(fixture, 'CHANGELOG.md'), 'utf8')).toBe(originalChangelog)
+
+    // (b) Degenerate no-tag case (empty full first-parent history): the
+    // error names the first-commit placeholder; still no file mutations.
+    makeFixture('0.1.0')
+    const second = runScript([], [])
+    expect(second.status).toBe(1)
+    expect(second.stdout).toBe('')
+    expect(second.stderr).toContain('Error: no commits since previous release tag <first commit>')
+    expect(second.stderr).toContain('nothing to release')
     expect(fixtureVersion()).toBe('0.1.0')
   })
 
@@ -350,6 +392,7 @@ describe('scripts/prepare-release.mjs', () => {
 
   it('auto patch bump on a prerelease base drops the suffix: 0.1.1-alpha.1 -> 0.1.2', () => {
     makeFixture('0.1.1-alpha.1')
+    writeFileSync(join(fixture, 'log-lines.txt'), 'abc1234 some commit\n', 'utf8')
     const { status, stdout, stderr } = runScript([], [])
     expect(status).toBe(0)
     expect(stdout.trim()).toBe('VERSION=0.1.2')

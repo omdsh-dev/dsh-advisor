@@ -3,11 +3,13 @@
  * Release-prep version helper (plan dsh-advisor-ci-release, task 2 + 4):
  * resolves the target version — explicit `X.Y.Z` / `X.Y.Z-prerelease`
  * argument (e.g. 0.1.1-alpha.1) or an auto patch bump from package.json —
- * refuses already-released versions (existing `v<version>` git tag), bumps
- * package.json, inserts the `## [<version>]` section into CHANGELOG.md (from
- * the same git-log notes the workflows use; keeps existing sections, no-op
- * when already present), and prints `VERSION=<version>` for the workflow to
- * capture. Node built-ins only, no new dependencies.
+ * refuses already-released versions (existing `v<version>` git tag), aborts
+ * when there are no commits since the previous release tag (nothing to
+ * release), bumps package.json, inserts the `## [<version>]` section into
+ * CHANGELOG.md (from the same git-log notes the workflows use; keeps
+ * existing sections, no-op when already present), and prints
+ * `VERSION=<version>` for the workflow to capture. Node built-ins only, no
+ * new dependencies.
  *
  * Usage:
  *   node scripts/prepare-release.mjs            # auto patch bump
@@ -15,8 +17,8 @@
  *   node scripts/prepare-release.mjs 0.1.1-alpha.1  # explicit prerelease
  *
  * Exit codes: 0 = bumped and printed VERSION; 1 = rejected (unparseable
- * version, existing tag, unparseable current package.json version, or
- * CHANGELOG.md write error).
+ * version, existing tag, no commits since the previous release tag,
+ * unparseable current package.json version, or CHANGELOG.md write error).
  */
 
 import { execFileSync } from 'node:child_process'
@@ -89,6 +91,19 @@ try {
   // Tag absent → OK to prepare.
 }
 
+// Fail fast on a no-change release: an empty notes range means no commits
+// since the previous release tag — prepare-release must not bump the version
+// or touch CHANGELOG.md for an empty release (no empty release PR). First-
+// ever releases (no ancestor tag yet) span the full first-parent history,
+// which is non-empty by construction, so they still pass.
+const { prevTag, notes } = resolveReleaseNotes()
+if (notes === '') {
+  console.error(
+    `Error: no commits since previous release tag ${prevTag === '' ? '<first commit>' : prevTag} — nothing to release. Aborting.`,
+  )
+  process.exit(1)
+}
+
 pkg.version = version
 // Preserve repo formatting: 2-space indent + trailing newline. The version
 // line must be the only diff (verified by `git diff package.json` in the
@@ -96,14 +111,14 @@ pkg.version = version
 writeFileSync(PKG_PATH, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8')
 
 /**
- * Release notes since the previous release: first-parent commit subjects
- * between the nearest ancestor tag of HEAD and HEAD. Same snippet the
- * workflows use for the PR body — the CHANGELOG section and the PR body
- * stay consistent. When no ancestor tag exists yet, the notes span the full
- * first-parent history. Do NOT use "v$VERSION^": the version string is not a
+ * Resolve the previous release tag (nearest ancestor tag of HEAD; empty
+ * when none exists yet) and the first-parent commit subjects since that
+ * tag (full first-parent history when no tag exists). Same git-log snippet
+ * the workflows use for the PR body — the CHANGELOG section and the PR body
+ * stay consistent. Do NOT use "v$VERSION^": the version string is not a
  * git ref — the bump commit is not tagged yet.
  */
-function collectReleaseNotes() {
+function resolveReleaseNotes() {
   let prevTag = ''
   try {
     prevTag = execFileSync('git', ['describe', '--tags', '--abbrev=0', 'HEAD'], {
@@ -115,21 +130,23 @@ function collectReleaseNotes() {
     // No ancestor tag yet → full history.
   }
   const range = prevTag === '' ? 'HEAD' : `${prevTag}..HEAD`
-  return execFileSync('git', ['log', '--oneline', '--first-parent', range], {
+  const notes = execFileSync('git', ['log', '--oneline', '--first-parent', range], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
   }).trim()
+  return { prevTag, notes }
 }
 
 /**
  * Insert a `## [<version>] - <YYYY-MM-DD>` section under the `# Changelog`
- * header, above the existing sections, from the same git-log notes the
- * workflows use. Preserves all existing sections; no-op when the section for
- * this version already exists (idempotent re-runs must not duplicate it);
- * write failures exit 1.
+ * header, above the existing sections, from the pre-collected git-log notes
+ * (guaranteed non-empty by the no-change guard, so no fallback text is ever
+ * written). Preserves all existing sections; no-op when the section for this
+ * version already exists (idempotent re-runs must not duplicate it); write
+ * failures exit 1.
  */
-function updateChangelog(version) {
+function updateChangelog(version, notes) {
   let content
   try {
     content = readFileSync(CHANGELOG_PATH, 'utf8')
@@ -148,15 +165,11 @@ function updateChangelog(version) {
     return
   }
 
-  const notes = collectReleaseNotes()
   const sectionHeader = `## [${version}] - ${new Date().toISOString().slice(0, 10)}`
-  const sectionBody =
-    notes === ''
-      ? 'No commits between releases.'
-      : notes
-          .split('\n')
-          .map((line) => `- ${line}`)
-          .join('\n')
+  const sectionBody = notes
+    .split('\n')
+    .map((line) => `- ${line}`)
+    .join('\n')
   // The section's own trailing `\n` plus the inserted `\n` below form the
   // blank-line separator between the new section and the existing sections.
   const section = `${sectionHeader}\n\n${sectionBody}\n`
@@ -185,6 +198,6 @@ function updateChangelog(version) {
   }
 }
 
-updateChangelog(version)
+updateChangelog(version, notes)
 
 console.log(`VERSION=${version}`)
