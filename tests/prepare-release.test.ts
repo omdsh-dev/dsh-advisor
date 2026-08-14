@@ -323,6 +323,20 @@ describe('scripts/prepare-release.mjs', () => {
     expect(changelog).toMatch(/^# Changelog\n\nAll notable changes[^\n]*\n\n## \[0\.1\.1\] - \d{4}-\d{2}-\d{2}\n\n- abc1234 some commit\n$/)
   })
 
+  it('CHANGELOG.md: whitespace-only file is bootstrapped like a missing file (header + section, no leading blank lines)', () => {
+    makeFixture('0.1.0')
+    writeFileSync(join(fixture, 'log-lines.txt'), 'abc1234 some commit\n', 'utf8')
+    // An existing-but-whitespace-only CHANGELOG.md must take the missing-file
+    // path too: pre-fix, the append branch produced a headerless file that
+    // starts with blank lines instead of `# Changelog`.
+    writeFileSync(join(fixture, 'CHANGELOG.md'), '\n\n  \n', 'utf8')
+    const { status } = runScript(['0.1.1'], [])
+    expect(status).toBe(0)
+    const changelog = readFileSync(join(fixture, 'CHANGELOG.md'), 'utf8')
+    expect(changelog.startsWith('# Changelog\n')).toBe(true)
+    expect(changelog).toMatch(/^# Changelog\n\nAll notable changes[^\n]*\n\n## \[0\.1\.1\] - \d{4}-\d{2}-\d{2}\n\n- abc1234 some commit\n$/)
+  })
+
   it('CHANGELOG.md: nearest ancestor tag — notes use the <tag>..HEAD range and the section lists only post-tag commits', () => {
     makeFixture('0.1.0')
     // The fake git shim echoes `git describe` from describe-tag.txt and
