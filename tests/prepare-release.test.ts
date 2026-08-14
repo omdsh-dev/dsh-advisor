@@ -318,4 +318,54 @@ describe('scripts/prepare-release.mjs', () => {
     const originalSectionText = original.slice(original.indexOf('## [0.1.0]'))
     expect(changelog.slice(changelog.indexOf('## [0.1.0]'))).toBe(originalSectionText)
   })
+
+  it('explicit prerelease 0.1.1-alpha.1 is accepted: VERSION printed, package.json + CHANGELOG updated', () => {
+    makeFixture('0.1.1')
+    writeFileSync(join(fixture, 'log-lines.txt'), 'abc1234 some commit\n', 'utf8')
+    const original = [
+      '# Changelog',
+      '',
+      'All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.',
+      '',
+      '## [0.1.0] - 2026-08-13',
+      '',
+      '- 9d293c0 Merge pull request #16 from dsh-external/chore/release-0.1.0',
+      '',
+    ].join('\n')
+    writeFileSync(join(fixture, 'CHANGELOG.md'), original, 'utf8')
+    const { status, stdout, stderr } = runScript(['0.1.1-alpha.1'], [])
+    expect(status).toBe(0)
+    expect(stdout.trim()).toBe('VERSION=0.1.1-alpha.1')
+    expect(stderr).toBe('')
+    expect(fixtureVersion()).toBe('0.1.1-alpha.1')
+    const changelog = readFileSync(join(fixture, 'CHANGELOG.md'), 'utf8')
+    // The prerelease header extracts with the same `## [<version>]` pattern
+    // the workflows awk on; it sits above the pre-existing section.
+    expect(changelog).toContain('## [0.1.1-alpha.1] - ')
+    expect(changelog.indexOf('## [0.1.1-alpha.1]')).toBeLessThan(changelog.indexOf('## [0.1.0]'))
+    expect(changelog).toContain('- abc1234 some commit')
+    const originalSectionText = original.slice(original.indexOf('## [0.1.0]'))
+    expect(changelog.slice(changelog.indexOf('## [0.1.0]'))).toBe(originalSectionText)
+  })
+
+  it('auto patch bump on a prerelease base drops the suffix: 0.1.1-alpha.1 -> 0.1.2', () => {
+    makeFixture('0.1.1-alpha.1')
+    const { status, stdout, stderr } = runScript([], [])
+    expect(status).toBe(0)
+    expect(stdout.trim()).toBe('VERSION=0.1.2')
+    expect(stderr).toBe('')
+    expect(fixtureVersion()).toBe('0.1.2')
+  })
+
+  it('invalid prerelease versions are rejected: exit 1 + stderr message, package.json untouched', () => {
+    // '0.1.1-alpha' has no numeric identifier and '0.1.1-' has an empty
+    // suffix — both rejected by the parse (suffix must contain a digit).
+    for (const bad of ['0.1.1-alpha', '0.1.1-']) {
+      makeFixture('0.1.1')
+      const { status, stderr } = runScript([bad], [])
+      expect(status).toBe(1)
+      expect(stderr).toContain('invalid version')
+      expect(fixtureVersion()).toBe('0.1.1')
+    }
+  })
 })

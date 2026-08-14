@@ -3,11 +3,16 @@ name: Release
 # PR-driven release. Merging a `release vX.Y.Z` PR (opened by the Release prep
 # workflow) runs the whole release inline on the pull_request event:
 # validate -> sanity gate -> npm publish dsh-advisor@X.Y.Z -> create+push the
-# vX.Y.Z tag (skipped if it already exists) -> GitHub Release.
+# vX.Y.Z tag (skipped if it already exists) -> GitHub Release. Prerelease
+# versions (e.g. v0.1.1-alpha.1) are supported: they publish to a prerelease
+# npm dist-tag and never touch the `latest` tag.
 #
-# The workflow runs on the merged release PR event, so no secrets are required
-# for the default flow except NPM_TOKEN (npm registry auth for publish). The
-# tag and GitHub Release are created with the workflow's GITHUB_TOKEN.
+# npm publish uses OIDC trusted publishing (`permissions: id-token: write`
+# below): no NODE_AUTH_TOKEN / NPM_TOKEN secret is required — npm exchanges
+# the workflow's OIDC token for a short-lived publish token. The npmjs org
+# must configure a trusted publisher for this repository + workflow (see
+# https://docs.npmjs.com/generating-provenance-statements). The tag and
+# GitHub Release are created with the workflow's GITHUB_TOKEN.
 #
 # NOTE: publish happens BEFORE tag creation (mirror mstar-harness). If the tag
 # already exists (e.g. a re-run after a partial failure), publish still
@@ -20,6 +25,9 @@ on:
 
 permissions:
   contents: write
+  # id-token: write enables OIDC token exchange for npm trusted publishing
+  # (publish step below); the GitHub Release + tag steps use GITHUB_TOKEN.
+  id-token: write
 
 concurrency:
   group: release
@@ -68,12 +76,15 @@ jobs:
             echo "::error::package.json version is empty; refusing to release."
             exit 1
           fi
-          # Strict X.Y.Z guard (mirror release-prep): the version flows into
+          # Version guard (mirror release-prep): X.Y.Z or X.Y.Z-prerelease
+          # (semver; prerelease chars [0-9A-Za-z.-]+). The version flows into
           # an awk regex anchor below; reject metacharacters up front so a
           # malformed package.json version cannot break the extraction (awk
-          # exit-2) after publish.
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid version \"$VERSION\" in package.json. Expected X.Y.Z."
+          # exit-2) after publish. '-' is a literal character in awk ERE
+          # outside a character class, so prerelease suffixes need no extra
+          # escaping there.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid version \"$VERSION\" in package.json. Expected X.Y.Z or X.Y.Z-prerelease (e.g. 0.2.0, 0.1.1-alpha.1)."
             exit 1
           fi
           # Tag-exists policy (mirror mstar-harness): publish proceeds even if
@@ -87,8 +98,6 @@ jobs:
           pnpm run build
           pnpm run test
 
-      # npm auth: setup-node wrote `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
-      # into .npmrc; this step supplies the token from the NPM_TOKEN secret.
       - name: Assert packed tarball contents (pre-publish guard)
         run: |
           set -euo pipefail
@@ -102,8 +111,27 @@ jobs:
 
       - name: Publish to npm
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # OIDC trusted publishing: no NODE_AUTH_TOKEN / NPM_TOKEN env or
+          # secret — npm exchanges the workflow's id-token (permissions above)
+          # for a short-lived publish token with provenance. The npmjs org must
+          # have a trusted publisher configured for this repo + workflow.
+          #
+          # Prerelease dist-tag: a version containing '-' (e.g.
+          # 0.1.1-alpha.1) publishes to the prerelease-prefix tag (text
+          # between the first '-' and the first '.' after it -> "alpha")
+          # instead of the default `latest`, so prereleases never clobber the
+          # latest release and consumers opting into the tag can install it.
+          # Formal X.Y.Z versions publish without --tag (default latest).
+          if [[ "${VERSION}" == *-* ]]; then
+            PRETAG="${VERSION#*-}"
+            PRETAG="${PRETAG%%.*}"
+            npm publish --access public --tag "$PRETAG"
+          else
+            npm publish --access public
+          fi
 
       - name: Configure git identity
         run: |
@@ -128,8 +156,10 @@ jobs:
             # Escape regex metacharacters in the version inside awk (the gsub
             # runs after `-v` argument escape processing, which would strip
             # backslashes from a shell-escaped value) so the anchor matches
-            # literally: dots must not act as any-char. VERSION is strict
-            # X.Y.Z upstream, so only dots are ever present.
+            # literally: dots must not act as any-char. VERSION is validated
+            # upstream (X.Y.Z or X.Y.Z-prerelease); '-' is a literal character
+            # in awk ERE outside a character class, so prerelease suffixes
+            # need no extra escaping.
             awk -v v="$VERSION" '
               BEGIN { gsub(/\./, "\\\\&", v) }
               /^## \[/ { if (in_section) exit }

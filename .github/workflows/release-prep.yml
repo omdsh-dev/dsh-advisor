@@ -1,16 +1,18 @@
 name: Release prep
 
 # Manual entry point: Actions → "Release prep" → Run workflow (optionally pass
-# an explicit X.Y.Z). Bumps package.json (+ lockfile sync), validates the
-# build, and opens a `release vX.Y.Z` PR. Merging that PR runs the Release
-# workflow, which publishes dsh-advisor@X.Y.Z, pushes tag vX.Y.Z, and creates
-# the GitHub Release.
+# an explicit X.Y.Z or X.Y.Z-prerelease, e.g. 0.1.1-alpha.1). Bumps
+# package.json (+ lockfile sync), validates the build, and opens a
+# `release v<version>` PR. Merging that PR runs the Release workflow, which
+# publishes dsh-advisor@<version> (formal versions to `latest`, prereleases to
+# their prerelease dist-tag), pushes tag v<version>, and creates the GitHub
+# Release.
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Target version (e.g. 0.2.0). Leave empty for auto patch bump."
+        description: "Target version (e.g. 0.2.0, or 0.1.1-alpha.1 for a prerelease). Leave empty for auto patch bump."
         required: false
         type: string
 
@@ -56,9 +58,11 @@ jobs:
           if [ -z "$V" ]; then V="auto"; fi
           # First-line guard: validate an explicit input before it is echoed
           # into GITHUB_OUTPUT or passed to git rev-parse. prepare-release.mjs
-          # still validates downstream; this is defense in depth.
-          if [ "$V" != "auto" ] && ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid version input \"$V\". Expected X.Y.Z (e.g. 0.2.0)."
+          # still validates downstream; this is defense in depth. Accepts
+          # X.Y.Z or X.Y.Z-prerelease (semver; prerelease chars
+          # [0-9A-Za-z.-]+), e.g. 0.2.0, 0.1.1-alpha.1.
+          if [ "$V" != "auto" ] && ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid version input \"$V\". Expected X.Y.Z or X.Y.Z-prerelease (e.g. 0.2.0, 0.1.1-alpha.1)."
             exit 1
           fi
           if [ "$V" != "auto" ] && git rev-parse "v$V" >/dev/null 2>&1; then
@@ -110,8 +114,10 @@ jobs:
             # Escape regex metacharacters in the version inside awk (the gsub
             # runs after `-v` argument escape processing, which would strip
             # backslashes from a shell-escaped value) so the anchor matches
-            # literally: dots must not act as any-char. VERSION is strict
-            # X.Y.Z upstream, so only dots are ever present.
+            # literally: dots must not act as any-char. VERSION is validated
+            # upstream (X.Y.Z or X.Y.Z-prerelease); '-' is a literal character
+            # in awk ERE outside a character class, so prerelease suffixes
+            # need no extra escaping.
             awk -v v="$VERSION" '
               BEGIN { gsub(/\./, "\\\\&", v) }
               /^## \[/ { if (in_section) exit }
