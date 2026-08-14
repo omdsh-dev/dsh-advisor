@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 /**
  * Release-prep version helper (plan dsh-advisor-ci-release, task 2 + 4):
- * resolves the target version — explicit `X.Y.Z` argument or an auto patch
- * bump from package.json — refuses already-released versions (existing
- * `vX.Y.Z` git tag), bumps package.json, inserts the `## [<version>]` section
- * into CHANGELOG.md (from the same git-log notes the workflows use; keeps
- * existing sections, no-op when already present), and prints
- * `VERSION=<x.y.z>` for the workflow to capture. Node built-ins only, no new
- * dependencies.
+ * resolves the target version — explicit `X.Y.Z` / `X.Y.Z-prerelease`
+ * argument (e.g. 0.1.1-alpha.1) or an auto patch bump from package.json —
+ * refuses already-released versions (existing `v<version>` git tag), bumps
+ * package.json, inserts the `## [<version>]` section into CHANGELOG.md (from
+ * the same git-log notes the workflows use; keeps existing sections, no-op
+ * when already present), and prints `VERSION=<version>` for the workflow to
+ * capture. Node built-ins only, no new dependencies.
  *
  * Usage:
  *   node scripts/prepare-release.mjs            # auto patch bump
  *   node scripts/prepare-release.mjs 0.2.0      # explicit version
+ *   node scripts/prepare-release.mjs 0.1.1-alpha.1  # explicit prerelease
  *
  * Exit codes: 0 = bumped and printed VERSION; 1 = rejected (unparseable
  * version, existing tag, unparseable current package.json version, or
@@ -29,11 +30,25 @@ const CHANGELOG_PATH = join(REPO_ROOT, 'CHANGELOG.md')
 const CHANGELOG_HEADER =
   '# Changelog\n\nAll notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.\n'
 
-/** Parse strict X.Y.Z (numeric parts only); null when not parseable. */
+/**
+ * Parse X.Y.Z or X.Y.Z[-prerelease] (numeric parts; optional prerelease
+ * suffix); null when not parseable. The suffix character set matches the
+ * workflows' guard regex `[0-9A-Za-z.-]+` (keep-simple: no leading-zero or
+ * empty-identifier rules), with one tightening: the suffix MUST contain at
+ * least one digit, so `0.1.1-alpha.1` / `0.1.1-rc.2` parse but `0.1.1-alpha`
+ * (no numeric identifier) and `0.1.1-` (empty suffix) are rejected. Returns
+ * { major, minor, patch, prerelease? } — prerelease is the raw suffix text
+ * (e.g. 'alpha.1') when present, undefined for formal versions.
+ */
 function parseVersion(value) {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value)
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]*[0-9][0-9A-Za-z.-]*))?$/.exec(value)
   if (!match) return null
-  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) }
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] === undefined ? undefined : match[4],
+  }
 }
 
 const pkg = JSON.parse(readFileSync(PKG_PATH, 'utf8'))
@@ -42,7 +57,7 @@ let target
 if (process.argv[2] !== undefined) {
   target = parseVersion(process.argv[2])
   if (target === null) {
-    console.error(`Error: invalid version "${process.argv[2]}". Expected X.Y.Z (e.g. 0.2.0).`)
+    console.error(`Error: invalid version "${process.argv[2]}". Expected X.Y.Z or X.Y.Z-prerelease (e.g. 0.2.0, 0.1.1-alpha.1).`)
     process.exit(1)
   }
 } else {
@@ -51,13 +66,21 @@ if (process.argv[2] !== undefined) {
     console.error(`Error: cannot parse current package.json version "${pkg.version}".`)
     process.exit(1)
   }
+  // Auto patch bump: bump the numeric patch part and DROP any prerelease
+  // suffix (a prerelease base 0.1.1-alpha.1 with no explicit arg -> 0.1.2,
+  // i.e. the next formal patch after the 0.1.1 line). An explicit prerelease
+  // argument is the way to prepare another prerelease (e.g. 0.1.1-alpha.2).
   target = { major: current.major, minor: current.minor, patch: current.patch + 1 }
 }
 
-const version = `${target.major}.${target.minor}.${target.patch}`
+const version =
+  target.prerelease === undefined
+    ? `${target.major}.${target.minor}.${target.patch}`
+    : `${target.major}.${target.minor}.${target.patch}-${target.prerelease}`
 
-// Reject already-released versions: `git rev-parse vX.Y.Z` succeeds iff the
-// tag exists. Run from REPO_ROOT so the check is cwd-independent.
+// Reject already-released versions: `git rev-parse v<version>` succeeds iff
+// the tag exists. Works unchanged for prerelease tags (v0.1.1-alpha.1 is a
+// plain tag name). Run from REPO_ROOT so the check is cwd-independent.
 try {
   execFileSync('git', ['rev-parse', `v${version}`], { cwd: REPO_ROOT, stdio: 'ignore' })
   console.error(`Error: tag v${version} already exists — this version is already released.`)
