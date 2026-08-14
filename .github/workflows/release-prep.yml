@@ -117,7 +117,12 @@ jobs:
       - name: Ensure release label
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh label create release --if-not-exists --color 0E8A16 || true
+        run: |
+          # gh CLI has no --if-not-exists on label create (run 31790422779:
+          # 'unknown flag' swallowed by || true → label missing → pr create fails).
+          # Create, or edit the existing label; fail loudly on both.
+          gh label create release --color 0E8A16 --description "Release PRs" 2>/dev/null \
+            || gh label edit release --color 0E8A16 --description "Release PRs"
 
       - name: Open or update release PR
         env:
