@@ -53,11 +53,11 @@ jobs:
       # `cache: pnpm` can locate the pnpm store path (same order as ci.yml).
       - uses: pnpm/action-setup@v4
         with:
-          version: 11
+          version: 11.21.0
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "24.19.0"
           registry-url: https://registry.npmjs.org
           cache: pnpm
 
@@ -171,12 +171,15 @@ jobs:
           # additionally appends a merge-instruction line; the Release body is
           # the section only).
           # Guard on the file existing: under `set -e`, awk on a missing
-          # CHANGELOG.md exits 2 and aborts the step before the fallback could
-          # run. The version anchor is prefix-safe: the pattern is anchored at
-          # `^## \[<version>\]`, so `0.1.1` cannot match a `## [0.1.10]` header.
-          # Fall back to git log (nearest ancestor tag of HEAD, full history
-          # when no tag exists) only when the file or the section is missing,
-          # e.g. a release PR prepared before CHANGELOG.md existed.
+          # CHANGELOG.md exits 2 and aborts the step. The version anchor is
+          # prefix-safe: the pattern is anchored at `^## \[<version>\]`, so
+          # `0.1.1` cannot match a `## [0.1.10]` header.
+          # No git-log fallback on the Release side: every release PR prepared
+          # by the current prep writes its CHANGELOG section before the PR
+          # opens, so a missing section is a contract break — fail loudly
+          # instead of shipping an empty GitHub Release (mirror
+          # dsh-llm-fallbacks; an empty Release is a silent quality
+          # regression, not a recoverable one).
           VERSION="${{ steps.ver.outputs.version }}"
           if [ -f CHANGELOG.md ]; then
             # Escape regex metacharacters in the version inside awk (the gsub
@@ -194,11 +197,8 @@ jobs:
             ' CHANGELOG.md > /tmp/notes.md
           fi
           if [ ! -s /tmp/notes.md ]; then
-            PREV_TAG=$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "")
-            git log --oneline --first-parent ${PREV_TAG:+$PREV_TAG..}HEAD > /tmp/notes.md
-            if [ ! -s /tmp/notes.md ]; then
-              echo "No commits between releases." > /tmp/notes.md
-            fi
+            echo "::error::No changelog section found for v${VERSION} in CHANGELOG.md; refusing to create an empty GitHub Release."
+            exit 1
           fi
 
       - name: Create + push tag
