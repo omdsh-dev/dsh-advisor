@@ -100,8 +100,6 @@ export interface AdvisorRuntimeOptions {
   readonly model: string
   /** System prompt sent with every advisor call (config override or KD-2 default). */
   readonly systemPrompt: string
-  /** Output-token cap (KD-2); default 256. */
-  readonly maxTokens?: number
   /** Backoff for the single transient retry (KD-5); default 1000ms. */
   readonly retryBackoffMs?: number
   /**
@@ -129,8 +127,6 @@ export interface AdvisorRuntimeOptions {
   readonly logger?: AdvisorRuntimeLogger
 }
 
-/** Pinned policy values (KD-2 / KD-5). */
-const DEFAULT_MAX_TOKENS = 256
 /**
  * n4 user direction: the advisor call runs with a 20x token budget
  * (256 -> 5120) so even a reasoning-heavy reply cannot starve the JSON frame.
@@ -349,7 +345,6 @@ export class AdvisorRuntime {
   private readonly provider: string
   private readonly model: string
   private readonly systemPrompt: string
-  private readonly maxTokens: number
   private readonly retryBackoffMs: number
   private readonly callTimeoutMs: number
   private readonly maxQueued: number
@@ -384,7 +379,6 @@ export class AdvisorRuntime {
     this.provider = options.provider
     this.model = options.model
     this.systemPrompt = options.systemPrompt
-    this.maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS
     this.retryBackoffMs = options.retryBackoffMs ?? DEFAULT_RETRY_BACKOFF_MS
     this.callTimeoutMs = options.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS
     this.maxQueued = options.maxQueued ?? DEFAULT_MAX_QUEUED

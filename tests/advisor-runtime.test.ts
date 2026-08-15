@@ -328,6 +328,11 @@ describe('AdvisorRuntime — drain calls llm.stream once per delta with expected
     ])
     expect(llm.calls).toHaveLength(2)
     expect(llm.calls[1]!.reasoningEffort).toBe(ReasoningEffortId('off'))
+    // Closed whitelist on both calls (T2-style): call 0 has no reasoningEffort
+    // (the failure is not a verdict), call 1 re-advertises 'off' after the
+    // fresh resolution — same key set minus/plus reasoningEffort.
+    expect(Object.keys(llm.calls[0]!).sort()).toEqual(['maxTokens', 'messages', 'model', 'provider', 'signal', 'system'])
+    expect(Object.keys(llm.calls[1]!).sort()).toEqual(['maxTokens', 'messages', 'model', 'provider', 'reasoningEffort', 'signal', 'system'])
     // Zero tools contract: no advisor call ever carries a tools key.
     expect('tools' in llm.calls[0]!).toBe(false)
     expect('tools' in llm.calls[1]!).toBe(false)
@@ -395,6 +400,7 @@ describe('AdvisorRuntime — drain calls llm.stream once per delta with expected
 // ---------------------------------------------------------------------------
 // AC-1 closed whitelist — every advisor GenerateOptions is a minimal start:
 // exact key set, zero tools, single user delta (regression pin, T2)
+// KD-6 (§8.6) regression pin
 // ---------------------------------------------------------------------------
 
 describe('AdvisorRuntime — minimal request shape (AC-1 closed whitelist)', () => {
@@ -418,7 +424,8 @@ describe('AdvisorRuntime — minimal request shape (AC-1 closed whitelist)', () 
     expect(options.messages).toHaveLength(1)
     expect(options.messages[0]!.role).toBe('user')
     expect(options.system).toBe(TEST_SYSTEM_PROMPT)
-    expect(options.maxTokens).toBe(ADVISOR_MAX_TOKENS)
+    // KD-6 frozen value (= ADVISOR_MAX_TOKENS)
+    expect(options.maxTokens).toBe(5120)
   })
 
   it('sends the same minimal request without reasoningEffort when the model has no reasoning capability', async () => {
@@ -440,7 +447,8 @@ describe('AdvisorRuntime — minimal request shape (AC-1 closed whitelist)', () 
     expect(options.messages).toHaveLength(1)
     expect(options.messages[0]!.role).toBe('user')
     expect(options.system).toBe(TEST_SYSTEM_PROMPT)
-    expect(options.maxTokens).toBe(ADVISOR_MAX_TOKENS)
+    // KD-6 frozen value (= ADVISOR_MAX_TOKENS)
+    expect(options.maxTokens).toBe(5120)
   })
 })
 
@@ -623,6 +631,7 @@ describe('AdvisorRuntime — failure policy (KD-5)', () => {
     expect(runtime.pendingCount).toBe(0)
   })
 
+  // KD-6 (§8.6) regression pin
   it('does not latch a deadline-aborted capability resolution — the retry re-resolves and delivers (n4 QC N-5)', async () => {
     const llm = new SignalBoundLlm(textReply('{"note":"resolution bounded"}'))
     const { runtime, notes } = makeRuntime(llm, { callTimeoutMs: 20 })
@@ -639,6 +648,9 @@ describe('AdvisorRuntime — failure policy (KD-5)', () => {
     expect(llm.resolveSignals[0]).toBeInstanceOf(AbortSignal)
     expect(llm.resolveSignals[0]!.aborted).toBe(true)
     expect(llm.resolveSignals[1]).toBeInstanceOf(AbortSignal)
+    // The retry re-resolves with a FRESH, non-aborted signal — the abort was
+    // not latched and is not reused (n4 QC N-5 / qc3 S-2).
+    expect(llm.resolveSignals[1]!.aborted).toBe(false)
     // Attempt 2 re-resolved 'off' — the option is back on the retry, the note
     // is delivered, and the whole drain stayed deadline-bounded.
     expect(llm.calls).toHaveLength(2)

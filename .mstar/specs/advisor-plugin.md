@@ -108,7 +108,7 @@ Schema library: schemastery (as used by dsh packages). Unknown keys are rejected
   - `delivery.ts` — nit injects without waking; concern/blocker steer; immuneTurns downgrade window; advisor-source messages carry `source.kind === 'advisor'`.
 - **Integration:** a composed cordis context with a stub LLM adapter + a fake session/agent harness; assert the full `user → primary → turn/end → delta → advisor call → note → inject` cycle, and assert the explicit-gate (no model call when `enabled: true` without provider/model).
 - **Install smoke (T1):** `pnpm pack` → `dsh plugin --profile <scratch> add <tarball>` → boot or `--dump-config` shows the `advisor` row with no load errors. Dev-side resolution evidence: KD-1 (§8.1).
-- **QA gate:** mandatory (behavioral change) — a real dsh session with the advisor enabled, observing one full turn→advisor→inject cycle (AC-6).
+- **QA gate:** mandatory (behavioral change) — a real dsh session with the advisor enabled, observing one full turn→advisor→inject cycle (AC-5).
 
 ## 8. Resolved decisions (KD)
 
