@@ -81,8 +81,10 @@ export function apply(ctx: ClientContext): void {
   //   signal — its `SettingsScopeBinder` also subscribes to the remote
   //   settings event below);
   // - the granular Host invalidation events forwarded to the client remote
-  //   face (`ctx.remote.$on`; legal key set = `API_REMOTE_FORWARDED_EVENTS`
-  //   in @deepseek-ai/dsh-api-remotes, pinned ^0.1.0-rc.6):
+  //   face (`remote.$on`, subscribed on the `ctx.get('remote')` handle —
+  //   feature-detected below, never a hard `ctx.remote` dependency; legal
+  //   key set = `API_REMOTE_FORWARDED_EVENTS` in @deepseek-ai/dsh-api-remotes,
+  //   pinned ^0.1.0-rc.6):
   //   `settings/document-updated` (a settings namespace document changed on
   //   the host — e.g. a provider section edited on the Models page) and
   //   `llm/adapters-updated` (provider/model topology mutation — e.g. a
@@ -110,6 +112,11 @@ export function apply(ctx: ClientContext): void {
     const disposers: Array<() => void> = [ctx.on('connection/reset', refresh)]
     const remote: TypertClientRemote | undefined = ctx.get('remote')
     if (remote) {
+      // Deliberately unfiltered: the store reads the whole settings surface
+      // (provider directory + all namespaces + advisor config), so a
+      // namespace filter (upstream SettingsScopeBinder applies one) would
+      // miss provider-section changes; the microtask debounce + load()'s
+      // generation guard bound the cost.
       disposers.push(remote.$on('settings/document-updated', refresh))
       disposers.push(remote.$on('llm/adapters-updated', refresh))
     }

@@ -831,9 +831,7 @@ describe('AdvisorRuntime — bounded backlog drop-newest (spec §6)', () => {
       { chunks: textReply('{"note":"third"}') },
       { chunks: textReply('{"note":"fourth"}') },
     ])
-    const debug = vi.fn()
-    const warn = vi.fn()
-    const { runtime } = makeRuntime(llm, { maxQueued: 3, logger: { debug, warn } })
+    const { runtime } = makeRuntime(llm, { maxQueued: 3 })
 
     runtime.enqueue(delta('update one'))
     await vi.waitFor(() => expect(llm.calls).toHaveLength(1)) // in flight

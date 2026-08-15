@@ -29,7 +29,11 @@
  * 16-char id instead of a short `e${index}` fallback.
  *
  * Run: pnpm exec vitest bench --run tests/bench-fingerprint.bench.ts
- * Environment + verdict: see .mstar/sdd/dsh-advisor-audit-wave/task-4-report.md
+ * Verdict (audit 004, STOP gate applied): at N=2000 the full-prefix
+ * recompute measured 0.57–0.64 ms/op and the incremental append path
+ * 0.28–0.32 ms/op — both well below the 1 ms threshold, so no optimization
+ * is warranted (documented no-op; numbers re-run on 2026-08-15 on an M1 Max
+ * with Node 24 / vitest 3.2.7).
  */
 import { bench, describe } from 'vitest'
 import { MessageId } from '@deepseek-ai/dsh-llm'

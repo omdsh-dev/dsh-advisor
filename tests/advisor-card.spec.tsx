@@ -221,6 +221,7 @@ function fakeRuntime(scripted: Scripted, withRemote = true) {
   interface LedgerRow { name: string; options: Record<string, unknown>; component: unknown }
   const ledger: Record<string, LedgerRow[]> = {}
   const disposers: Array<() => void> = []
+  const effectDisposers: Array<() => void> = []
   const locales: Record<string, unknown> = {}
   const resetHandlers = new Set<() => void>()
   const remoteHandlers: Record<string, Set<() => void>> = {}
@@ -260,7 +261,9 @@ function fakeRuntime(scripted: Scripted, withRemote = true) {
     },
     effect: (fn: () => unknown): (() => void) => {
       const disposer = fn()
-      return typeof disposer === 'function' ? disposer as () => void : () => {}
+      const stop = typeof disposer === 'function' ? disposer as () => void : () => {}
+      effectDisposers.push(stop)
+      return stop
     },
     on: (event: string, handler: () => void): (() => void) => {
       if (event !== 'connection/reset') throw new Error(`test: unexpected event ${event}`)
@@ -272,7 +275,7 @@ function fakeRuntime(scripted: Scripted, withRemote = true) {
   const fireRemote = (event: string): void => {
     for (const handler of remoteHandlers[event] ?? []) handler()
   }
-  return { ctx, ledger, locales, resetHandlers, remoteHandlers, fireRemote }
+  return { ctx, ledger, locales, resetHandlers, remoteHandlers, effectDisposers, fireRemote }
 }
 
 describe('AdvisorCard registration (settings.plugin.item)', () => {
@@ -343,6 +346,12 @@ describe('AdvisorCard invalidation refresh (plan 003 / residual R3)', () => {
     await vi.waitFor(() => expect(scripted.describe).toHaveBeenCalledTimes(3))
     fireRemote('settings/document-updated')
     await vi.waitFor(() => expect(scripted.describe).toHaveBeenCalledTimes(4))
+
+    // The connection/reset plane refreshes too when the remote service IS
+    // mounted — reset and granular events both converge under a
+    // remote-present assembly (dual-plane lock).
+    for (const handler of resetHandlers) handler()
+    await vi.waitFor(() => expect(scripted.describe).toHaveBeenCalledTimes(5))
   })
 
   it('does not fetch before the first load (an unopened card stays idle)', async () => {
@@ -366,6 +375,24 @@ describe('AdvisorCard invalidation refresh (plan 003 / residual R3)', () => {
     expect(scripted.describe).toHaveBeenCalledTimes(1)
     for (const handler of resetHandlers) handler()
     await vi.waitFor(() => expect(scripted.describe).toHaveBeenCalledTimes(2))
+  })
+
+  it('empties the remote/reset handler sets when the effect disposer runs (teardown)', () => {
+    const scripted = scriptedApi()
+    const { effectDisposers, remoteHandlers, resetHandlers } = applyAndController(scripted)
+
+    // Precondition: both planes are registered before teardown.
+    expect(remoteHandlers['settings/document-updated']?.size).toBe(1)
+    expect(remoteHandlers['llm/adapters-updated']?.size).toBe(1)
+    expect(resetHandlers.size).toBe(1)
+
+    // Run the effect disposer (apply teardown) — every registration leaves
+    // the subscription tables, so later host events reach no handler.
+    for (const dispose of effectDisposers) dispose()
+
+    expect(remoteHandlers['settings/document-updated']?.size ?? 0).toBe(0)
+    expect(remoteHandlers['llm/adapters-updated']?.size ?? 0).toBe(0)
+    expect(resetHandlers.size).toBe(0)
   })
 })
 

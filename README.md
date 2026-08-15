@@ -251,11 +251,13 @@ pnpm pack                 # build + produce dsh-advisor-0.0.1.tgz
 ```
 
 The in-box `cordis` framework is declared as the scoped peer
-`@deepseek-ai/cordis` (never bare `cordis`). Peer ranges against prerelease
-publishes must carry the exact publish tag — e.g. the `@deepseek-ai/dsh-*`
-peers are pinned `^0.1.0-rc.6`; per the node-semver prerelease-tuple rule a
-comparator with a prerelease only matches the same `[major, minor, patch]`
-tuple, so a range like `^4.0.0-rc.7` never matches a `4.0.1-rc.1` publish.
+`@deepseek-ai/cordis` (never bare `cordis`) — the declared pin is
+`"@deepseek-ai/cordis": "^4.0.1"` (`package.json` peerDependencies). Peer
+ranges against prerelease publishes must carry the exact publish tag — e.g.
+the `@deepseek-ai/dsh-*` peers are pinned `^0.1.0-rc.6`; per the node-semver
+prerelease-tuple rule a comparator with a prerelease only matches the same
+`[major, minor, patch]` tuple, so a range like `^4.0.0-rc.7` never matches a
+`4.0.1-rc.1` publish.
 The scoped peer resolves from the npm registry like the other
 `@deepseek-ai/*` peers, so dev-time `import '@deepseek-ai/cordis'` and the
 host see the same package identity.
