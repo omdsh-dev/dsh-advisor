@@ -363,9 +363,13 @@ export class AdvisorRuntime {
    * W-1 / qc3 F-3): resolving the model's declared efforts on EVERY advisor
    * call would add an adapter round-trip per delta; one resolution per
    * (provider, model) per runtime suffices — the route is pinned for the
-   * runtime's lifetime.
+   * runtime's lifetime. ONLY definitive verdicts are cached ('off' or a
+   * successful no-'off' resolution); a resolution failure (throw or deadline
+   * abort) is never cached, so the next call resolves afresh.
    */
   private readonly reasoningEffortCache = new Map<string, ReasoningEffortId | undefined>()
+  /** One-shot latch for the definitive no-'off' log line (log-once per runtime). */
+  private thinkingOffLogged = false
 
   private readonly queue: Delta[] = []
   private state: AdvisorRuntimeStatus = 'running'
@@ -696,28 +700,49 @@ export class AdvisorRuntime {
    * qc3 F-3): pass the branded 'off' effort only when the resolved model's
    * `reasoning.efforts` includes it, else omit the option (`resolveCallFor`
    * materializes the adapter default). Cached per (provider, model) — one
-   * resolution per runtime, never per call. A resolution failure (unknown
-   * route, adapter throw, or a deadline abort — n4 QC N-5) is advisory: the
-   * call proceeds WITHOUT the option, matching the pre-n4 behavior for every
-   * model that does not declare 'off'. The optional `signal` (the call's
-   * deadline signal) is threaded into `resolveModelInfo`, whose contract
-   * allows adapter-owned asynchronous lookup with cancellation — a hung
-   * lookup that honors the signal aborts with the call deadline instead of
-   * wedging the drain.
+   * resolution per runtime, never per call — but ONLY definitive verdicts are
+   * cached: a resolution failure (unknown route, adapter throw, or a deadline
+   * abort — n4 QC N-5) is advisory and returns `undefined` WITHOUT caching, so
+   * a transient failure retries the resolution on the next call instead of
+   * latching thinking-off unavailable for the runtime's lifetime. A definitive
+   * no-'off' verdict logs the unavailable line once per runtime
+   * (`thinkingOffLogged`); resolution failures get no log-once latch of their
+   * own. The optional `signal` (the call's deadline signal) is threaded into
+   * `resolveModelInfo`, whose contract allows adapter-owned asynchronous
+   * lookup with cancellation — a hung lookup that honors the signal aborts
+   * with the call deadline instead of wedging the drain.
    */
   private async resolveReasoningEffort(signal?: AbortSignal): Promise<ReasoningEffortId | undefined> {
     const key = `${this.provider}\u0000${this.model}`
     if (this.reasoningEffortCache.has(key)) return this.reasoningEffortCache.get(key)
+    // Method absent → definitive verdict: this runtime has no capability API
+    // at all (W-1 fallback), so 'off' is unreachable — cache and log once.
+    if (this.llm.resolveModelInfo === undefined) {
+      this.reasoningEffortCache.set(key, undefined)
+      this.logThinkingOffUnavailable('no capability API')
+      return undefined
+    }
     let effort: ReasoningEffortId | undefined
     try {
-      const info = await this.llm.resolveModelInfo?.(this.provider, this.model, signal)
+      const info = await this.llm.resolveModelInfo(this.provider, this.model, signal)
       effort = info?.reasoning?.efforts.some((entry) => entry.id === ReasoningEffortId('off'))
         ? ReasoningEffortId('off')
         : undefined
     } catch {
-      effort = undefined
+      // Failure (adapter throw OR deadline abort — one class): the call
+      // proceeds without the option, but the failure is NOT cached and gets no
+      // log-once latch — the next call resolves afresh.
+      return undefined
     }
     this.reasoningEffortCache.set(key, effort)
+    if (effort === undefined) this.logThinkingOffUnavailable('model does not advertise thinking-off')
     return effort
+  }
+
+  /** Emit the definitive no-'off' line exactly once per runtime. */
+  private logThinkingOffUnavailable(reason: string): void {
+    if (this.thinkingOffLogged) return
+    this.thinkingOffLogged = true
+    this.logger.debug('advisor: thinking-off unavailable', { provider: this.provider, model: this.model, reason })
   }
 }

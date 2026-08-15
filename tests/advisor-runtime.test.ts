@@ -68,8 +68,8 @@ class FakeLlm {
 
   constructor(
     private readonly responses: readonly FakeResponse[],
-    /** 'off' = deepseek-style declared efforts (default); 'none' = base adapter, no reasoning metadata; 'throw' = resolution failure. */
-    private readonly capability: FakeCapability = 'off',
+    /** 'off' = deepseek-style declared efforts (default); 'none' = base adapter, no reasoning metadata; 'throw' = resolution failure. Public + mutable: the no-latch test flips it mid-runtime. */
+    public capability: FakeCapability = 'off',
   ) {}
 
   resolveModelInfo(provider: string, model: string): Promise<LlmResolvedModelInfo> {
@@ -114,26 +114,43 @@ async function* streamOf(chunks: readonly StreamChunk[]): AsyncIterable<StreamCh
 
 /**
  * Fake whose `resolveModelInfo` honors the abort signal (dsh-llm's contract —
- * "signal - optional cancellation for adapter-owned asynchronous lookup") but
- * is otherwise slow: it never resolves on its own, only rejects when the
- * passed signal aborts. With NO signal (the pre-fix n4 QC N-5 behavior) it
- * hangs forever — exactly the wedged-drain failure the fix removes.
+ * "signal - optional cancellation for adapter-owned asynchronous lookup"): the
+ * FIRST resolution hangs until the passed signal aborts (rejecting with
+ * AbortError); the SECOND resolves immediately with 'off'. This pins the
+ * no-latch contract (n4 QC N-5): an aborted resolution is a failure, NOT a
+ * definitive verdict, so the KD-5 retry re-resolves with a fresh deadline
+ * instead of reusing a latched `undefined`. With NO signal (the pre-fix
+ * behavior) the first resolution would hang forever — exactly the
+ * wedged-drain failure the fix removes.
  */
 class SignalBoundLlm {
   readonly resolveSignals: Array<AbortSignal | undefined> = []
   readonly calls: GenerateOptions[] = []
+  private resolutions = 0
 
   constructor(private readonly reply: readonly StreamChunk[]) {}
 
   resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
     this.resolveSignals.push(signal)
-    if (signal === undefined) return new Promise(() => {}) // no signal → hang forever
-    return new Promise((_resolve, reject) => {
-      if (signal.aborted) {
-        reject(new DOMException('aborted', 'AbortError'))
-        return
-      }
-      signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+    this.resolutions++
+    if (this.resolutions === 1) {
+      if (signal === undefined) return new Promise(() => {}) // no signal → hang forever
+      return new Promise((_resolve, reject) => {
+        if (signal.aborted) {
+          reject(new DOMException('aborted', 'AbortError'))
+          return
+        }
+        signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+      })
+    }
+    return Promise.resolve({
+      provider,
+      id: model,
+      name: model,
+      reasoning: {
+        efforts: [{ id: ReasoningEffortId('off'), name: 'Off' }, { id: ReasoningEffortId('high'), name: 'High' }],
+        defaultEffort: ReasoningEffortId('off'),
+      },
     })
   }
 
@@ -278,6 +295,100 @@ describe('AdvisorRuntime — drain calls llm.stream once per delta with expected
     expect(notes).toEqual([{ note: 'resilient', severity: 'nit' }])
     expect(llm.calls).toHaveLength(1)
     expect('reasoningEffort' in llm.calls[0]!).toBe(false)
+  })
+
+  it('does not latch a resolution failure: a later definitive resolution re-advertises reasoningEffort', async () => {
+    // First delta: the capability resolution throws — the failure is advisory
+    // and must NOT be cached as a permanent no-'off' verdict. Second delta:
+    // the same runtime, but the model now declares 'off' — the fresh
+    // resolution re-advertises it (a latched `undefined` would drop
+    // thinking-off for the runtime's lifetime).
+    const llm = new FakeLlm(
+      [
+        { chunks: textReply('{"note":"first"}') },
+        { chunks: textReply('{"note":"second"}') },
+      ],
+      'throw',
+    )
+    const { runtime, notes } = makeRuntime(llm)
+
+    runtime.enqueue(delta('update one'))
+    await runtime.waitForDrain()
+    expect(notes).toEqual([{ note: 'first', severity: 'nit' }])
+    expect(llm.calls).toHaveLength(1)
+    expect('reasoningEffort' in llm.calls[0]!).toBe(false)
+
+    llm.capability = 'off'
+    runtime.enqueue(delta('update two'))
+    await runtime.waitForDrain()
+
+    expect(notes).toEqual([
+      { note: 'first', severity: 'nit' },
+      { note: 'second', severity: 'nit' },
+    ])
+    expect(llm.calls).toHaveLength(2)
+    expect(llm.calls[1]!.reasoningEffort).toBe(ReasoningEffortId('off'))
+    // Zero tools contract: no advisor call ever carries a tools key.
+    expect('tools' in llm.calls[0]!).toBe(false)
+    expect('tools' in llm.calls[1]!).toBe(false)
+  })
+
+  it('logs the thinking-off-unavailable line once per runtime, not per call', async () => {
+    const debug = vi.fn()
+    const warn = vi.fn()
+    const llm = new FakeLlm(
+      [
+        { chunks: textReply('{"note":"first"}') },
+        { chunks: textReply('{"note":"second"}') },
+      ],
+      'none',
+    )
+    const { runtime, notes } = makeRuntime(llm, { logger: { debug, warn } })
+
+    runtime.enqueue(delta('update one'))
+    await runtime.waitForDrain()
+    runtime.enqueue(delta('update two'))
+    await runtime.waitForDrain()
+
+    expect(notes).toEqual([
+      { note: 'first', severity: 'nit' },
+      { note: 'second', severity: 'nit' },
+    ])
+    // The definitive no-'off' verdict is logged once; the second delta hits
+    // the cached verdict and stays silent.
+    const unavailable = debug.mock.calls.filter(
+      ([message]) => typeof message === 'string' && message.startsWith('advisor: thinking-off unavailable'),
+    )
+    expect(unavailable).toHaveLength(1)
+  })
+
+  it('never logs the thinking-off-unavailable line for a resolution failure', async () => {
+    const debug = vi.fn()
+    const warn = vi.fn()
+    const llm = new FakeLlm(
+      [
+        { chunks: textReply('{"note":"first"}') },
+        { chunks: textReply('{"note":"second"}') },
+      ],
+      'throw',
+    )
+    const { runtime, notes } = makeRuntime(llm, { logger: { debug, warn } })
+
+    runtime.enqueue(delta('update one'))
+    await runtime.waitForDrain()
+    runtime.enqueue(delta('update two'))
+    await runtime.waitForDrain()
+
+    expect(notes).toEqual([
+      { note: 'first', severity: 'nit' },
+      { note: 'second', severity: 'nit' },
+    ])
+    // Resolution failures get no log-once latch of their own: the unavailable
+    // line never fires on a throw.
+    const unavailable = debug.mock.calls.filter(
+      ([message]) => typeof message === 'string' && message.startsWith('advisor: thinking-off unavailable'),
+    )
+    expect(unavailable).toHaveLength(0)
   })
 })
 
@@ -460,22 +571,26 @@ describe('AdvisorRuntime — failure policy (KD-5)', () => {
     expect(runtime.pendingCount).toBe(0)
   })
 
-  it('bounds the capability resolution by the call deadline — a signal-honoring hung lookup times out transiently and the retry delivers (n4 QC N-5)', async () => {
+  it('does not latch a deadline-aborted capability resolution — the retry re-resolves and delivers (n4 QC N-5)', async () => {
     const llm = new SignalBoundLlm(textReply('{"note":"resolution bounded"}'))
     const { runtime, notes } = makeRuntime(llm, { callTimeoutMs: 20 })
 
     runtime.enqueue(delta('update'))
     await runtime.waitForDrain()
 
-    // The deadline signal reached the capability resolution (threaded through,
-    // N-5) and aborted it — the first attempt times out (transient) instead of
-    // wedging the drain ahead of the deadline-guarded stream loop.
-    expect(llm.resolveSignals).toHaveLength(1) // the resolution runs once (cached after the abort)
+    // Attempt 1: the deadline signal reached the capability resolution
+    // (threaded through, N-5) and aborted it — a transient timeout, NOT a
+    // definitive verdict. The abort is not cached, so the KD-5 retry
+    // re-resolves with a fresh deadline instead of reusing a latched
+    // `undefined`.
+    expect(llm.resolveSignals).toHaveLength(2)
     expect(llm.resolveSignals[0]).toBeInstanceOf(AbortSignal)
     expect(llm.resolveSignals[0]!.aborted).toBe(true)
-    // Attempt 1 timed out → the single KD-5 retry (fresh deadline, cached
-    // resolution) delivers the note.
+    expect(llm.resolveSignals[1]).toBeInstanceOf(AbortSignal)
+    // Attempt 2 re-resolved 'off' — the option is back on the retry, the note
+    // is delivered, and the whole drain stayed deadline-bounded.
     expect(llm.calls).toHaveLength(2)
+    expect(llm.calls[1]!.reasoningEffort).toBe(ReasoningEffortId('off'))
     expect(notes).toEqual([{ note: 'resolution bounded', severity: 'nit' }])
     expect(runtime.status()).toBe('running')
   })
