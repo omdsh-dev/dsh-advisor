@@ -208,16 +208,28 @@ function toggleCard(): void {
  * A minimal fake of the client slots service + context for the registration
  * ledger test: `inject(name, generator)` runs the generator and records every
  * `register` call (the real runtime does the same through ctx.effect), and
- * `ctx.get('connection')` serves the scripted wire face. Everything else the
- * plugin's apply touches (locale register, connection/reset) is recorded but
- * inert.
+ * `ctx.get('connection')` serves the scripted wire face. The optional
+ * `remote` service mirrors the client assembly's forwarded Host invalidation
+ * face (plan 003: `ctx.remote.$on` with `settings/document-updated` +
+ * `llm/adapters-updated`, probe of API_REMOTE_FORWARDED_EVENTS in
+ * @deepseek-ai/dsh-api-remotes rc.6) — `withRemote: false` simulates a shell
+ * that never mounted the service (graceful-degrade path). Everything else
+ * the plugin's apply touches (locale register, connection/reset) is recorded
+ * but inert.
  */
-function fakeRuntime(scripted: Scripted) {
+function fakeRuntime(scripted: Scripted, withRemote = true) {
   interface LedgerRow { name: string; options: Record<string, unknown>; component: unknown }
   const ledger: Record<string, LedgerRow[]> = {}
   const disposers: Array<() => void> = []
   const locales: Record<string, unknown> = {}
   const resetHandlers = new Set<() => void>()
+  const remoteHandlers: Record<string, Set<() => void>> = {}
+  const remote = {
+    $on: (event: string, handler: () => void): (() => void) => {
+      ;(remoteHandlers[event] ??= new Set()).add(handler)
+      return () => { remoteHandlers[event]?.delete(handler) }
+    },
+  }
   const slots = {
     register: (options: Record<string, unknown>, component: unknown): (() => void) => {
       const name = options.name as string
@@ -241,7 +253,11 @@ function fakeRuntime(scripted: Scripted) {
       },
       bind: (): never => { throw new Error('test: apply must not bind t — the card t seat comes from PropsLocale') },
     },
-    get: (key: string): unknown => (key === 'connection' ? { api: scripted.api, rpc: scripted.rpc } : undefined),
+    get: (key: string): unknown => {
+      if (key === 'connection') return { api: scripted.api, rpc: scripted.rpc }
+      if (key === 'remote') return withRemote ? remote : undefined
+      return undefined
+    },
     effect: (fn: () => unknown): (() => void) => {
       const disposer = fn()
       return typeof disposer === 'function' ? disposer as () => void : () => {}
@@ -252,7 +268,11 @@ function fakeRuntime(scripted: Scripted) {
       return () => { resetHandlers.delete(handler) }
     },
   }
-  return { ctx, ledger, locales, resetHandlers }
+  /** Fire one forwarded Host event into the remote subscription table. */
+  const fireRemote = (event: string): void => {
+    for (const handler of remoteHandlers[event] ?? []) handler()
+  }
+  return { ctx, ledger, locales, resetHandlers, remoteHandlers, fireRemote }
 }
 
 describe('AdvisorCard registration (settings.plugin.item)', () => {
@@ -283,6 +303,69 @@ describe('AdvisorCard registration (settings.plugin.item)', () => {
 
     // The dictionary namespace registers with the en/zh pair.
     expect(locales['settings.advisor']).toEqual({ zh, en })
+  })
+})
+
+describe('AdvisorCard invalidation refresh (plan 003 / residual R3)', () => {
+  /** Run apply, then hand back the injected controller (the open card surface). */
+  function applyAndController(scripted: Scripted, withRemote = true) {
+    const runtime = fakeRuntime(scripted, withRemote)
+    apply(runtime.ctx as unknown as ClientContext)
+    const cards = runtime.ledger['settings.plugin.item'] ?? []
+    const inject = cards[0].options.inject as () => object
+    const face = inject() as { controller: AdvisorSettingsStore }
+    return { ...runtime, controller: face.controller }
+  }
+
+  it('subscribes both granular remote events and refreshes a loaded store, coalescing bursts', async () => {
+    const scripted = scriptedApi()
+    const { controller, remoteHandlers, resetHandlers, fireRemote } = applyAndController(scripted)
+
+    // Dual-plane registration: both forwarded Host events on the remote face
+    // plus the connection/reset fallback (the 20260811 vocabulary removal
+    // note — plan 003 probe: API_REMOTE_FORWARDED_EVENTS, rc.6).
+    expect(remoteHandlers['settings/document-updated']?.size).toBe(1)
+    expect(remoteHandlers['llm/adapters-updated']?.size).toBe(1)
+    expect(resetHandlers.size).toBe(1)
+
+    // First load (the card opens) — then a same-host burst of invalidations
+    // (e.g. the Models page edits a provider section AND a model) coalesces
+    // into ONE refetch via the microtask debounce.
+    await controller.load()
+    expect(scripted.describe).toHaveBeenCalledTimes(1)
+    fireRemote('settings/document-updated')
+    fireRemote('llm/adapters-updated')
+    await vi.waitFor(() => expect(scripted.describe).toHaveBeenCalledTimes(2))
+
+    // A later, separately-ticked granular event (a new model added on the
+    // Models page) refreshes again — each event keeps its own refresh.
+    fireRemote('llm/adapters-updated')
+    await vi.waitFor(() => expect(scripted.describe).toHaveBeenCalledTimes(3))
+    fireRemote('settings/document-updated')
+    await vi.waitFor(() => expect(scripted.describe).toHaveBeenCalledTimes(4))
+  })
+
+  it('does not fetch before the first load (an unopened card stays idle)', async () => {
+    const scripted = scriptedApi()
+    const { fireRemote } = applyAndController(scripted)
+    fireRemote('settings/document-updated')
+    fireRemote('llm/adapters-updated')
+    await Promise.resolve()
+    expect(scripted.describe).not.toHaveBeenCalled()
+  })
+
+  it('keeps connection/reset refresh when the remote service is absent (graceful degrade)', async () => {
+    const scripted = scriptedApi()
+    // A shell that never mounted `remote` must not throw on registration and
+    // keeps today's reset-only convergence.
+    const { controller, resetHandlers, remoteHandlers } = applyAndController(scripted, false)
+    expect(Object.keys(remoteHandlers)).toHaveLength(0)
+    expect(resetHandlers.size).toBe(1)
+
+    await controller.load()
+    expect(scripted.describe).toHaveBeenCalledTimes(1)
+    for (const handler of resetHandlers) handler()
+    await vi.waitFor(() => expect(scripted.describe).toHaveBeenCalledTimes(2))
   })
 })
 
