@@ -5,8 +5,7 @@
 ## 前置条件
 
 - 可用的 dsh 运行环境（`$DSH_HOME`，默认 `~/.dsh`）与可写的目标 profile（如 `web`）；安装后重启 dsh 会话。
-- registry 安装只需 PATH 上有 pnpm（`dsh plugin` 是 pnpm 转发器）。从源码构建（下文 git / 本地目录 / tarball 安装）另需 **node**（≥ 22）与位于 `$DSH_SOURCE_DIR`（缺省 `${DSH_HOME}/source/current`）的 dsh 源码树——开发期链接农场（`prepare` 构建）与开发期类型检查 / 测试都用它。
-- **Windows**：从源码安装（git / 本地目录）的 `prepare` 链接农场会创建文件符号链接，请先开启[开发者模式](https://learn.microsoft.com/windows/apps/get-started/enable-your-device-for-development)（目录 junction 无需特权）。Windows 没有 `HOME`，链接农场自动回退 `USERPROFILE` 解析 dsh 源码树。
+- registry 安装只需 PATH 上有 pnpm（`dsh plugin` 是 pnpm 转发器）。从源码构建（下文 git / 本地目录 / tarball 安装）另需 **node**（≥ 22）与私有 `@deepseek-ai/*` peers 的 registry 认证——`prepare` 只运行 `pnpm build`（依赖解析不需要 `DSH_HOME` 源码树前置条件；peers 经 `autoInstallPeers` + `~/.npmrc` 认证令牌从 npm registry 解析）。
 
 ## 1. 一条命令的 registry 安装
 

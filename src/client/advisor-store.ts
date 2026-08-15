@@ -269,7 +269,7 @@ export class AdvisorSettingsStore {
 
   /**
    * Bumped by every successful load(): an in-flight catalog fetch started
-   * before a bump is stale (the models/changed invalidation that triggered
+   * before a bump is stale (the connection/reset invalidation that triggered
    * the reload happened mid-fetch) and caches nothing (qc1 W-1 / qc3 S-1).
    */
   private catalogGeneration = 0
@@ -375,14 +375,17 @@ export class AdvisorSettingsStore {
       this.store.update((s) => { s.draft = this.seed })
       this.draftSeeded = true
     }
-    // Invalidation refresh (qc1 W-1 / qc3 S-1): a pushed settings/changed or
-    // models/changed must re-resolve model options from the fresh directory —
-    // the per-provider model caches and the host-scoped catalog are
+    // Invalidation refresh (qc1 W-1 / qc3 S-1): a pushed connection/reset
+    // (see src/client/index.ts:76-85 — connection/reset → refreshIfLoaded →
+    // load()) must re-resolve model options from the fresh directory — the
+    // per-provider model caches and the host-scoped catalog are
     // store-lifetime otherwise, and `ensureModels` early-returns once a
     // provider has resolved. The catalog-level in-flight guard + success-only
     // failure caching stay; the end-of-load `ensureModels(selected)` below
     // then re-resolves the stored provider's options on every invalidation
     // without clobbering in-progress draft edits (the draft is seeded once).
+    // Finer-grained remote invalidation events are tracked separately
+    // (plan 003 / status R3).
     this.catalogGeneration += 1
     this.catalog = undefined
     this.catalogPromise = undefined

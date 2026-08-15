@@ -232,59 +232,40 @@ harness iteration roadmap):
 
 ## Development
 
-The bundle builds itself on install: `package.json` declares `"prepare": "node
-scripts/setup-dsh-links.mjs && pnpm build"` (the dev-time link farm plus the
-same build `prepack` runs), so any clone is
-immediately buildable **once `DSH_HOME` points at a dsh home whose
-`source/current` is a dsh source tree** (or `DSH_SOURCE_DIR` points at such a
-tree directly). The private
-`@deepseek-ai/dsh-*` runtime dependencies are **peerDependencies only**; at dev
-time `scripts/setup-dsh-links.mjs` (wired into `prepare`, standalone as
-`pnpm dsh:link`, verified with `pnpm dsh:link:check`) links the REAL packages
-from that tree into `node_modules/@deepseek-ai/` — every `@deepseek-ai/*`
-package the tree declares (tool CLIs with a `bin` are skipped: linking them
-would make pnpm write their bins into the shared tree), a bin-less shim for
-the in-box `cordis` framework, and the tree's own `react`/`react-dom` copies
-(node resolution — including externalized CJS deps — must see ONE react
-identity, the identity the real client packages use; the dsh profile
-convention `nodeLinker=hoisted` lives in `pnpm-workspace.yaml` (pnpm 11+
-ignores non-auth settings in `.npmrc`), so no `.pnpm` per-package dirs shadow
-those links). The farm is idempotent, prunes stale entries, and fails with
-guidance when the tree is missing or a peer cannot be linked.
-`pnpm-workspace.yaml` also sets `autoInstallPeers: false` (dsh profile
-convention): the private peers must never be fetched from the npm registry.
+The bundle builds itself on install: `package.json` declares `"prepare":
+"pnpm build"` (the same build `prepack` runs), so any clone is immediately
+buildable. The private `@deepseek-ai/dsh-*` runtime dependencies are
+**peerDependencies only** (never `dependencies` / `devDependencies`);
+`pnpm-workspace.yaml` sets `autoInstallPeers: true` + `nodeLinker: hoisted`
+(pnpm 11+ ignores non-auth settings in `.npmrc`), so at dev time pnpm
+resolves the real `@deepseek-ai/*` packages from the npm registry using the
+auth token in your user-level `~/.npmrc`. There is no local link-farm and no
+`DSH_HOME` / `DSH_SOURCE_DIR` prerequisite for dependency resolution.
 
 ```sh
-export DSH_HOME=~/.dsh    # a dsh home with source/current (or set DSH_SOURCE_DIR)
-pnpm install              # registry deps + link farm (via prepare), no private-registry access
+pnpm install              # registry deps incl. the @deepseek-ai/* peers (via autoInstallPeers + ~/.npmrc auth)
 pnpm test                 # vitest (unit + the composed integration loop)
 pnpm typecheck            # tsc --noEmit (node) + tsc -p tsconfig.client.json --noEmit + tsc -p tsconfig.spec.json --noEmit
 pnpm build                # tsc -p tsconfig.build.json emit to lib/ + node scripts/build-client.mjs (client bundle)
 pnpm pack                 # build + produce dsh-advisor-0.0.1.tgz
 ```
 
-On Windows the link farm creates directory entries as junctions (no special
-privileges), but the cordis shim's file entries use file symlinks, which need
-[Developer Mode](https://learn.microsoft.com/windows/apps/get-started/enable-your-device-for-development)
-(or an admin shell) — enable it before `pnpm install`. Windows has no
-`HOME`, so the script falls back to `USERPROFILE` to resolve the dsh source
-tree.
-
 The in-box `cordis` framework is declared as the scoped peer
-`@deepseek-ai/cordis: ^4.0.1-rc.1` (the range carries the exact publish tag —
-a comparator prerelease such as `^4.0.0-rc.7` never matches the vendored
-`4.0.1-rc.1` per the node-semver tuple rule); after install the link farm's
-bin-less cordis shim at `node_modules/@deepseek-ai/cordis` answers the scoped
-name and resolves to the vendored files, because the real packages type and
-run against the vendored build and module identity requires dev-time
-`import '@deepseek-ai/cordis'` to resolve to the same files. The public
-devDependencies (`@deepseek-ai/schemastery`, `react`, …) resolve from the npm registry as
-usual.
+`@deepseek-ai/cordis` (never bare `cordis`). Peer ranges against prerelease
+publishes must carry the exact publish tag — e.g. the `@deepseek-ai/dsh-*`
+peers are pinned `^0.1.0-rc.6`; per the node-semver prerelease-tuple rule a
+comparator with a prerelease only matches the same `[major, minor, patch]`
+tuple, so a range like `^4.0.0-rc.7` never matches a `4.0.1-rc.1` publish.
+The scoped peer resolves from the npm registry like the other
+`@deepseek-ai/*` peers, so dev-time `import '@deepseek-ai/cordis'` and the
+host see the same package identity.
 
-`prepack` runs `pnpm build`; `prepare` runs the link farm and the build, so
-`pnpm pack` runs the build twice (once per lifecycle) — the documented
-tradeoff that keeps git-install builds working. There is no `postinstall`
-step: already-built tarball installs skip the build entirely.
+`prepack` runs `pnpm build`; `prepare` runs `pnpm build`, so `pnpm pack` runs
+the build twice (once per lifecycle) — the documented tradeoff that keeps
+git-install builds working. There is no `postinstall` step: already-built
+tarball installs skip the build entirely. A local `dsh plugin add .` mounts
+the bundle from the working tree, so run `pnpm build` (or `pnpm install`)
+first — pnpm does not run `prepare` for `link:` dependencies.
 
 The integration test (`tests/integration.test.ts`) composes the plugin into a
 real cordis context with a stub LLM adapter and drives the full

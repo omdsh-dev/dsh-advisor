@@ -29,6 +29,8 @@ applies_when:
 
 # pnpm 11 workspace-config migration and Windows-safe link farm
 
+> **Superseded (2026-08-15):** the dev-time link farm this doc describes was removed — private `@deepseek-ai/*` peers now resolve from the npm registry via `autoInstallPeers: true` + the `~/.npmrc` auth token (see `developer-experience/dsh-standalone-plugin-dev.md`). The pnpm-11 settings-migration and Windows symlink-junction lessons below remain valid history; the `autoInstallPeers: false` guidance in item 1 no longer applies.
+
 ## Context
 
 `pnpm install` was broken on Windows under pnpm 11.8 for the dsh-advisor bundle (PR #11, `fix/install` branch). Five distinct issues blocked it; three are general pnpm-11 behaviors, two are Windows-specific gaps in the committed link-farm script. Fixed in commit `cdee4a2`, merged as PR #11, and re-verified on macOS (pnpm 10.28.1): `prepare` links 217 entries from the dsh source tree and the build passes.
