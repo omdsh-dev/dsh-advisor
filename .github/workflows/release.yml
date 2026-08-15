@@ -68,6 +68,25 @@ jobs:
         id: ver
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
+      # The Release prep workflow derives the version from the PR title
+      # ("release v<version>") and bumps package.json to match. If the merged
+      # PR drifted from that contract (e.g. the version was edited inside the
+      # PR without re-running prep), publishing the drifted version would
+      # silently produce a mismatched tag and an empty GitHub Release — fail
+      # loudly instead.
+      - name: Cross-check version vs PR title
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          TITLE_VER="${TITLE#release v}"
+          if [ "$TITLE_VER" != "$VERSION" ]; then
+            echo "::error::PR title version \"${TITLE_VER}\" does not match package.json version \"${VERSION}\". Re-run Release prep for v${VERSION} instead of hand-editing the PR."
+            exit 1
+          fi
+          echo "PR title and package.json agree on ${VERSION}"
+
       - name: Validate version
         env:
           VERSION: ${{ steps.ver.outputs.version }}
@@ -127,12 +146,15 @@ jobs:
           # instead of the default `latest`, so prereleases never clobber the
           # latest release and consumers opting into the tag can install it.
           # Formal X.Y.Z versions publish without --tag (default latest).
+          # --provenance is explicitly requested: it makes sigstore signing
+          # deterministic under OIDC trusted publishing (matches the sibling
+          # dsh-llm-fallbacks release workflow).
           if [[ "${VERSION}" == *-* ]]; then
             PRETAG="${VERSION#*-}"
             PRETAG="${PRETAG%%.*}"
-            npm publish --access public --tag "$PRETAG"
+            npm publish --provenance --access public --tag "$PRETAG"
           else
-            npm publish --access public
+            npm publish --provenance --access public
           fi
 
       - name: Configure git identity
