@@ -393,6 +393,58 @@ describe('AdvisorRuntime — drain calls llm.stream once per delta with expected
 })
 
 // ---------------------------------------------------------------------------
+// AC-1 closed whitelist — every advisor GenerateOptions is a minimal start:
+// exact key set, zero tools, single user delta (regression pin, T2)
+// ---------------------------------------------------------------------------
+
+describe('AdvisorRuntime — minimal request shape (AC-1 closed whitelist)', () => {
+  it('sends a minimal request with capability off: exact key whitelist, zero tools, single user delta', async () => {
+    const llm = new FakeLlm([{ chunks: textReply('{"note":"minimal"}') }], 'off')
+    const { runtime } = makeRuntime(llm)
+
+    runtime.enqueue(delta('### Session update\n\n**user**: fix the bug'))
+    await runtime.waitForDrain()
+
+    expect(llm.calls).toHaveLength(1)
+    const options = llm.calls[0]!
+    // Closed whitelist (AC-1): the exact sorted key set, nothing more.
+    expect(Object.keys(options).sort()).toEqual(['maxTokens', 'messages', 'model', 'provider', 'reasoningEffort', 'signal', 'system'])
+    // Zero-tools contract; no temperature/stop tuning; no purpose (KD-5).
+    expect('tools' in options).toBe(false)
+    expect('temperature' in options).toBe(false)
+    expect('stop' in options).toBe(false)
+    expect('purpose' in options).toBe(false)
+    // Single user delta with the configured system prompt and token cap.
+    expect(options.messages).toHaveLength(1)
+    expect(options.messages[0]!.role).toBe('user')
+    expect(options.system).toBe(TEST_SYSTEM_PROMPT)
+    expect(options.maxTokens).toBe(ADVISOR_MAX_TOKENS)
+  })
+
+  it('sends the same minimal request without reasoningEffort when the model has no reasoning capability', async () => {
+    const llm = new FakeLlm([{ chunks: textReply('{"note":"minimal"}') }], 'none')
+    const { runtime } = makeRuntime(llm)
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(llm.calls).toHaveLength(1)
+    const options = llm.calls[0]!
+    // Closed whitelist minus reasoningEffort (capability 'none' → not advertised).
+    expect(Object.keys(options).sort()).toEqual(['maxTokens', 'messages', 'model', 'provider', 'signal', 'system'])
+    expect('reasoningEffort' in options).toBe(false)
+    expect('tools' in options).toBe(false)
+    expect('temperature' in options).toBe(false)
+    expect('stop' in options).toBe(false)
+    expect('purpose' in options).toBe(false)
+    expect(options.messages).toHaveLength(1)
+    expect(options.messages[0]!.role).toBe('user')
+    expect(options.system).toBe(TEST_SYSTEM_PROMPT)
+    expect(options.maxTokens).toBe(ADVISOR_MAX_TOKENS)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Delivery seam — a throwing onNote must never crash the drain (F1)
 // ---------------------------------------------------------------------------
 
