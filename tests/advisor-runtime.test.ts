@@ -17,6 +17,11 @@
  *   with status; quota/rate-limit → pause (`quota_exhausted`), batch retained,
  *   no auto-resume timer; in-flight call aborted on dispose via the signal;
  *   never park the primary.
+ * - Bounded backlog (spec §6): `maxQueued` (default 32) bounds the waiting
+ *   queue; a delta enqueued while the queue is full is dropped at enqueue
+ *   (drop-newest) with a `debug` log carrying `{ maxQueued }`, an in-flight
+ *   delta does not count against the bound, and accepted deltas drain in FIFO
+ *   order.
  * - No model call when the config is disabled (explicit gate, S4) — verified at
  *   the plugin `apply` level.
  *
@@ -57,8 +62,17 @@ const TEST_SYSTEM_PROMPT = 'You are an independent reviewer for a coding session
 /** A rendered transcript delta (shape produced by T3's DeltaRenderer). */
 const delta = (markdown: string): Delta => ({ markdown, willContinue: false })
 
-/** Scripted fake for the runtime's `llm` option: records calls, replays responses. */
-type FakeResponse = { readonly chunks: readonly StreamChunk[] } | { readonly throw: Error } | { readonly hang: true }
+/**
+ * Scripted fake for the runtime's `llm` option: records calls, replays responses.
+ * `gate` = a releasable hang (settings-live `GatedAdapter` pattern): the stream
+ * blocks until the gate resolves, then yields `chunks` — used to hold a delta
+ * in flight while the backlog fills (spec §6 drop-newest tests).
+ */
+type FakeResponse =
+  | { readonly chunks: readonly StreamChunk[] }
+  | { readonly throw: Error }
+  | { readonly hang: true }
+  | { readonly gate: Promise<void>; readonly chunks: readonly StreamChunk[] }
 
 /** Simulated model capability for {@link FakeLlm.resolveModelInfo}. */
 type FakeCapability = 'off' | 'none' | 'throw'
@@ -102,6 +116,16 @@ class FakeLlm {
       // call-level deadline (qc2 W-4 / qc3 W-1).
       return (async function* () {
         await new Promise<void>(() => {})
+      })()
+    }
+    if ('gate' in response) {
+      // A releasable hang: block on the gate, then replay the reply. Unlike the
+      // black-hole `hang`, the blocked call completes once the test resolves
+      // the gate, so the drain can finish and the backlog semantics can be
+      // asserted end to end.
+      return (async function* () {
+        await response.gate
+        yield * response.chunks
       })()
     }
     return streamOf(response.chunks)
@@ -720,6 +744,116 @@ describe('AdvisorRuntime — failure policy (KD-5)', () => {
     runtime.enqueue(delta('second'))
     await runtime.waitForDrain()
     expect(llm.calls).toHaveLength(1) // halted: never called again
+    expect(runtime.pendingCount).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Bounded backlog (spec §6) — drop-newest with a debug log when the queue is full
+// ---------------------------------------------------------------------------
+
+describe('AdvisorRuntime — bounded backlog drop-newest (spec §6)', () => {
+  /** Manually-resolvable promise — releases a gated `FakeLlm` stream on demand. */
+  function deferred(): { promise: Promise<void>; resolve: () => void } {
+    let resolve!: () => void
+    const promise = new Promise<void>((res) => {
+      resolve = res
+    })
+    return { promise, resolve }
+  }
+
+  /** Delta markdown carried by one recorded `llm.stream` call (drain-test pattern). */
+  const textOf = (options: GenerateOptions): string => {
+    const block = options.messages[0]!.content[0]!
+    return block.type === 'text' ? block.text : ''
+  }
+
+  it('drops the newest delta when the backlog is full, while a delta is in flight', async () => {
+    // The first delta is held in flight on a releasable gate (the drain parks
+    // on the stream's first `next()`), so the queue fills to `maxQueued`
+    // deterministically — no wall-clock timing.
+    const gate = deferred()
+    const llm = new FakeLlm([
+      { gate: gate.promise, chunks: textReply('{"note":"first"}') },
+      { chunks: textReply('{"note":"second"}') },
+      { chunks: textReply('{"note":"third"}') },
+    ])
+    const debug = vi.fn()
+    const warn = vi.fn()
+    const { runtime, notes } = makeRuntime(llm, { maxQueued: 2, logger: { debug, warn } })
+
+    runtime.enqueue(delta('update one'))
+    await vi.waitFor(() => expect(llm.calls).toHaveLength(1)) // dequeued + in flight
+    expect(runtime.pendingCount).toBe(0)
+
+    // The queue fills to maxQueued (2) while the first delta is still in flight.
+    runtime.enqueue(delta('update two'))
+    runtime.enqueue(delta('update three'))
+    expect(runtime.pendingCount).toBe(2)
+
+    // Backlog full → drop-newest: the next delta is refused at enqueue and
+    // never dispatched to the model.
+    runtime.enqueue(delta('update four'))
+    expect(runtime.pendingCount).toBe(2)
+    expect(llm.calls).toHaveLength(1)
+
+    // Observability (spec §6): the drop is logged with the maxQueued payload.
+    expect(debug).toHaveBeenCalledWith('advisor: enqueue dropped — backlog full', { maxQueued: 2 })
+
+    // Release the in-flight call: the accepted deltas drain in FIFO order and
+    // the dropped delta never appears.
+    gate.resolve()
+    await runtime.waitForDrain()
+
+    expect([textOf(llm.calls[0]!), textOf(llm.calls[1]!), textOf(llm.calls[2]!)]).toEqual([
+      'update one',
+      'update two',
+      'update three',
+    ])
+    expect(notes).toEqual([
+      { note: 'first', severity: 'nit' },
+      { note: 'second', severity: 'nit' },
+      { note: 'third', severity: 'nit' },
+    ])
+    expect(llm.calls).toHaveLength(3)
+    expect(runtime.pendingCount).toBe(0)
+    expect(runtime.status()).toBe('running')
+  })
+
+  it('retains FIFO order for accepted deltas when the queue fills from capacity-1', async () => {
+    // maxQueued 3: one delta in flight (gated) + three queued = the queue sits
+    // at capacity; the next delta is dropped at enqueue; the accepted four
+    // drain in enqueue order.
+    const gate = deferred()
+    const llm = new FakeLlm([
+      { gate: gate.promise, chunks: textReply('{"note":"first"}') },
+      { chunks: textReply('{"note":"second"}') },
+      { chunks: textReply('{"note":"third"}') },
+      { chunks: textReply('{"note":"fourth"}') },
+    ])
+    const { runtime } = makeRuntime(llm, { maxQueued: 3 })
+
+    runtime.enqueue(delta('update one'))
+    await vi.waitFor(() => expect(llm.calls).toHaveLength(1)) // in flight
+
+    runtime.enqueue(delta('update two'))
+    runtime.enqueue(delta('update three'))
+    runtime.enqueue(delta('update four')) // queue reaches maxQueued (3)
+    expect(runtime.pendingCount).toBe(3)
+    runtime.enqueue(delta('update five')) // dropped — the queue is full
+    expect(runtime.pendingCount).toBe(3)
+    expect(llm.calls).toHaveLength(1)
+
+    gate.resolve()
+    await runtime.waitForDrain()
+
+    expect(llm.calls).toHaveLength(4)
+    expect([
+      textOf(llm.calls[0]!),
+      textOf(llm.calls[1]!),
+      textOf(llm.calls[2]!),
+      textOf(llm.calls[3]!),
+    ]).toEqual(['update one', 'update two', 'update three', 'update four'])
     expect(runtime.pendingCount).toBe(0)
   })
 })

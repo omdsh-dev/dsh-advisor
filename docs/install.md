@@ -9,9 +9,10 @@ uninstall. The quick version lives in the [README](../README.md#install).
   target profile (e.g. `web`); restart the dsh session after installing.
 - A registry install needs only pnpm on PATH (`dsh plugin` is a pnpm
   forwarder). Building from source (git / local / tarball installs below)
-  additionally needs **node** (≥ 22) and a dsh source tree at `$DSH_SOURCE_DIR`
-  (default `${DSH_HOME}/source/current`) — the dev-time link farm (the
-  `prepare` build) and dev-time type checking / tests use it.
+  additionally needs **node** (≥ 22) and registry auth for the private
+  `@deepseek-ai/*` peers — `prepare` runs `pnpm build` only (no `DSH_HOME`
+  source-tree prerequisite for dependency resolution; the peers resolve from
+  the npm registry via `autoInstallPeers` + the `~/.npmrc` auth token).
 
 ## 1. One-line registry install
 

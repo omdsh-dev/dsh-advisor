@@ -14,6 +14,7 @@
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
+import type { TypertClientRemote } from '@deepseek-ai/dsh-typert-protocol'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 // Type-only: pulls the plugin-config card slot's SlotMap merge (the
 // 'settings.plugin.item' entry — this half's registration target). Same empty
@@ -73,16 +74,31 @@ export function apply(ctx: ClientContext): void {
   const controller = new AdvisorSettingsStore(connection.api, connection.rpc)
   const useSnapshot = bindSnapshotSelector(controller.store)
 
-  // Pushed invalidations converge the open surface without polling. The
-  // 20260811 dsh snapshot removed the `settings/changed` / `models/changed`
-  // host passthroughs from the client runtime Events vocabulary (no
-  // replacement exists there), so convergence rides `connection/reset` — a
-  // connection reset invalidates the whole client state (the upstream
-  // `dsh-client-ui-settings` scope uses the same signal). Same-host config
-  // changes land via the page's own load path. A burst of resets coalesces
-  // into a single refetch via the microtask debounce — events in separate
-  // ticks each trigger a load, and `refreshIfLoaded` keeps an unopened card
-  // idle.
+  // Pushed invalidations converge the open surface without polling. Two
+  // planes feed the shared microtask debounce:
+  // - `connection/reset` (ctx.on): a connection reset invalidates the whole
+  //   client state (the upstream `dsh-client-ui-settings` scope uses the same
+  //   signal — its `SettingsScopeBinder` also subscribes to the remote
+  //   settings event below);
+  // - the granular Host invalidation events forwarded to the client remote
+  //   face (`remote.$on`, subscribed on the `ctx.get('remote')` handle —
+  //   feature-detected below, never a hard `ctx.remote` dependency; legal
+  //   key set = `API_REMOTE_FORWARDED_EVENTS` in @deepseek-ai/dsh-api-remotes,
+  //   pinned ^0.1.0-rc.6):
+  //   `settings/document-updated` (a settings namespace document changed on
+  //   the host — e.g. a provider section edited on the Models page) and
+  //   `llm/adapters-updated` (provider/model topology mutation — e.g. a
+  //   model added on the Models page). The 20260811 dsh snapshot removed the
+  //   old `settings/changed` / `models/changed` host passthroughs from the
+  //   client runtime Events vocabulary; the forwarded-event allowlist is
+  //   their replacement (plan 003 / status R3 — restores same-host live
+  //   convergence without a reconnect).
+  // `remote` is a client-assembly service, resolved with `ctx.get` (not
+  // injected) and feature-detected: a shell that does not mount it keeps
+  // today's reset-only behavior — no throw on registration. A burst of
+  // invalidations coalesces into a single refetch via the microtask debounce
+  // — events in separate ticks each trigger a load, and `refreshIfLoaded`
+  // keeps an unopened card idle.
   ctx.effect(() => {
     let pending = false
     const refresh = (): void => {
@@ -93,7 +109,17 @@ export function apply(ctx: ClientContext): void {
         refreshIfLoaded(controller)
       })
     }
-    const disposers = [ctx.on('connection/reset', refresh)]
+    const disposers: Array<() => void> = [ctx.on('connection/reset', refresh)]
+    const remote: TypertClientRemote | undefined = ctx.get('remote')
+    if (remote) {
+      // Deliberately unfiltered: the store reads the whole settings surface
+      // (provider directory + all namespaces + advisor config), so a
+      // namespace filter (upstream SettingsScopeBinder applies one) would
+      // miss provider-section changes; the microtask debounce + load()'s
+      // generation guard bound the cost.
+      disposers.push(remote.$on('settings/document-updated', refresh))
+      disposers.push(remote.$on('llm/adapters-updated', refresh))
+    }
     return () => { for (const dispose of disposers) dispose() }
   }, 'advisor: pushed invalidations')
 
