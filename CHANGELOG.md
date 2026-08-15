@@ -2,6 +2,12 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.1.4] - 2026-08-15
+
+- 8ec21db fix: audit wave 2026-08-15 — docs align, backlog tests, card invalidation, fingerprint verdict (#51)
+- d87f480 feat(advisor): minimal-start hardening — zero-tools pin, thinking-off no-latch, spec KD-6 (iter n7) (#49)
+- aa6bc82 docs(readme): add dshfind badges (en + zh) (#50)
+
 ## [0.1.3] - 2026-08-15
 
 - 17f544a Merge pull request #47 from omdsh-dev/docs/align-docs-triplet
