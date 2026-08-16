@@ -11,14 +11,15 @@ coverage/
 # Morning Star harness (.mstar/)
 # Principle: process stays local; results are shared with the team.
 # Ignored (process / coordination):
-.mstar/agent-flow.jsonl
-.mstar/archived/
-.mstar/iterations/
-.mstar/notes.json
-.mstar/plans/
-.mstar/sdd/
-.mstar/status.json
+.mstar/**
+!.mstar/knowledge/
+!.mstar/knowledge/**
+!.mstar/specs/
+!.mstar/specs/**
 # Tracked (results): .mstar/AGENTS.md, .mstar/knowledge/, .mstar/specs/
+
+# Git worktrees (local feature-worktree housing)
+.worktrees/
 
 # Editor / OS
 .DS_Store
