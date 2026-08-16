@@ -26,11 +26,18 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import {
   AdvisorSessionOverrides,
   USAGE,
+  advisorConfigText,
   advisorStatusText,
   parseAdvisorCommand,
   registerAdvisorCommands,
+  summarizeSystemPrompt,
 } from '../src/commands'
-import type { AdvisorCommandController, AdvisorCommandRegistry, AdvisorSessionStatus } from '../src/commands'
+import type {
+  AdvisorCommandController,
+  AdvisorCommandRegistry,
+  AdvisorComposedConfig,
+  AdvisorSessionStatus,
+} from '../src/commands'
 
 // ---------------------------------------------------------------------------
 // Test doubles
@@ -59,17 +66,35 @@ function baseStatus(overrides: Partial<AdvisorSessionStatus> = {}): AdvisorSessi
   return { enabled: false, runtimeStatus: 'disabled', pendingCount: 0, ...overrides }
 }
 
+/** Baseline composed config with the required fields filled in. */
+function baseConfig(overrides: Partial<AdvisorComposedConfig> = {}): AdvisorComposedConfig {
+  return {
+    enabled: false,
+    immuneTurns: 3,
+    maxDeltaMessages: 60,
+    systemPromptSet: false,
+    systemPromptSummary: '',
+    ...overrides,
+  }
+}
+
 /** Stateful fake controller — records setEnabled calls and mirrors state. */
 class FakeController implements AdvisorCommandController {
   status: AdvisorSessionStatus
+  config: AdvisorComposedConfig
   readonly setCalls: Array<{ sessionId: string; enabled: boolean; sessionLength?: number }> = []
 
-  constructor(status: AdvisorSessionStatus) {
+  constructor(status: AdvisorSessionStatus, config?: AdvisorComposedConfig) {
     this.status = status
+    this.config = config ?? baseConfig()
   }
 
   getStatus(_sessionId: string): AdvisorSessionStatus {
     return this.status
+  }
+
+  getConfig(): AdvisorComposedConfig {
+    return this.config
   }
 
   setEnabled(sessionId: string, enabled: boolean, sessionLength?: number): void {
@@ -132,11 +157,14 @@ describe('parseAdvisorCommand (parse of the text after /advisor)', () => {
     expect(parseAdvisorCommand('   ')).toEqual({ kind: 'toggle' })
   })
 
-  it('"on" / "off" / "status", tolerating separator whitespace', () => {
+  it('"on" / "off" / "status" / "config", tolerating separator whitespace', () => {
     expect(parseAdvisorCommand(' on')).toEqual({ kind: 'on' })
     expect(parseAdvisorCommand('on')).toEqual({ kind: 'on' })
     expect(parseAdvisorCommand('off ')).toEqual({ kind: 'off' })
     expect(parseAdvisorCommand(' status')).toEqual({ kind: 'status' })
+    expect(parseAdvisorCommand('config')).toEqual({ kind: 'config' })
+    expect(parseAdvisorCommand(' config')).toEqual({ kind: 'config' })
+    expect(parseAdvisorCommand('config ')).toEqual({ kind: 'config' })
   })
 
   it('anything else → usage (exact match, like dsh command names)', () => {
@@ -144,6 +172,8 @@ describe('parseAdvisorCommand (parse of the text after /advisor)', () => {
     expect(parseAdvisorCommand('on extra')).toEqual({ kind: 'usage' })
     expect(parseAdvisorCommand('status please')).toEqual({ kind: 'usage' })
     expect(parseAdvisorCommand('STATUS')).toEqual({ kind: 'usage' })
+    expect(parseAdvisorCommand('config extra')).toEqual({ kind: 'usage' })
+    expect(parseAdvisorCommand('CONFIG')).toEqual({ kind: 'usage' })
   })
 })
 
@@ -197,6 +227,25 @@ describe('registerAdvisorCommands (registration function, brief: test directly)'
     const disposer = registerAdvisorCommands(registry, new FakeController(baseStatus()))
     disposer()
     expect(disposed).toBe(true)
+  })
+
+  it('registry input.hint lists config (the TUI / row hint)', () => {
+    const registry = new FakeRegistry()
+    registerAdvisorCommands(registry, new FakeController(baseStatus()))
+    const hint = registry.definitions[0]!.input?.hint
+    expect(hint).toBe('[on|off|status|config]')
+    expect(hint).toContain('config')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// USAGE — the unknown-subcommand fallback lists config
+// ---------------------------------------------------------------------------
+
+describe('USAGE (unknown-subcommand fallback)', () => {
+  it('header and subcommand list include config', () => {
+    expect(USAGE).toContain('Usage: /advisor [on|off|status|config]')
+    expect(USAGE).toContain('  /advisor config   show the composed advisor config (settings readback)')
   })
 })
 
@@ -358,6 +407,140 @@ describe('advisorStatusText (the /advisor status surface, spec §6)', () => {
     expect(result.text).toContain('gpt-4o')
     expect(result.text).toContain('running')
     expect(result.text).toContain('1 pending')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Config surface (plan dsh-advisor-tui-client-n8 T2 — `/advisor config`)
+// ---------------------------------------------------------------------------
+
+describe('advisorConfigText (the /advisor config surface, composed session-less readback)', () => {
+  it('renders every field of an enabled config with a custom prompt', () => {
+    const text = advisorConfigText(baseConfig({
+      enabled: true,
+      provider: 'openai',
+      model: 'gpt-4o',
+      immuneTurns: 3,
+      maxDeltaMessages: 60,
+      systemPromptSet: true,
+      systemPromptSummary: 'You are a terse reviewer.',
+    }))
+    expect(text).toContain('Advisor config: enabled')
+    expect(text).toContain('Model: openai/gpt-4o')
+    expect(text).toContain('immuneTurns: 3')
+    expect(text).toContain('maxDeltaMessages: 60')
+    expect(text).toContain('systemPrompt: "You are a terse reviewer."')
+    expect(text).toContain('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)')
+  })
+
+  it('renders maxDeltaMessages 0 as unbounded', () => {
+    const text = advisorConfigText(baseConfig({ enabled: true, maxDeltaMessages: 0 }))
+    expect(text).toContain('maxDeltaMessages: unbounded')
+    expect(text).not.toContain('maxDeltaMessages: 0')
+  })
+
+  it('renders <default> when the system prompt is unset', () => {
+    const text = advisorConfigText(baseConfig({ enabled: true }))
+    expect(text).toContain('systemPrompt: <default>')
+    expect(text).not.toContain('systemPrompt: "')
+  })
+
+  it('renders disabled-with-reason when the gate blocks, without a Model line', () => {
+    const text = advisorConfigText(baseConfig({
+      disabledReason: 'enabled but provider and model are missing — configure both to enable the advisor',
+    }))
+    expect(text).toContain('Advisor config: disabled')
+    expect(text).toContain('Reason: enabled but provider and model are missing — configure both to enable the advisor')
+    expect(text).not.toContain('Model:')
+    expect(text).toContain('systemPrompt: <default>')
+  })
+
+  it('omits the Model line unless BOTH provider and model are present', () => {
+    const onlyProvider = advisorConfigText(baseConfig({ enabled: true, provider: 'openai' }))
+    expect(onlyProvider).not.toContain('Model:')
+    const onlyModel = advisorConfigText(baseConfig({ enabled: true, model: 'gpt-4o' }))
+    expect(onlyModel).not.toContain('Model:')
+  })
+
+  it('omits the Reason line when there is no gate reason', () => {
+    const text = advisorConfigText(baseConfig({ enabled: true }))
+    expect(text).not.toContain('Reason:')
+  })
+
+  it('always ends with the edit hint (both edit paths)', () => {
+    const text = advisorConfigText(baseConfig())
+    expect(text).toContain('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row)')
+    expect(text).toContain('or $DSH_HOME/settings.yaml (advisor: section)')
+  })
+})
+
+describe('summarizeSystemPrompt (first line, ≤ 80 chars, never a full dump)', () => {
+  it('empty prompt → empty summary', () => {
+    expect(summarizeSystemPrompt('')).toBe('')
+  })
+
+  it('takes only the first line of a multi-line prompt', () => {
+    expect(summarizeSystemPrompt('first line\nsecond line\nthird')).toBe('first line')
+  })
+
+  it('keeps a short first line unchanged', () => {
+    expect(summarizeSystemPrompt('You are a terse reviewer.')).toBe('You are a terse reviewer.')
+    // Exactly 80 chars — no ellipsis.
+    expect(summarizeSystemPrompt('x'.repeat(80))).toBe('x'.repeat(80))
+  })
+
+  it('truncates a first line longer than 80 chars to 80 chars with an ellipsis', () => {
+    const long = 'x'.repeat(100)
+    const summary = summarizeSystemPrompt(long)
+    expect(summary).toBe(`${'x'.repeat(79)}…`)
+    expect(summary.length).toBe(80)
+  })
+})
+
+describe('/advisor config subcommand (handler dispatch)', () => {
+  it('routes config to getConfig and returns the rendered text without touching setEnabled', () => {
+    const controller = new FakeController(
+      baseStatus({ enabled: true, provider: 'openai', model: 'gpt-4o' }),
+      baseConfig({ enabled: true, provider: 'openai', model: 'gpt-4o', systemPromptSet: true, systemPromptSummary: 'Be brief.' }),
+    )
+    const handler = registerAndGetHandler(controller)
+    const result = invoke(handler, 'config')
+    expect(result.kind).toBe('success')
+    if (result.kind === 'success') {
+      expect(result.text).toBe(advisorConfigText(controller.getConfig()))
+      expect(result.text).toContain('Advisor config: enabled')
+      expect(result.text).toContain('Be brief.')
+    }
+    expect(controller.setCalls).toHaveLength(0)
+  })
+
+  it('config render is session-less: a per-session override (status) never leaks into it', () => {
+    // The session override is OFF (status disabled) while the composed config
+    // is ON — the readback must report the composed value, not the session
+    // state (config-vs-status separation; web-card /api/advisor/get parity).
+    const controller = new FakeController(
+      baseStatus({ enabled: false }),
+      baseConfig({ enabled: true, provider: 'openai', model: 'gpt-4o' }),
+    )
+    const handler = registerAndGetHandler(controller)
+    const result = invoke(handler, 'config')
+    expect(result.kind).toBe('success')
+    if (result.kind === 'success') {
+      expect(result.text).toContain('Advisor config: enabled')
+      expect(result.text).toContain('Model: openai/gpt-4o')
+      expect(result.text).not.toContain('Advisor config: disabled')
+      expect(result.text).not.toContain('Runtime:')
+    }
+    expect(controller.setCalls).toHaveLength(0)
+  })
+
+  it('config with an unknown subcommand still renders USAGE', () => {
+    const controller = new FakeController(baseStatus())
+    const handler = registerAndGetHandler(controller)
+    const result = invoke(handler, 'config extra')
+    expect(result.kind).toBe('success')
+    if (result.kind === 'success') expect(result.text).toBe(USAGE)
+    expect(controller.setCalls).toHaveLength(0)
   })
 })
 

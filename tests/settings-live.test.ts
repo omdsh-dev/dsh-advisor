@@ -708,3 +708,77 @@ describe('settings live re-apply — attach ordering + detach fallback (qc1 S-1 
     expect(inject).toHaveBeenCalledTimes(4)
   })
 })
+
+// ---------------------------------------------------------------------------
+// 7. /advisor config — session-less composed readback (plan
+//    dsh-advisor-tui-client-n8 T2). The REAL wiring reads `safeResolved()`
+//    (the composed config with the hard gate applied), never the
+//    per-session effective config — a `/advisor off` session override must
+//    not misreport settings.yaml (web-card /api/advisor/get parity).
+// ---------------------------------------------------------------------------
+
+describe('/advisor config — session-less composed readback (T2)', () => {
+  it('reports the composed settings through the user layer and ignores the per-session override', async () => {
+    const { ctx } = await composeLiveHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model', systemPrompt: 'custom prompt\nsecond line' },
+      [],
+    )
+    const handler = await registerCommands(ctx)
+    const { agent } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent })
+    const { session } = makeSession('s1')
+
+    // A settings user-layer edit composes over the plugin-row base — the
+    // observation channel (AC-3) must show the composed value.
+    await ctx.settings.update(ADVISOR_SETTINGS_NAMESPACE, { model: 'other-model' })
+    const composed = invokeAdvisor(handler, 'config', session)
+    expect(composed.kind).toBe('success')
+    if (composed.kind === 'success') {
+      expect(composed.text).toContain('Advisor config: enabled')
+      expect(composed.text).toContain('Model: stub/other-model')
+      // The summary is the FIRST line of the prompt, not a full dump.
+      expect(composed.text).toContain('systemPrompt: "custom prompt"')
+      expect(composed.text).not.toContain('second line')
+    }
+
+    // Flip the per-session override OFF: the status surface follows the
+    // override (runtime state owned by status)...
+    const off = invokeAdvisor(handler, 'off', session)
+    expect(off.kind).toBe('success')
+    const status = invokeAdvisor(handler, 'status', session)
+    expect(status.kind).toBe('success')
+    if (status.kind === 'success') expect(status.text).toContain('Advisor: disabled')
+
+    // ...but the config readback stays session-less: still the composed
+    // enabled config with the composed provider/model — never the session
+    // state (config-vs-status separation).
+    const readback = invokeAdvisor(handler, 'config', session)
+    expect(readback.kind).toBe('success')
+    if (readback.kind === 'success') {
+      expect(readback.text).toContain('Advisor config: enabled')
+      expect(readback.text).toContain('Model: stub/other-model')
+      expect(readback.text).toContain('systemPrompt: "custom prompt"')
+    }
+  })
+
+  it('summarizes a long multi-line systemPrompt to the first line, ≤ 80 chars, never a full dump', async () => {
+    const longFirstLine = `line-one-${'x'.repeat(100)}` // 109 chars
+    const { ctx } = await composeLiveHarness(
+      {
+        enabled: true,
+        provider: 'stub',
+        model: 'stub-model',
+        systemPrompt: `${longFirstLine}\nsecond line must never appear`,
+      },
+      [],
+    )
+    const handler = await registerCommands(ctx)
+    const { session } = makeSession('s1')
+    const result = invokeAdvisor(handler, 'config', session)
+    expect(result.kind).toBe('success')
+    if (result.kind === 'success') {
+      expect(result.text).toContain(`systemPrompt: "${longFirstLine.slice(0, 79)}…"`)
+      expect(result.text).not.toContain('second line must never appear')
+    }
+  })
+})

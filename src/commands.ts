@@ -8,6 +8,7 @@
  * - `/advisor on`        — enable the advisor for this session;
  * - `/advisor off`       — disable the advisor for this session;
  * - `/advisor status`    — report the per-session status surface;
+ * - `/advisor config`    — show the composed advisor config (settings readback);
  * - anything else        — usage text.
  *
  * Toggle/on/off are **session-scoped and ephemeral**: they drive a per-session
@@ -40,6 +41,7 @@ export type AdvisorCommand =
   | { readonly kind: 'on' }
   | { readonly kind: 'off' }
   | { readonly kind: 'status' }
+  | { readonly kind: 'config' }
   | { readonly kind: 'usage' }
 
 /**
@@ -54,6 +56,7 @@ export function parseAdvisorCommand(rawInput: string): AdvisorCommand {
   if (argument === 'on') return { kind: 'on' }
   if (argument === 'off') return { kind: 'off' }
   if (argument === 'status') return { kind: 'status' }
+  if (argument === 'config') return { kind: 'config' }
   return { kind: 'usage' }
 }
 
@@ -148,6 +151,77 @@ export function advisorStatusText(status: AdvisorSessionStatus): string {
 }
 
 // ---------------------------------------------------------------------------
+// Config surface (`/advisor config` — plan dsh-advisor-tui-client-n8 T2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Composed-config surface consumed by `/advisor config`. **Session-less by
+ * design**: the wiring builds it from the same resolved config the web card
+ * reads (`/api/advisor/get` — schema defaults → plugin-row base → settings
+ * user layer, with the hard gate applied), so a per-session `/advisor off`
+ * override can never misreport settings.yaml. Runtime state stays owned by
+ * the status surface (`AdvisorSessionStatus`); config and status are separate.
+ */
+export interface AdvisorComposedConfig {
+  /** Config-level composed switch — NOT the per-session override. */
+  readonly enabled: boolean
+  /** Present iff the composed config is disabled by the explicit gate. */
+  readonly disabledReason?: string
+  /** Composed provider route (shown even while disabled — spec §5.2). */
+  readonly provider?: string
+  /** Composed model id (shown even while disabled — spec §5.2). */
+  readonly model?: string
+  /** Cooldown after a delivered interrupt (spec §6). */
+  readonly immuneTurns: number
+  /** Delta window; 0 = unbounded (KD-3). */
+  readonly maxDeltaMessages: number
+  /** True when the composed config carries a custom system prompt ("" = unset). */
+  readonly systemPromptSet: boolean
+  /**
+   * First line of the system prompt, truncated to ≤ 80 chars (empty when
+   * unset — the `<default>` marker is the renderer's job).
+   */
+  readonly systemPromptSummary: string
+}
+
+/**
+ * First line of a system prompt, truncated to ≤ 80 chars with a trailing
+ * ellipsis when the first line is longer — the TUI one-liner readback, never
+ * a full dump (AC-2). Empty when the prompt is unset ('' → the renderer shows
+ * `<default>`).
+ */
+export function summarizeSystemPrompt(prompt: string): string {
+  const firstLine = prompt.split('\n')[0] ?? ''
+  if (firstLine.length <= 80) return firstLine
+  return `${firstLine.slice(0, 79)}…`
+}
+
+/**
+ * Render the composed config surface. Mirrors the status renderer's minimal
+ * line style; the edit hint points at the two operator edit paths (profile
+ * patch layer + the shared `$DSH_HOME/settings.yaml` `advisor:` section the
+ * web card writes).
+ */
+export function advisorConfigText(config: AdvisorComposedConfig): string {
+  const lines: string[] = []
+  lines.push(config.enabled ? 'Advisor config: enabled' : 'Advisor config: disabled')
+  if (config.provider && config.model) {
+    lines.push(`Model: ${config.provider}/${config.model}`)
+  }
+  lines.push(`immuneTurns: ${config.immuneTurns}`)
+  lines.push(`maxDeltaMessages: ${config.maxDeltaMessages === 0 ? 'unbounded' : config.maxDeltaMessages}`)
+  lines.push(
+    config.systemPromptSummary === ''
+      ? 'systemPrompt: <default>'
+      : `systemPrompt: "${config.systemPromptSummary}"`,
+  )
+  if (config.disabledReason !== undefined) lines.push(`Reason: ${config.disabledReason}`)
+  lines.push('')
+  lines.push('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)')
+  return lines.join('\n')
+}
+
+// ---------------------------------------------------------------------------
 // Controller + registration
 // ---------------------------------------------------------------------------
 
@@ -167,6 +241,8 @@ export interface AdvisorCommandController {
   setEnabled(sessionId: string, enabled: boolean, sessionLength?: number): void
   /** Snapshot the per-session status surface. */
   getStatus(sessionId: string): AdvisorSessionStatus
+  /** Snapshot the composed config surface (session-less settings readback). */
+  getConfig(): AdvisorComposedConfig
 }
 
 /** Minimal command registry surface (satisfied by the dsh `CommandService`). */
@@ -176,11 +252,12 @@ export interface AdvisorCommandRegistry {
 
 /** Usage text for an unknown `/advisor` subcommand. */
 export const USAGE = [
-  'Usage: /advisor [on|off|status]',
+  'Usage: /advisor [on|off|status|config]',
   '  /advisor          toggle the advisor for this session',
   '  /advisor on       enable the advisor for this session',
   '  /advisor off      disable the advisor for this session',
   '  /advisor status   show per-session advisor status (state, model, runtime, pending, last activity)',
+  '  /advisor config   show the composed advisor config (settings readback)',
 ].join('\n')
 
 /**
@@ -235,6 +312,9 @@ function createAdvisorCommandHandler(controller: AdvisorCommandController) {
       }
       case 'status':
         return { kind: 'success', text: advisorStatusText(controller.getStatus(sessionId)) }
+      case 'config':
+        // Session-less readback: the composed config, never the session state.
+        return { kind: 'success', text: advisorConfigText(controller.getConfig()) }
       case 'usage':
         return { kind: 'success', text: USAGE }
     }
@@ -255,7 +335,7 @@ export function registerAdvisorCommands(
   return registry.register({
     name: 'advisor',
     description: 'Toggle, enable, disable, or inspect the per-session advisor',
-    input: { hint: '[on|off|status]' },
+    input: { hint: '[on|off|status|config]' },
     handler: createAdvisorCommandHandler(controller),
   })
 }
