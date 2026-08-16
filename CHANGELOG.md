@@ -2,6 +2,10 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.2.0] - 2026-08-16
+
+- 9984fd5 feat(advisor): dsh-tui client surface — tuiCommandTrees /advisor + /advisor config readback + docs (#53)
+
 ## [0.1.4] - 2026-08-15
 
 - 8ec21db fix: audit wave 2026-08-15 — docs align, backlog tests, card invalidation, fingerprint verdict (#51)
