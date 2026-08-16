@@ -155,13 +155,26 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // plugin-row throw contract is unchanged: construction-time reads below
   // (delivery/observer latches) still use the throwing `resolved()`, so a bad
   // entry rejects the plugin row at load (config.test.ts ⑤).
-  const safeFallback = (reason: string): ResolvedAdvisorConfig => ({
-    enabled: false,
-    systemPrompt: '',
-    immuneTurns: 3,
-    maxDeltaMessages: 60,
-    disabledReason: reason,
-  })
+  const safeFallback = (reason: string): ResolvedAdvisorConfig => {
+    // S1 (gateway readConfig parity): when the raw source is still readable,
+    // seed the scalar latches from it — an invalid user layer only drops the
+    // offending keys, so /advisor config (and /advisor status) never
+    // misreport immuneTurns / maxDeltaMessages / systemPrompt vs the web
+    // card's /api/advisor/get readback.
+    let raw: AdvisorConfig | undefined
+    try {
+      raw = sourceConfig()
+    } catch {
+      // unreadable source — fall back to the schema defaults below
+    }
+    return {
+      enabled: false,
+      systemPrompt: raw?.systemPrompt ?? '',
+      immuneTurns: raw?.immuneTurns ?? 3,
+      maxDeltaMessages: raw?.maxDeltaMessages ?? 60,
+      disabledReason: reason,
+    }
+  }
   const safeResolved = (): ResolvedAdvisorConfig => {
     try {
       return resolveAdvisorConfig(sourceConfig())

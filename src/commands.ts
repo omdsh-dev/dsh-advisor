@@ -191,7 +191,9 @@ export interface AdvisorComposedConfig {
  * `<default>`).
  */
 export function summarizeSystemPrompt(prompt: string): string {
-  const firstLine = prompt.split('\n')[0] ?? ''
+  // CRLF prompts (schema allows any string) leave a trailing \r on the first
+  // line — strip it as a line-ending artifact, not content (qc2 F-3).
+  const firstLine = (prompt.split('\n')[0] ?? '').replace(/\r$/, '')
   if (firstLine.length <= 80) return firstLine
   return `${firstLine.slice(0, 79)}…`
 }
@@ -210,10 +212,15 @@ export function advisorConfigText(config: AdvisorComposedConfig): string {
   }
   lines.push(`immuneTurns: ${config.immuneTurns}`)
   lines.push(`maxDeltaMessages: ${config.maxDeltaMessages === 0 ? 'unbounded' : config.maxDeltaMessages}`)
+  // The set-vs-default signal is systemPromptSet, NOT the summary: a custom
+  // prompt whose first line is empty (e.g. '\nsecond line') summarizes to ''
+  // but must still read as set, not <default> (qc2 F-3).
   lines.push(
-    config.systemPromptSummary === ''
+    !config.systemPromptSet
       ? 'systemPrompt: <default>'
-      : `systemPrompt: "${config.systemPromptSummary}"`,
+      : config.systemPromptSummary === ''
+        ? 'systemPrompt: "(empty first line)"'
+        : `systemPrompt: "${config.systemPromptSummary}"`,
   )
   if (config.disabledReason !== undefined) lines.push(`Reason: ${config.disabledReason}`)
   lines.push('')

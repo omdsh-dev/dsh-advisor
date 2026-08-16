@@ -109,6 +109,29 @@ describe('installTuiClient — registration (AC-1)', () => {
 
     expect(returned()).toBe(dispose)
   })
+
+  it('a duplicate-root registration is contained: debug log + no-op disposer, no throw (qc2 F-2)', () => {
+    // Another fiber already registered the /advisor root (multi-fiber
+    // duplication is observed in the host) — the duplicate-root throw must
+    // NOT propagate out of the inject child. Mirrors the sibling typert/
+    // settings optional-registration pattern.
+    const trees = new StubCommandTrees()
+    trees.register({ root: ADVISOR_TUI_ROOT, children: () => [] })
+    const debug = vi.fn()
+    const { ctx, injected, returned } = activateCtx({
+      tuiCommandTrees: trees,
+      logger: () => ({ debug }),
+    })
+
+    expect(() => installTuiClient(ctx)).not.toThrow()
+
+    expect(injected()).toBe(true)
+    // No second provider is recorded; the child returns a no-op disposer and
+    // the dedupe is logged at debug level.
+    expect(trees.providers).toHaveLength(1)
+    expect(returned()).toEqual(expect.any(Function))
+    expect(debug).toHaveBeenCalledWith('advisor tui tree already registered — no tree on this fiber (multi-fiber dedupe)')
+  })
 })
 
 // ---------------------------------------------------------------------------

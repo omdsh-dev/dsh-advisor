@@ -445,6 +445,15 @@ describe('advisorConfigText (the /advisor config surface, composed session-less 
     expect(text).not.toContain('systemPrompt: "')
   })
 
+  it('renders a non-default marker when the prompt is SET but its first line is empty (qc2 F-3)', () => {
+    // systemPrompt '\nsecond line' is set (schema allows any string) yet its
+    // summary is '' — the marker must follow systemPromptSet, NOT the empty
+    // summary, or a custom prompt would be misreported as the default.
+    const text = advisorConfigText(baseConfig({ enabled: true, systemPromptSet: true, systemPromptSummary: '' }))
+    expect(text).toContain('systemPrompt: "(empty first line)"')
+    expect(text).not.toContain('systemPrompt: <default>')
+  })
+
   it('renders disabled-with-reason when the gate blocks, without a Model line', () => {
     const text = advisorConfigText(baseConfig({
       disabledReason: 'enabled but provider and model are missing — configure both to enable the advisor',
@@ -481,6 +490,13 @@ describe('summarizeSystemPrompt (first line, ≤ 80 chars, never a full dump)', 
 
   it('takes only the first line of a multi-line prompt', () => {
     expect(summarizeSystemPrompt('first line\nsecond line\nthird')).toBe('first line')
+  })
+
+  it('strips a trailing CR from a CRLF first line (qc2 F-3)', () => {
+    expect(summarizeSystemPrompt('first line\r\nsecond line')).toBe('first line')
+    // The CR is a line-ending artifact, not content — an 80-char CRLF first
+    // line stays under the ellipsis threshold after stripping.
+    expect(summarizeSystemPrompt(`${'x'.repeat(80)}\r\nsecond`)).toBe('x'.repeat(80))
   })
 
   it('keeps a short first line unchanged', () => {

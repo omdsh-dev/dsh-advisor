@@ -131,6 +131,12 @@ export function installTuiClient(ctx: Context): void {
   ctx.inject(['tuiCommandTrees'], (tctx) => {
     const trees = (tctx as unknown as { tuiCommandTrees?: { register(p: TuiCommandTreeProvider): () => void } }).tuiCommandTrees
     if (trees === undefined) return
-    return trees.register(advisorTree)
+    try {
+      return trees.register(advisorTree)
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('already registered')) throw error
+      tctx.logger('advisor').debug('advisor tui tree already registered — no tree on this fiber (multi-fiber dedupe)')
+      return () => {}
+    }
   })
 }

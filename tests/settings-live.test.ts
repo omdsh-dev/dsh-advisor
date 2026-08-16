@@ -781,4 +781,31 @@ describe('/advisor config — session-less composed readback (T2)', () => {
       expect(result.text).not.toContain('second line must never appear')
     }
   })
+
+  it('an unknown-key user layer: /advisor config stays disabled-with-reason and seeds the scalars from the raw source (qc2 W-1 on the config path, F-1/F-4)', async () => {
+    // The exact qc2 W-1 scenario already pinned for /advisor status — now on
+    // the config readback: the user layer gains an unknown key the resolver
+    // rejects, but the raw source is still readable, so the fallback must
+    // seed immuneTurns/maxDeltaMessages/systemPrompt from it (web-card
+    // readConfig S1 parity) instead of the hardcoded 3/60/'' defaults.
+    const { ctx } = await composeLiveHarness(
+      { enabled: true, provider: 'stub', model: 'stub-model', immuneTurns: 5, maxDeltaMessages: 20, systemPrompt: 'keep me' },
+      [],
+    )
+    const handler = await registerCommands(ctx)
+    const { session } = makeSession('s1')
+
+    await ctx.settings.update(ADVISOR_SETTINGS_NAMESPACE, { bogus: 1 })
+
+    const result = invokeAdvisor(handler, 'config', session)
+    expect(result.kind).toBe('success')
+    if (result.kind === 'success') {
+      expect(result.text).toContain('Advisor config: disabled')
+      expect(result.text).toContain('unknown config key "bogus"')
+      // Seeded from the readable raw source — NOT the hardcoded defaults.
+      expect(result.text).toContain('immuneTurns: 5')
+      expect(result.text).toContain('maxDeltaMessages: 20')
+      expect(result.text).toContain('systemPrompt: "keep me"')
+    }
+  })
 })
