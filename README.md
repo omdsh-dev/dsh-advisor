@@ -57,6 +57,33 @@ dsh --profile web
 
 Tarball install and uninstall are covered in [docs/install.md](docs/install.md).
 
+### dsh-tui profile
+
+The advisor also runs in the terminal TUI client (`dsh --profile dsh-tui`),
+installed the same way as the web profile:
+
+```sh
+dsh plugin --profile dsh-tui add dsh-advisor   # <name> = your profile name
+# Local-dir variant (from a built checkout):
+dsh plugin --profile dsh-tui add .
+```
+
+**Settings** — the TUI has no settings page: the advisor settings compose
+from the same two persisted surfaces as the web profile — the dsh-tui profile
+patch layer `~/.dsh/profiles/dsh-tui/cordis.patch.yml` (plugin row) and the
+global `$DSH_HOME/settings.yaml` `advisor:` section, **shared across
+profiles** (the web Settings card writes to this same file). `/advisor
+config` prints the composed config as a read-only readback with edit hints.
+
+**Commands** — open the TUI `/` menu: `/advisor` (bare toggle) and
+`/advisor on|off|status|config` are listed with subcommand completion.
+Discovery requires a profile with the `dsh-tui-command-trees` row — the
+shipped dsh-tui bundle has it.
+
+**Limitation** — the web Settings card is web-only; there is no TUI settings
+page and no write command. Edit settings through the profile patch or
+`$DSH_HOME/settings.yaml`; `/advisor config` only reads them back.
+
 ## Config
 
 ![Advisor card on the dsh web Settings (插件配置) page](docs/screenshots/advisor-settings-card.webp)

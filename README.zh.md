@@ -43,6 +43,22 @@ dsh --profile web
 
 tarball 安装与卸载见 [docs/install.zh.md](docs/install.zh.md)。
 
+### dsh-tui profile
+
+advisor 也可以运行在终端 TUI 客户端（`dsh --profile dsh-tui`）中，安装方式与 web profile 相同：
+
+```sh
+dsh plugin --profile dsh-tui add dsh-advisor   # <name> = 你的 profile 名
+# 本地目录变体（在已构建的 checkout 中）：
+dsh plugin --profile dsh-tui add .
+```
+
+**设置** —— TUI 没有设置页：advisor 配置由与 web profile 相同的两个持久化配置面合成——dsh-tui profile 补丁层 `~/.dsh/profiles/dsh-tui/cordis.patch.yml`（插件行）与全局 `$DSH_HOME/settings.yaml` 的 `advisor:` 段，**跨 profile 共享**（web Settings 卡片也写入这个文件）。`/advisor config` 以只读回读方式打印合成后的配置，并附编辑提示。
+
+**指令** —— 打开 TUI 的 `/` 菜单：`/advisor`（裸 toggle）与 `/advisor on|off|status|config` 会列出并带子命令补全。指令发现要求 profile 带有 `dsh-tui-command-trees` 行——随附的 dsh-tui 组合包自带。
+
+**限制** —— web Settings 卡片仅限 web；TUI 没有设置页，也没有写指令。设置请通过 profile 补丁或 `$DSH_HOME/settings.yaml` 修改；`/advisor config` 只读回读。
+
 ## 配置
 
 ![dsh web Settings（"插件配置"）页上的 Advisor 卡片](docs/screenshots/advisor-settings-card.webp)
