@@ -62,6 +62,10 @@ T4 提取与 T6 投递之间的守门员：normalize（小写 + NFKC + 非字母
 `/advisor on | off | status | usage`（T7）：session-scoped 临时 override（不写持久配置），runtime gate 读取；`status` 展示运行态（running / paused / quota_exhausted / halted / disabled）、门禁 disabled 原因、resolved provider/model、pending 数与最近一次接受 note 的活动时间。命令经条件 `ctx.inject(['commands'], ...)` 子 fiber 注册，宿主无 commands 服务时静默不注册。
 *Avoid:* 把 `/advisor` 当持久配置写入入口（override 是临时的、会话级）
 
+### dsh-tui client seam（TUI client 面）
+dsh-TUI（终端前端，profile `dsh-tui`）的插件扩展面：DSH command registry 自动 merge 进 TUI `/` 菜单（dispatch 走 `commandService.execute`）；`ctx.tuiCommandTrees` 是唯一插件 UI seam —— 注册 `TuiCommandTreeProvider { root, descriptions?, children }` 提供 root 行本地化描述 + 子命令补全（结构类型本地声明，不引 `@deepseek-harness-tui/dsh-tui` peer）。TUI **无设置页**（上游 issue ccch1mneyyy/dsh-TUI#165）：插件 settings 面 = settings namespace + profile patch layer + 全局 `$DSH_HOME/settings.yaml`（跨 profile 共享，web 卡片写同一 user layer）+ 只读回读命令。**回读 parity 规则**：config 回读必须走与 web gateway 相同的组合配置解析（无 session），绝不读 per-session effective config（否则 `/advisor off` 会让回读误报持久配置）。
+*Avoid:* 用 per-session effective config 渲染配置回读；给 TUI 面引入宿主 peer 依赖；把 TUI 当有设置页的前端设计
+
 ## 已决歧义
 
 - `nit` / `concern` / `blocker` 三档 severity 是**闭集**：缺失 / 非法值按 `nit`（最小侵入默认），不要在代码里新增第四档。

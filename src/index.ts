@@ -23,6 +23,9 @@
  * (registered through the conditional `ctx.inject(['commands'], ...)` child)
  * drive a per-session override consulted by the runtime gate — the commands
  * start/stop per-session runtimes without touching the persisted config.
+ * T2-tui (plan dsh-advisor-tui-client-n8): `/advisor config` — a session-less
+ * readback of the composed `advisor` namespace (same resolved config the web
+ * card reads), never the per-session override.
  * Settings (plan dsh-advisor-settings-n2): the plugin-row config is the
  * composition base of the `advisor` settings namespace (`src/settings.ts`),
  * read live through the bridge source; committed settings edits re-apply
@@ -55,8 +58,9 @@ import { AdvisorRuntime } from './advisor-runtime.js'
 import type { AdviceNote } from './advisor-runtime.js'
 import { AdvisorDelivery } from './delivery.js'
 import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts.js'
-import { AdvisorSessionOverrides, registerAdvisorCommands } from './commands.js'
+import { AdvisorSessionOverrides, registerAdvisorCommands, summarizeSystemPrompt } from './commands.js'
 import type { AdvisorCommandController } from './commands.js'
+import { installTuiClient } from './tui.js'
 
 export const name = 'dsh-advisor'
 
@@ -151,13 +155,26 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // plugin-row throw contract is unchanged: construction-time reads below
   // (delivery/observer latches) still use the throwing `resolved()`, so a bad
   // entry rejects the plugin row at load (config.test.ts ⑤).
-  const safeFallback = (reason: string): ResolvedAdvisorConfig => ({
-    enabled: false,
-    systemPrompt: '',
-    immuneTurns: 3,
-    maxDeltaMessages: 60,
-    disabledReason: reason,
-  })
+  const safeFallback = (reason: string): ResolvedAdvisorConfig => {
+    // S1 (gateway readConfig parity): when the raw source is still readable,
+    // seed the scalar latches from it — an invalid user layer only drops the
+    // offending keys, so /advisor config (and /advisor status) never
+    // misreport immuneTurns / maxDeltaMessages / systemPrompt vs the web
+    // card's /api/advisor/get readback.
+    let raw: AdvisorConfig | undefined
+    try {
+      raw = sourceConfig()
+    } catch {
+      // unreadable source — fall back to the schema defaults below
+    }
+    return {
+      enabled: false,
+      systemPrompt: raw?.systemPrompt ?? '',
+      immuneTurns: raw?.immuneTurns ?? 3,
+      maxDeltaMessages: raw?.maxDeltaMessages ?? 60,
+      disabledReason: reason,
+    }
+  }
   const safeResolved = (): ResolvedAdvisorConfig => {
     try {
       return resolveAdvisorConfig(sourceConfig())
@@ -479,6 +496,30 @@ export function apply(ctx: Context, config: AdvisorConfig) {
         lastActivityAt: runtime?.lastActivity,
       }
     },
+    // T2 (plan dsh-advisor-tui-client-n8): the composed-config readback.
+    // Session-less BY DESIGN — reads `safeResolved()` (schema defaults →
+    // plugin-row base → settings user layer, with the hard gate applied),
+    // the SAME bridge source the web card reads through `resolveAdvisorConfig`
+    // (`/api/advisor/get` has no session either). NEVER `effectiveConfig`/
+    // `safeEffective` here: those bake the per-session `/advisor` override
+    // into `enabled`, and a `/advisor off` session toggle must never make
+    // the settings readback misreport settings.yaml. Runtime state stays
+    // owned by `status`; this read reports config only. Every field comes
+    // from that one resolved value; the systemPrompt summary is the first
+    // line (≤ 80 chars) of `resolved.systemPrompt`, '' → unset.
+    getConfig() {
+      const resolved = safeResolved()
+      return {
+        enabled: resolved.enabled,
+        ...(resolved.disabledReason === undefined ? {} : { disabledReason: resolved.disabledReason }),
+        provider: resolved.provider,
+        model: resolved.model,
+        immuneTurns: resolved.immuneTurns,
+        maxDeltaMessages: resolved.maxDeltaMessages,
+        systemPromptSet: resolved.systemPrompt !== '',
+        systemPromptSummary: summarizeSystemPrompt(resolved.systemPrompt),
+      }
+    },
   }
 
   // T7: the command child activates ONLY when a command registry is composed
@@ -487,4 +528,13 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   ctx.inject(['commands'], (commandCtx) => {
     registerAdvisorCommands(commandCtx.commands, controller)
   })
+
+  // T1 (plan dsh-advisor-tui-client-n8): the dsh-tui client seam — the
+  // `tuiCommandTrees` /advisor provider (zh/en `/`-menu description +
+  // `on|off|status|config` completion). Runs AFTER the single-reviewer
+  // claim, so the tree registers at most once per process (duplicate-root
+  // registration would throw in the host registry). The inject is
+  // conditional like `commands`/`settings`/`typert`: profiles without the
+  // `dsh-tui-command-trees` row keep working (clean no-op).
+  installTuiClient(ctx)
 }

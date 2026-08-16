@@ -78,10 +78,10 @@ schema 默认值 → 插件行 config（base）→ settings user layer（web 卡
 ### 评审运行策略（`src/advisor-runtime.ts`）
 
 - 每个会话一个 `AdvisorRuntime`；delta 进有界 FIFO 队列（默认 32，满时丢最新并记日志），串行异步 drain —— **主循环永不被 park**；
-- 每次 `llm.stream` 调用：`{ provider, model, system, messages: [user delta], maxTokens: 5120 }`（5120 = 用户指示的 256 → 5120 的 20 倍预算；`purpose` 不设置，KD-5）。`reasoningEffort: 'off'` 仅在所配置模型的 adapter 声明该档位时发送（`src/advisor-runtime.ts` `resolveModelInfo` 能力查询）；
+- 每次 `llm.stream` 调用：`{ provider, model, system, messages: [user delta], maxTokens: 768 }`（768 = 用户指示的 256 → 5120 → 768 超驰链终值：thinking-off 为默认后无需 reasoning 余量；`purpose` 不设置，KD-5）。`reasoningEffort: 'off'` 仅在所配置模型的 adapter 声明该档位时发送（`src/advisor-runtime.ts` `resolveModelInfo` 能力查询）；
 - 每次调用有 60s 整调用 deadline（超时按 transient 处理，KD-5 retry → drop）；
 - **failure policy（KD-5）**：transient → 1 次重试（1s backoff）→ drop；连续 3 次 drop → 冲刷积压 backlog（不 stall）；quota/rate-limit → `quota_exhausted` 暂停（批次保留，**无自动恢复定时器** —— `/advisor on` 手动恢复）；permanent（`invalid_request_error` / model-not-found / "is not supported when" / does not exist）→ `halted`（原地终止；`/advisor on` 为该会话全新重建）；
-- **KD-2 抽取**：解析回复中第一个平衡 JSON 帧（容忍 prose/fence）为 `{note, severity}`；`note` 非空否则 drop+log；`severity` 缺失/非法默认 `nit`；不做解析重试；note 文本有界（1000 字符，`ADVISOR_NOTE_MAX_CHARS`）；
+- **KD-2 抽取**：解析回复中第一个平衡 JSON 帧（容忍 prose/fence）为 `{note, severity}`；`note` 非空否则 drop+log；`severity` 缺失/非法默认 `nit`；不做解析重试；note 文本有界（768 字符，`ADVISOR_NOTE_MAX_CHARS`）；
 - **T5 emission guard**（`src/emission-guard.ts`）：normalize（等价拼写归一到同一身份）、content-free 短语抑制（stop / done / complete / no issue continue / lgtm / nothing to add）、跨 update 去重（允许 nit → concern → blocker 升级）、每次 update 至多一条 note、FIFO 有界去重历史（默认 4096）；compaction / surface 重写清空历史与 latch。
 
 ### 双模式触发与自审排除（`src/transcript.ts`）

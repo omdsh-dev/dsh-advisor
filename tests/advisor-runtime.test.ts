@@ -5,7 +5,7 @@
  * Contract under test:
  * - `AdvisorRuntime` (per-session): `enqueue(delta)` queues a rendered transcript
  *   delta and asynchronously drains it — one `llm.stream` call per delta with
- *   `{ provider, model, system, messages: [user delta], maxTokens: 5120 }` and
+ *   `{ provider, model, system, messages: [user delta], maxTokens: 768 }` and
  *   `purpose` left UNSET (KD-5). Extracted `{note, severity}` is handed to the
  *   `onNote` hook (the T5 emission guard wraps it).
  * - JSON-frame extraction (KD-2): first balanced `{…}` parsed, tolerant of
@@ -449,7 +449,7 @@ describe('AdvisorRuntime — minimal request shape (AC-1 closed whitelist)', () 
     expect(options.messages[0]!.role).toBe('user')
     expect(options.system).toBe(TEST_SYSTEM_PROMPT)
     // KD-6 frozen value (= ADVISOR_MAX_TOKENS)
-    expect(options.maxTokens).toBe(5120)
+    expect(options.maxTokens).toBe(768)
   })
 
   it('sends the same minimal request without reasoningEffort when the model has no reasoning capability', async () => {
@@ -472,7 +472,7 @@ describe('AdvisorRuntime — minimal request shape (AC-1 closed whitelist)', () 
     expect(options.messages[0]!.role).toBe('user')
     expect(options.system).toBe(TEST_SYSTEM_PROMPT)
     // KD-6 frozen value (= ADVISOR_MAX_TOKENS)
-    expect(options.maxTokens).toBe(5120)
+    expect(options.maxTokens).toBe(768)
   })
 })
 

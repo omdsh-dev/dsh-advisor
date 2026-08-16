@@ -74,7 +74,7 @@ dsh --profile web                  # 重启 dsh 会话使宿主半与客户端�
 ### 4. 运行时行为验证（真实模型调用）
 
 1. 配置 enabled + provider/model，发起一次会话并完成若干 stepped 主 turn。
-2. **预期**：每个可评审 turn/end 之后日志出现一次 advisor 模型调用（`ctx.llm.stream`，`maxTokens 5120`）；抽取出的 note 以 `[advisor:{severity}] <note>` 出现在会话流（nit → 非唤醒注入；concern/blocker → steer 唤醒）；advisor 自己的消息不进入后续 advisor delta（自审排除）。
+2. **预期**：每个可评审 turn/end 之后日志出现一次 advisor 模型调用（`ctx.llm.stream`，`maxTokens 768`）；抽取出的 note 以 `[advisor:{severity}] <note>` 出现在会话流（nit → 非唤醒注入；concern/blocker → steer 唤醒）；advisor 自己的消息不进入后续 advisor delta（自审排除）。
 3. **immuneTurns 冷却**：连续产生 concern/blocker 时，前一条实际 steer 后接下来的 `immuneTurns` 个主 turn 内，打断性 note 降级为 inject。
 4. **failure policy 抽查**：配置不可用的模型（如不存在/无效凭据）→ 日志出现 transient drop（或 permanent halt）；halted 后该会话 advisor 停止，`/advisor on` 重建。
 

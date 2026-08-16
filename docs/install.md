@@ -47,7 +47,7 @@ dsh plugin --profile web add .   # <name> = your profile name
 goes through pnpm's `link:` dependency, for which pnpm does **not** run
 prepare/postinstall — build the bundle with `pnpm install` (or `pnpm build`)
 before adding. No host patching is involved: the plugin runs entirely from its
-plugin config row (see [Web Settings exposure](#4-web-settings-exposure)).
+plugin config row (see [Web Settings exposure](#5-web-settings-exposure)).
 
 ## 3. Tarball install
 
@@ -62,7 +62,43 @@ A tarball ships the built artifacts (`lib/` + `cordis.patch.yml`), so no
 are declared as peerDependencies and resolved by the dsh installation's flat
 profile module fallback — no extra install step.
 
-## 4. Web Settings exposure
+## 4. dsh-tui profile install
+
+The advisor also installs into the terminal TUI profile (`dsh --profile
+dsh-tui`) with the same commands as the web profile:
+
+```sh
+dsh plugin --profile dsh-tui add dsh-advisor   # <name> = your profile name
+# Pin an exact version for reproducibility:
+# dsh plugin --profile dsh-tui add dsh-advisor@0.1.0
+# Local-dir variant (from a built checkout):
+dsh plugin --profile dsh-tui add .
+```
+
+The bundle inserts the same `- insert: id: advisor` row into the dsh-tui
+profile's patch layer (`~/.dsh/profiles/dsh-tui/cordis.patch.yml`). The
+`advisor` settings namespace is shared across profiles via the global
+`$DSH_HOME/settings.yaml` `advisor:` section (the web Settings card writes
+there too) — the TUI has no settings page, so `/advisor config` is the
+readback (read-only, with edit hints), and `/advisor` / `on|off|status|config`
+surface in the TUI `/` menu with subcommand completion (requires the
+`dsh-tui-command-trees` row, shipped in the dsh-tui bundle).
+
+Verify:
+
+```sh
+dsh --profile dsh-tui --dump-config   # shows a "# == dsh-advisor" layer with the advisor row
+dsh --profile dsh-tui
+```
+
+Uninstall:
+
+```sh
+dsh plugin --profile dsh-tui remove dsh-advisor
+dsh --profile dsh-tui --dump-config   # confirm the dsh-advisor layer is gone
+```
+
+## 5. Web Settings exposure
 
 The dsh web Settings page's **"插件配置" (Plugin Configuration)** page renders
 one card per plugin that registers into the `settings.plugin.item` card slot.
@@ -84,7 +120,7 @@ mechanism the dsh `goals` service uses), and the card calls them via
 exposed-namespace check, so saving works on any dsh build that ships the
 GatewayService channel. No host patching is applied or required.
 
-## 5. Verify
+## 6. Verify
 
 ```sh
 dsh --profile web --dump-config   # shows a "# == dsh-advisor" layer with the advisor row
@@ -96,7 +132,7 @@ card; it reads and writes the `advisor` namespace live through
 `/api/advisor/get` + `/api/advisor/set` — saving applies to new sessions
 immediately.
 
-## 6. Uninstall
+## 7. Uninstall
 
 ```sh
 dsh plugin --profile web remove dsh-advisor
