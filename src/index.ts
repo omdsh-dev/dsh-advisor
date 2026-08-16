@@ -57,6 +57,7 @@ import { AdvisorDelivery } from './delivery.js'
 import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts.js'
 import { AdvisorSessionOverrides, registerAdvisorCommands } from './commands.js'
 import type { AdvisorCommandController } from './commands.js'
+import { installTuiClient } from './tui.js'
 
 export const name = 'dsh-advisor'
 
@@ -487,4 +488,13 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   ctx.inject(['commands'], (commandCtx) => {
     registerAdvisorCommands(commandCtx.commands, controller)
   })
+
+  // T1 (plan dsh-advisor-tui-client-n8): the dsh-tui client seam — the
+  // `tuiCommandTrees` /advisor provider (zh/en `/`-menu description +
+  // `on|off|status|config` completion). Runs AFTER the single-reviewer
+  // claim, so the tree registers at most once per process (duplicate-root
+  // registration would throw in the host registry). The inject is
+  // conditional like `commands`/`settings`/`typert`: profiles without the
+  // `dsh-tui-command-trees` row keep working (clean no-op).
+  installTuiClient(ctx)
 }
