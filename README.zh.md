@@ -89,11 +89,9 @@ dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-adv
 
 插件以**纯挂载**方式安装：bundle 插入 + 客户端卡片（web Settings "插件配置"）+ 自有 gateway 通道（`/api/advisor/get|set`，由宿主 typertGateway 认领——与 dsh 内建 `goals` 服务同一机制，不受 settings 暴露白名单门控）+ `/advisor` 指令——无 dsh 补丁、无 postinstall 步骤，dsh 升级永不需重打。
 
-## 开发
+## 限制与路线图
 
-**工作原理**——插件订阅 `session/event`，把主 transcript 的增量 markdown delta（排除 advisor 自己的消息）渲染出来并放入按会话的 runtime 队列：标准 stepped 会话在每个 stepped `turn/end` 之后；agentic/harness 会话（从不发出 `turn/end`）则在每个完成的 agent 回复轮次（未评审的 assistant 增量之后有新的人类输入到达，含 inbox 拼接输入）。runtime 通过 `ctx.llm.stream` 调用单独配置的模型——关闭推理（`reasoningEffort: 'off'`，仅当所配置模型的 adapter 声明该档位时才发送；deepseek 模型声明，其他模型会自动省略该选项）并以 **5120 tokens** 作为输出上限（用户指示的 256 → 5120 的 20 倍超驰）；抽取出的 note 有界（1000 字符），notice summary 有界（120 字符），因此提高的预算不会变成注入主会话的无界内容。runtime 从 JSON-framed 回复中提取一条 `{note, severity}`，经过 emission guard 门禁（normalize / dedupe / content-free 抑制 / 每次更新至多一条 note），然后路由：nit → inject，concern/blocker → steer。`[advisor:{severity}]` 前缀是主模型获得的关于如何对待它的唯一线索——主 system prompt 从不提及 advisory。compaction 与 surface 重写会重置 observer、emission guard 与 immuneTurns latch；drain 完全异步且 backlog 有界，因此失败或 quota 耗尽的 advisor 只能丢弃自己的 backlog——永远不会卡住主循环。
-
-**限制与路线图**——MVP 有意放弃与 omp 的完整对等。已接受的差距（在 harness 迭代路线图中跟踪）：
+MVP 有意放弃与 omp 的完整对等。已接受的差距（在 harness 迭代路线图中跟踪）：
 
 - **每个会话一个 advisor**——无并行 advisor roster 或 WATCHDOG 式文件发现（下一迭代）。
 - **无 advisor tools**——评审者只是一个独立的模型调用；它无法自行核验主张（下下迭代）。
@@ -103,16 +101,6 @@ dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-adv
 - **不隔离不安全的 advisor 输出**——行为异常的 note 可能携带指令性文本；JSON frame + 校验 + advisory-only 框架是仅有的缓解手段，且 note 会原样送达主 transcript（路线图）。
 - **无 `syncBacklog` 追赶等待**——落后很多的 advisor 不会等待主循环；其 backlog 有界且会被丢弃，因此 note 可能在下一次主 turn 开始之后才到达（路线图：context-maintenance batch）。
 - **advisor 上下文有界**——长会话的完整重放会被截断（`maxDeltaMessages`），因此 compaction 后 advisor 可能丢失早期上下文（路线图：下下迭代）。
-
-**构建**——组合包在安装时自行构建：`package.json` 声明了 `"prepare": "pnpm build"`（与 `prepack` 相同的构建），因此任何克隆都立即可构建。私有的 `@deepseek-ai/dsh-*` 运行时依赖**只声明为 peerDependencies**（绝不进 `dependencies` / `devDependencies`）；开发期 `pnpm-workspace.yaml` 设了 `autoInstallPeers: true` + `nodeLinker: hoisted`（pnpm 11+ 忽略 `.npmrc` 中的非认证设置），pnpm 用你用户级 `~/.npmrc` 里的认证令牌从 npm registry 解析真实的 `@deepseek-ai/*` 包——没有本地链接农场，依赖解析也不需要 `DSH_HOME` / `DSH_SOURCE_DIR` 前置条件。内置 `cordis` 框架声明为 scoped peer `@deepseek-ai/cordis`（绝不用裸名 `cordis`）；针对 prerelease 发布的 peer 范围必须带精确的发布 tag——`@deepseek-ai/dsh-*` peers 钉在 `^0.1.0-rc.6`，因为按 node-semver prerelease-tuple 规则，`^4.0.0-rc.7` 这样的范围永远匹配不到 `4.0.1-rc.1` 的发布。没有 `postinstall` 步骤：tarball 安装已带构建产物，完全跳过构建。`prepack` 与 `prepare` 都会运行 `pnpm build`，因此 `pnpm pack` 会构建两次——这是为保持 git 安装可构建而接受的取舍。
-
-```sh
-pnpm install              # registry deps，含 @deepseek-ai/* peers（autoInstallPeers + ~/.npmrc 认证）
-pnpm test                 # vitest（unit + 组合集成循环）
-pnpm typecheck            # tsc --noEmit (node) + tsc -p tsconfig.client.json --noEmit + tsc -p tsconfig.spec.json --noEmit
-pnpm build                # tsc -p tsconfig.build.json emit to lib/ + node scripts/build-client.mjs（client bundle）
-pnpm pack                 # build + produce dsh-advisor-0.0.1.tgz
-```
 
 ## 文档
 

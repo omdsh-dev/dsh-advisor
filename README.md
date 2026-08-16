@@ -89,11 +89,9 @@ In a **dsh-tui** profile, `/advisor config` additionally reads back the composed
 
 The plugin installs as a **pure mount**: bundle insert + client card (web Settings 插件配置) + its own gateway channel (`/api/advisor/get|set`, claimed by the host's typertGateway — the same mechanism the dsh `goals` service uses, not gated by the settings exposure allowlist) + the `/advisor` commands — no dsh patches, no postinstall step, and dsh upgrades never require re-patching.
 
-## Development
+## Limitations & roadmap
 
-**How it works** — the plugin subscribes to `session/event` and renders an incremental markdown delta of the primary transcript (own advisor messages excluded), queued on a per-session runtime: after each stepped `turn/end` in standard stepped sessions, and — in agentic/harness sessions that never emit `turn/end` — at each completed agent reply round (when a new human input arrives after an unreviewed assistant increment, inbox-spliced input included). The runtime calls the separately configured model via `ctx.llm.stream` — with reasoning off (`reasoningEffort: 'off'`, sent only when the configured model's adapter declares that effort; deepseek models do, other models get the option omitted automatically) and a **5120-token** output cap (a user-directed 20× supersession of the original 256); extracted notes are bounded (1000 chars) and the notice summary to 120 chars, so the raised budget cannot translate into an unbounded injection into the primary session. It extracts one `{note, severity}` from the JSON-framed reply, gates it through an emission guard (normalize / dedupe / content-free suppression / one-note-per-update), and routes it: nit → inject, concern/blocker → steer. The `[advisor:{severity}]` prefix is the only cue the primary model gets about how to treat it — the primary system prompt never mentions advisories. Compaction and surface rewrites reset the observer, the emission guard, and the immuneTurns latch; the drain is fully async with a bounded backlog, so a failing or quota'd advisor can only drop its own backlog — never park the primary loop.
-
-**Limitations & roadmap** — the MVP deliberately drops full omp parity. Accepted gaps (tracked in the harness iteration roadmap):
+The MVP deliberately drops full omp parity. Accepted gaps (tracked in the harness iteration roadmap):
 
 - **Single advisor per session** — no parallel advisor roster or WATCHDOG-style file discovery (next iteration).
 - **No advisor tools** — the reviewer is an independent model call only; it cannot verify claims itself (next-next iteration).
@@ -103,16 +101,6 @@ The plugin installs as a **pure mount**: bundle insert + client card (web Settin
 - **No quarantine of unsafe advisor output** — a misbehaving note can carry directive text; the JSON frame + validation + advisory-only framing are the only mitigation, and the note is delivered as-is (roadmap).
 - **No `syncBacklog` catch-up wait** — a far-behind advisor does not wait for the primary loop; its backlog is bounded and dropped, so notes may arrive after the next primary turn started (roadmap: context-maintenance batch).
 - **Bounded advisor context** — long-session full replays are truncated (`maxDeltaMessages`), so the advisor may lose early context after compaction (roadmap: next-next iteration).
-
-**Build** — the bundle builds itself on install: `package.json` declares `"prepare": "pnpm build"` (the same build `prepack` runs), so any clone is immediately buildable. The private `@deepseek-ai/dsh-*` runtime dependencies are **peerDependencies only** (never `dependencies` / `devDependencies`); at dev time `pnpm-workspace.yaml` sets `autoInstallPeers: true` + `nodeLinker: hoisted` (pnpm 11+ ignores non-auth settings in `.npmrc`), so pnpm resolves the real `@deepseek-ai/*` packages from the npm registry using the auth token in your user-level `~/.npmrc` — there is no local link-farm and no `DSH_HOME` / `DSH_SOURCE_DIR` prerequisite for dependency resolution. The in-box `cordis` framework is declared as the scoped peer `@deepseek-ai/cordis` (never bare `cordis`), and prerelease peer ranges must carry the exact publish tag — the `@deepseek-ai/dsh-*` peers are pinned `^0.1.0-rc.6`, since per the node-semver prerelease-tuple rule a range like `^4.0.0-rc.7` never matches a `4.0.1-rc.1` publish. There is no `postinstall` step: already-built tarball installs skip the build entirely. `prepack` and `prepare` both run `pnpm build`, so `pnpm pack` builds twice — the documented tradeoff that keeps git-install builds working.
-
-```sh
-pnpm install              # registry deps incl. the @deepseek-ai/* peers (autoInstallPeers + ~/.npmrc auth)
-pnpm test                 # vitest (unit + the composed integration loop)
-pnpm typecheck            # tsc --noEmit (node) + tsc -p tsconfig.client.json --noEmit + tsc -p tsconfig.spec.json --noEmit
-pnpm build                # tsc -p tsconfig.build.json emit to lib/ + node scripts/build-client.mjs (client bundle)
-pnpm pack                 # build + produce dsh-advisor-0.0.1.tgz
-```
 
 ## Documentation
 

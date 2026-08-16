@@ -10,7 +10,7 @@
  * - a FIFO queue of pending transcript deltas (bounded — spec §6 "bounded
  *   backlog"; drop-newest when full);
  * - a serialized async drain loop: one `llm.stream` call per delta with
- *   `{ provider, model, system, messages: [user delta], maxTokens: 5120 }` and
+ *   `{ provider, model, system, messages: [user delta], maxTokens: 768 }` and
  *   `purpose` left UNSET (KD-5 — an advisor call is an ordinary conversation
  *   request);
  * - a call-level deadline on every `llm.stream` call (dsh-timeout `deadline`,
@@ -128,28 +128,30 @@ export interface AdvisorRuntimeOptions {
 }
 
 /**
- * n4 user direction: the advisor call runs with a 20x token budget
- * (256 -> 5120) so even a reasoning-heavy reply cannot starve the JSON frame.
+ * User-directed token budget for one advisor call (256 → 5120 → 768).
  * Exported so the test suites assert the pinned value instead of a magic
  * literal.
  *
- * Supersession note (qc2 S-2 / qc1 S-2 / qc3 F-2): the frozen spec §8.2
- * (KD-2) pins `maxTokens: 256` ("so a runaway reply cannot blow the budget").
- * This 5120 value is the USER-DIRECTED supersession of that pin — a 20x
- * worst-case per-call ceiling, adopted together with `reasoningEffort: 'off'`
- * (capability-gated, see `resolveReasoningEffort`) so the raised budget goes
- * to the JSON frame rather than reasoning output. The looser runaway-reply
- * guard is re-bounded downstream: `extractAdviceNote` caps the note at
+ * Supersession chain: the frozen spec §8.2 (KD-2) pins `maxTokens: 256` ("so
+ * a runaway reply cannot blow the budget"); the 5120 value (a 20x worst-case
+ * per-call ceiling) was a USER-DIRECTED supersession adopted together with
+ * `reasoningEffort: 'off'` when reasoning-heavy replies could starve the JSON
+ * frame. With thinking-off now the capability-gated default (see
+ * `resolveReasoningEffort`), the reasoning headroom is unnecessary: this 768
+ * value is the latest USER-DIRECTED supersession — a modest budget that fits
+ * one `ADVISOR_NOTE_MAX_CHARS` note plus the JSON frame. The runaway-reply
+ * guard stays re-bounded downstream: `extractAdviceNote` caps the note at
  * `ADVISOR_NOTE_MAX_CHARS` and `buildAdvisorMessage` bounds the notice
  * summary via `boundContextSummary`.
  */
-export const ADVISOR_MAX_TOKENS = 5_120
+export const ADVISOR_MAX_TOKENS = 768
 /**
  * One extracted note's length cap (qc3 F-2 / qc2 S-1): a verbose/rogue advisor
- * reply with the 20x token budget must not inject an unbounded user-role
- * message into the primary session. Truncated with a '…' marker.
+ * reply must not inject an unbounded user-role message into the primary
+ * session (the token budget is now matched to this cap — 768). Truncated with
+ * a '…' marker.
  */
-export const ADVISOR_NOTE_MAX_CHARS = 1_000
+export const ADVISOR_NOTE_MAX_CHARS = 768
 const DEFAULT_RETRY_BACKOFF_MS = 1_000
 const DEFAULT_MAX_QUEUED = 32
 /** Whole-call deadline for one `llm.stream` (qc2 W-4 / qc3 W-1); see `callTimeoutMs`. */
@@ -627,7 +629,7 @@ export class AdvisorRuntime {
     // no retry on parse failures — the frame must simply be absent/valid).
     const note = extractAdviceNote(text)
     if (note === undefined) {
-      this.logger.debug('advisor: reply yielded no note — dropped (KD-2)')
+      this.logger.debug('advisor: reply yielded no note — dropped (no parseable non-empty JSON note in the reply)')
       return { kind: 'no-note' }
     }
     try {
@@ -680,8 +682,8 @@ export class AdvisorRuntime {
       // silently killing the advisor for non-deepseek models — pre-n4 these
       // worked because no effort was sent).
       ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-      // n4 user direction: amplify the token budget 20x (256 -> 5120) so even a
-      // reasoning-heavy reply cannot starve the JSON frame.
+      // user-directed budget (256 -> 5120 -> 768): with thinking-off the
+      // default, a modest cap that fits one bounded note plus the JSON frame.
       maxTokens: ADVISOR_MAX_TOKENS,
       signal,
       // KD-5: `purpose` is a closed union ('compaction' | 'session-title'); an
