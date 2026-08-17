@@ -61,6 +61,7 @@ import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts.js'
 import { AdvisorSessionOverrides, registerAdvisorCommands, summarizeSystemPrompt } from './commands.js'
 import type { AdvisorCommandController } from './commands.js'
 import { installTuiClient } from './tui.js'
+import { installTuiSettingsSection } from './tui-settings.js'
 
 export const name = 'dsh-advisor'
 
@@ -537,4 +538,15 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // conditional like `commands`/`settings`/`typert`: profiles without the
   // `dsh-tui-command-trees` row keep working (clean no-op).
   installTuiClient(ctx)
+
+  // T1 (plan dsh-advisor-tui-settings-n9): the dsh-tui settings-section seam —
+  // the `tuiSettingsSections` "Advisor" section (editable `/settings` screen
+  // fields: enabled/provider/model/immuneTurns/maxDeltaMessages). Runs AFTER
+  // the single-reviewer claim like `installTuiClient`, so the section
+  // registers at most once per process (duplicate-ns registration is
+  // contained inside the module). The inject is conditional: profiles without
+  // the `dsh-tui-settings-sections` row (dsh-tui < v0.8.0, non-TUI hosts)
+  // keep working (clean no-op). Order vs `installTuiClient` is irrelevant —
+  // independent services; kept adjacent for cohesion.
+  installTuiSettingsSection(ctx)
 }
