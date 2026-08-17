@@ -32,7 +32,7 @@ related_components:
 
 ## Context
 
-The dsh web settings page has a "插件配置" (plugin config) section: a `settings.section` entry with id `plugins`, registered by the @deepseek-ai/dsh-client-ui-plugin-config browser package (ui-plugin-config). That section declares a single child slot, `settings.plugin.item` (kind `list`, scope `root`), and renders the registered cards stacked by `order`; with zero cards registered it renders an empty-line placeholder. Any browser-half plugin can register a card — the section neither knows nor cares which plugin owns a card, and it supplies deliberately empty owner props (`children?: never`): the card draws its own internals.
+The dsh web settings page has a "插件配置" (plugin config) section: a `settings.section` entry with id `plugins`, registered by the @deepseek-ai/dsh-client-ui-plugin-config browser package (ui-plugin-config). That section declares a single child slot, `settings.plugin.item` (kind `keyed`, scope `root`), and renders one card per registered key — the key is the settings namespace the card edits, and cards appear in registration order; with zero cards registered it renders an empty-line placeholder. Any browser-half plugin can register a card — the section neither knows nor cares which plugin owns a card, and it supplies deliberately empty owner props (`children?: never`): the card draws its own internals.
 
 The card surface is orthogonal to the settings exposure boundary. The host apiproxy exposes only allowlisted namespaces to the client settings scope — `WEB_SETTINGS_NAMESPACES` plus `PRODUCT_SETTINGS_NAMESPACES` (and the settingsNs of configurable model providers) — and a namespace absent from both answers `settings-not-exposed` on describe/mutate/update. A card whose data channel is the settings scope must therefore bind an allowlisted namespace; a card whose namespace is off the allowlist must use a different channel (the GatewayService route below).
 
@@ -46,8 +46,7 @@ Registration mirrors the upstream cards verbatim:
 ctx.slots.inject('settings.plugin.item', function* () {
   yield ctx.slots.register({
     name: 'settings.plugin.item',
-    id: 'advisor',
-    order: 30, // bash 0 / agent-loop 10 / web-search 20 / advisor 30
+    key: 'advisor', // the settings namespace the card edits (ADVISOR_SETTINGS_NAMESPACE)
     locale: NS, // the card's own dictionary namespace, e.g. 'settings.advisor'
     inject: () => ({ controller, useSnapshot }), // business face ONLY
   }, AdvisorCard)
@@ -117,4 +116,4 @@ The 插件配置 page is the current, upstream-blessed configuration surface for
 
 ## Examples
 
-- The dsh-advisor card (iteration iter-20260811-dsh-advisor-n6): registration in `src/client/index.ts`, component in `src/client/advisor-card.tsx` (props contract above, root `<li>`). The card (id `advisor`, order 30) renders after the upstream bash / agent-loop / web-search cards on the 插件配置 page; the data channel is the n5 GatewayService endpoints `/api/advisor/get` + `/api/advisor/set` (store `src/client/advisor-store.ts` unchanged from the section era); the old standalone `settings.section` entry (the sidebar "Advisor" nav) was removed. Verified live: card order, six-key read/write round-trip with reload consistency, degradation notice when the gateway is unreachable, and pre-migration config compatibility.
+- The dsh-advisor card (iteration iter-20260811-dsh-advisor-n6): registration in `src/client/index.ts`, component in `src/client/advisor-card.tsx` (props contract above, root `<li>`). The card (key `advisor`) renders after the upstream bash / agent-loop / web-search cards on the 插件配置 page (registration order); the data channel is the n5 GatewayService endpoints `/api/advisor/get` + `/api/advisor/set` (store `src/client/advisor-store.ts` unchanged from the section era); the old standalone `settings.section` entry (the sidebar "Advisor" nav) was removed. Verified live: card order, six-key read/write round-trip with reload consistency, degradation notice when the gateway is unreachable, and pre-migration config compatibility.
