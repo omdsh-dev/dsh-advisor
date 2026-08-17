@@ -2,6 +2,10 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.2.2] - 2026-08-17
+
+- 50d9e38 fix(client): rc.7 keyed settings.plugin.item + dsh peer floor (#59)
+
 ## [0.2.1] - 2026-08-17
 
 - b1f3e6d feat(advisor): TUI settings write surface — tuiSettingsSections Advisor section (dsh-tui /settings) (#56)
