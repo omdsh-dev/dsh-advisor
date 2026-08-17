@@ -111,8 +111,8 @@ dsh --profile dsh-tui --dump-config   # confirm the dsh-advisor layer is gone
 
 The dsh web Settings page's **"插件配置" (Plugin Configuration)** page renders
 one card per plugin that registers into the `settings.plugin.item` card slot.
-The Advisor card (`id advisor`, rendered after the upstream bash / agent-loop /
-web-search cards) reads the provider directory through the dsh host's apiproxy
+The Advisor card (namespace key `advisor`, rendered after the upstream bash / agent-loop /
+web-search cards in registration order) reads the provider directory through the dsh host's apiproxy
 `describe` (the exposed `llm-*` namespaces), but reads and writes the advisor
 config EXCLUSIVELY through the **official `GatewayService` RPC channel** — it
 does not depend on the apiproxy allowlist, which exposes only an allowlist of

@@ -1,8 +1,9 @@
 /**
  * Advisor settings plugin, browser half. Registers the `advisor` card into
- * the shell-declared `settings.plugin.item` slot (the "插件配置" settings
- * page — id `advisor`, order 30, after the upstream bash / agent-loop /
- * web-search cards). The card's store joins the settings namespaces and the
+ * the shell-declared `settings.plugin.item` keyed slot (the "插件配置"
+ * settings page — key `advisor`, the settings namespace the card edits,
+ * appearing after the upstream bash / agent-loop / web-search cards in
+ * registration order). The card's store joins the settings namespaces and the
  * provider directory through the connection wire, and keeps fresh on pushed
  * invalidations. Export discipline: the client half value-imports ONLY the
  * frozen platform module table (CLIENT_EXTERNALS: react /
@@ -84,7 +85,7 @@ export function apply(ctx: ClientContext): void {
   //   face (`remote.$on`, subscribed on the `ctx.get('remote')` handle —
   //   feature-detected below, never a hard `ctx.remote` dependency; legal
   //   key set = `API_REMOTE_FORWARDED_EVENTS` in @deepseek-ai/dsh-api-remotes,
-  //   pinned ^0.1.0-rc.6):
+  //   pinned ^0.1.0-rc.7):
   //   `settings/document-updated` (a settings namespace document changed on
   //   the host — e.g. a provider section edited on the Models page) and
   //   `llm/adapters-updated` (provider/model topology mutation — e.g. a
@@ -133,8 +134,13 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('settings.plugin.item', function* () {
     yield ctx.slots.register({
       name: 'settings.plugin.item',
-      id: 'advisor',
-      order: 30, // bash 0 / agent-loop 10 / web-search 20 / advisor 30
+      // rc.7 keyed slot: the key is the settings namespace the card edits —
+      // the already-installed `advisor` namespace (ADVISOR_SETTINGS_NAMESPACE
+      // in src/settings.ts; spelled as a literal here because the host-half
+      // settings module is outside the client bundle's externals). Keyed
+      // entries declare no `id`/`order` — appearance order is registration
+      // order, which still places this card after the upstream three.
+      key: 'advisor',
       locale: NS,
       inject: () => ({ controller, useSnapshot }),
     }, AdvisorCard)

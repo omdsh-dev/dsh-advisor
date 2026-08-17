@@ -3,7 +3,7 @@
 `dsh-advisor` 的配置集中在 `advisor` settings 命名空间。它有三个并行的编辑路径，读写同一组键：
 
 1. **插件行 config** —— 用户 profile 的 `cordis.patch.yml`（如 `profiles/web/cordis.patch.yml`）里 `id: advisor` 那一行的 `config` 字段。这是合成的 **base**（`src/settings.ts` `installAdvisorSettings` 以 entry 为 `base` 注册命名空间）。
-2. **web Settings —— "插件配置"页的 Advisor 卡片**（`id advisor`，渲染在三张上游卡片 bash / agent-loop / web-search 之后）—— 卡片把编辑结果写入 `advisor` 命名空间的 **user layer**，覆盖插件行 config 而无需改动它；保存后新会话立即生效，无需重启（运行时 live 读取合成值，见 [live 重应用](#live-重应用)）。
+2. **web Settings —— "插件配置"页的 Advisor 卡片**（namespace key `advisor`，按注册顺序渲染在三张上游卡片 bash / agent-loop / web-search 之后）—— 卡片把编辑结果写入 `advisor` 命名空间的 **user layer**，覆盖插件行 config 而无需改动它；保存后新会话立即生效，无需重启（运行时 live 读取合成值，见 [live 重应用](#live-重应用)）。
 3. **dsh-tui `/settings` 屏幕**（dsh-tui ≥ v0.8.0，随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供；旧版 dsh-tui 干净地 no-op）—— `/settings` 里的 **Advisor** 分节编辑同样的五个键（`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`，各带中英文标签与提示）。编辑先暂存，保存时经 revision 栅栏保护的 `settings.mutate` 写入同一个 user layer，live 重应用、无需重启。`systemPrompt` 不是 TUI 字段（TUI text 控件为单行；多行 prompt 会被截断）——经 web 卡片或 `$DSH_HOME/settings.yaml` 编辑。
 
 三条路径对等（TUI `/settings`、profile 补丁层、共享的 `$DSH_HOME/settings.yaml` 读写同一组键、同一 `advisor` 命名空间——补丁层落在合成 **base**，TUI `/settings` 与 `settings.yaml` 落在 **user layer**）。**保存行为差异（如实记录）**：web 卡片在 `enabled: true` 且必填字段为空时**阻止保存**；TUI seam 没有跨字段校验（上游行为），一次保存可能把 `enabled: true` 与空 `provider`/`model` 一起写入——S4 显式模型门禁（spec §5.2）会把该配置解析为 disabled-with-reason，可见于 `/advisor status` 与 `/advisor config`（见 [显式模型门禁（S4）](#显式模型门禁s4)）。
@@ -101,7 +101,7 @@ Settings 每次 committed 变更经 `bridge.onChange` 重派生（`src/index.ts`
 
 ## Web 卡片行为（`src/client`）
 
-Advisor 卡片（`id advisor`，order 30，`src/client/index.ts` 注册进 `settings.plugin.item` slot）的行为契约：
+Advisor 卡片（namespace key `advisor`，`src/client/index.ts` 注册进 `settings.plugin.item` keyed slot）的行为契约：
 
 - **enabled 开关**（默认 OFF）：关闭时显示配置表单被隐藏的提示，进行中的草稿保留；
 - **provider / model 选择框**：只列出**已配置**的 provider（命名空间 + profile 均解析，KD-S2）；model 选项优先取 provider profile 的声明模型，否则回退 `llm.models` catalog；存储的 provider/model 不再可用时显示警告；join 为空时显示引导文案；

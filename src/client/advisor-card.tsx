@@ -1,7 +1,8 @@
 /**
  * Advisor settings card (plan dsh-advisor-plugin-config-card-ux, task 1): the
  * card registered into the "插件配置" settings page's `settings.plugin.item`
- * slot (id `advisor`, order 30). It keeps the n5 gateway channel — the store
+ * keyed slot (key `advisor` — the settings namespace the card edits). It keeps
+ * the n5 gateway channel — the store
  * reads/writes the advisor config through `/api/advisor/get` +
  * `/api/advisor/set` (KD-G3) — while the card chrome is rebuilt to replicate
  * the upstream `PluginCard` contract (self-drawn: the upstream client value

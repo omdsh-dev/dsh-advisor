@@ -42,7 +42,7 @@ import type { AdvisorConfig, ResolvedAdvisorConfig } from 'dsh-advisor'
 
 ## 客户端入口（`dsh-advisor/client`）
 
-`src/client/index.ts` 是浏览器半，把 Advisor 卡片注册进宿主声明的 `settings.plugin.item` 卡片 slot（"插件配置"页，`id advisor`，order 30，位于上游 bash / agent-loop / web-search 卡片之后）：
+`src/client/index.ts` 是浏览器半，把 Advisor 卡片注册进宿主声明的 `settings.plugin.item` 卡片 slot（"插件配置"页，namespace key `advisor`，按注册顺序位于上游 bash / agent-loop / web-search 卡片之后）：
 
 ```ts
 import type { AdvisorCardProps, AdvisorSettingsStore, ModelOption, ProviderOption } from 'dsh-advisor/client'

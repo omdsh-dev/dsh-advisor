@@ -22,11 +22,11 @@
  * way the host gateway does (merge → return the new composed config).
  *
  * Registration surface (KD-1): `apply` registers the card into the
- * `settings.plugin.item` slot ledger (id 'advisor', order 30, locale
- * 'settings.advisor') with a business-face-only inject (controller +
- * useSnapshot — no `t`); the old `settings.section` advisor registration is
- * gone, so the section ledger never holds an advisor entry (nav removal
- * regression).
+ * `settings.plugin.item` keyed slot ledger (key 'advisor' — the settings
+ * namespace the card edits, locale 'settings.advisor') with a
+ * business-face-only inject (controller + useSnapshot — no `t`); the old
+ * `settings.section` advisor registration is gone, so the section ledger
+ * never holds an advisor entry (nav removal regression).
  *
  * Note on the dev-time `bindSnapshotSelector` stand-in: the stub web-react
  * hook reads the current snapshot per render (no uSES subscription), so
@@ -212,7 +212,7 @@ function toggleCard(): void {
  * `remote` service mirrors the client assembly's forwarded Host invalidation
  * face (plan 003: `ctx.remote.$on` with `settings/document-updated` +
  * `llm/adapters-updated`, probe of API_REMOTE_FORWARDED_EVENTS in
- * @deepseek-ai/dsh-api-remotes rc.6) — `withRemote: false` simulates a shell
+ * @deepseek-ai/dsh-api-remotes rc.7) — `withRemote: false` simulates a shell
  * that never mounted the service (graceful-degrade path). Everything else
  * the plugin's apply touches (locale register, connection/reset) is recorded
  * but inert.
@@ -287,8 +287,11 @@ describe('AdvisorCard registration (settings.plugin.item)', () => {
     // The card ledger holds exactly one advisor card.
     const cards = ledger['settings.plugin.item'] ?? []
     expect(cards).toHaveLength(1)
-    expect(cards[0].options.id).toBe('advisor')
-    expect(cards[0].options.order).toBe(30)
+    // rc.7 keyed slot: `key` is the settings namespace the card edits; the
+    // old list-slot `id` / `order` options must be absent.
+    expect(cards[0].options.key).toBe('advisor')
+    expect(cards[0].options).not.toHaveProperty('id')
+    expect(cards[0].options).not.toHaveProperty('order')
     expect(cards[0].options.locale).toBe('settings.advisor')
     expect(cards[0].component).toBe(AdvisorCard)
     // Inject face carries the business surface only — the typed `t` seat is
@@ -326,7 +329,7 @@ describe('AdvisorCard invalidation refresh (plan 003 / residual R3)', () => {
 
     // Dual-plane registration: both forwarded Host events on the remote face
     // plus the connection/reset fallback (the 20260811 vocabulary removal
-    // note — plan 003 probe: API_REMOTE_FORWARDED_EVENTS, rc.6).
+    // note — plan 003 probe: API_REMOTE_FORWARDED_EVENTS, rc.7).
     expect(remoteHandlers['settings/document-updated']?.size).toBe(1)
     expect(remoteHandlers['llm/adapters-updated']?.size).toBe(1)
     expect(resetHandlers.size).toBe(1)
