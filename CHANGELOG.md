@@ -2,6 +2,11 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.2.1] - 2026-08-17
+
+- b1f3e6d feat(advisor): TUI settings write surface — tuiSettingsSections Advisor section (dsh-tui /settings) (#56)
+- f88c4fb chore: ignore .mstar process artifacts + .worktrees (canonical harness ignore) (#55)
+
 ## [0.2.0] - 2026-08-16
 
 - 9984fd5 feat(advisor): dsh-tui client surface — tuiCommandTrees /advisor + /advisor config readback + docs (#53)
