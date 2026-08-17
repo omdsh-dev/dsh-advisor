@@ -26,6 +26,11 @@
  * T2-tui (plan dsh-advisor-tui-client-n8): `/advisor config` — a session-less
  * readback of the composed `advisor` namespace (same resolved config the web
  * card reads), never the per-session override.
+ * T2 (plan dsh-advisor-tui-settings-n9): the readback's edit hint is truthful
+ * — `getConfig()` reports `tuiSettingsAvailable` LIVE at render time
+ * (`ctx.get('tuiSettingsSections') !== undefined`), so the hint names the TUI
+ * `/settings` Advisor section as a write path exactly while the seam is
+ * mounted; the readback itself stays session-less and read-only.
  * Settings (plan dsh-advisor-settings-n2): the plugin-row config is the
  * composition base of the `advisor` settings namespace (`src/settings.ts`),
  * read live through the bridge source; committed settings edits re-apply
@@ -519,6 +524,15 @@ export function apply(ctx: Context, config: AdvisorConfig) {
         maxDeltaMessages: resolved.maxDeltaMessages,
         systemPromptSet: resolved.systemPrompt !== '',
         systemPromptSummary: summarizeSystemPrompt(resolved.systemPrompt),
+        // T2 (plan dsh-advisor-tui-settings-n9): the truthful edit-hint input.
+        // Computed LIVE at render time — `ctx.get('tuiSettingsSections') !==
+        // undefined` (architect ruling): the upstream seam supports mid-session
+        // mount/unmount via `subscribe()`, so a captured boolean set by the
+        // inject child would go stale without extra bookkeeping; `ctx.get` is
+        // the minimal truthful observable. An environment signal, NEVER derived
+        // from the per-session override — the readback stays session-less and
+        // read-only (this read only ever probes service presence).
+        tuiSettingsAvailable: ctx.get('tuiSettingsSections') !== undefined,
       }
     },
   }
