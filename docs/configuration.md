@@ -1,9 +1,12 @@
 # 配置指南（`advisor` 命名空间）
 
-`dsh-advisor` 的配置集中在 `advisor` settings 命名空间。它有两个持久化配置面，读写同一组键：
+`dsh-advisor` 的配置集中在 `advisor` settings 命名空间。它有三个并行的编辑路径，读写同一组键：
 
 1. **插件行 config** —— 用户 profile 的 `cordis.patch.yml`（如 `profiles/web/cordis.patch.yml`）里 `id: advisor` 那一行的 `config` 字段。这是合成的 **base**（`src/settings.ts` `installAdvisorSettings` 以 entry 为 `base` 注册命名空间）。
 2. **web Settings —— "插件配置"页的 Advisor 卡片**（`id advisor`，渲染在三张上游卡片 bash / agent-loop / web-search 之后）—— 卡片把编辑结果写入 `advisor` 命名空间的 **user layer**，覆盖插件行 config 而无需改动它；保存后新会话立即生效，无需重启（运行时 live 读取合成值，见 [live 重应用](#live-重应用)）。
+3. **dsh-tui `/settings` 屏幕**（dsh-tui ≥ v0.8.0，随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供；旧版 dsh-tui 干净地 no-op）—— `/settings` 里的 **Advisor** 分节编辑同样的五个键（`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`，各带中英文标签与提示）。编辑先暂存，保存时经 revision 栅栏保护的 `settings.mutate` 写入同一个 user layer，live 重应用、无需重启。`systemPrompt` 不是 TUI 字段（TUI text 控件为单行；多行 prompt 会被截断）——经 web 卡片或 `$DSH_HOME/settings.yaml` 编辑。
+
+三条路径对等（TUI `/settings`、profile 补丁层、共享的 `$DSH_HOME/settings.yaml` 读写同一组键、同一命名空间 user layer）。**保存行为差异（如实记录）**：web 卡片在 `enabled: true` 且必填字段为空时**阻止保存**；TUI seam 没有跨字段校验（上游行为），一次保存可能把 `enabled: true` 与空 `provider`/`model` 一起写入——S4 显式模型门禁（spec §5.2）会把该配置解析为 disabled-with-reason，可见于 `/advisor status` 与 `/advisor config`（见 [显式模型门禁（S4）](#显式模型门禁s4)）。
 
 卡片对配置的读写**只**走官方 `GatewayService` RPC 通道：`/api/advisor/get` + `/api/advisor/set`（`src/gateway.ts` 的 `AdvisorConfigGateway`，由宿主 typertGateway 认领，与 dsh 内建 `goals` 服务同一机制）。`advisor` 命名空间**不在**宿主 apiproxy 的 exposed-namespaces 白名单上（上游 dsh 没有注册级 opt-in），因此该通道也不受 settings 暴露白名单门控；进程内写入（`ctx.settings.update`）没有 exposed-namespace 检查。没有 settings service 时，source 就是插件行 entry，行为与未装插件时一致（`src/settings.ts`）。**插件不做任何宿主补丁**。
 
@@ -44,7 +47,7 @@
 
 - 运行时每次读取都经过该解析器（`src/index.ts` `safeResolved` / `safeEffective`），因此 settings 编辑也永远无法绕过门禁发起模型调用；
 - `/advisor status` 与 `/advisor on` 的回复在门禁阻挡时展示原因（`src/commands.ts`）；
-- Settings 卡片在 enabled 且必填字段为空时阻止保存，但宿主侧硬门禁始终是最后防线。
+- Settings 卡片在 enabled 且必填字段为空时阻止保存（TUI `/settings` seam 无此跨字段校验——保存行为差异见文档开头），但宿主侧硬门禁始终是最后防线。
 
 **未知键严格拒绝**：`resolveAdvisorConfig` 显式拒绝未知键（`CONFIG_KEYS` 白名单，`src/config.ts`）与非对象输入；插件行加载时未知键抛错、拒绝该行（`src/index.ts` 构造期读取仍用抛错版 `resolved()`）。settings 的 user layer 若写入了解析器拒绝的值（如未知键），live 读取会解析为 disabled-with-reason 携带错误信息 —— 永不 wedge 热路径、永不启动模型调用（`src/index.ts` `safeFallback`；`src/gateway.ts` `readConfig` 同样包含该 containment）。
 
@@ -53,11 +56,12 @@
 三个来源按「后一层覆盖前一层」合成，各处使用同一组键（`src/settings.ts`）：
 
 ```text
-schema 默认值 → 插件行 config（base）→ settings user layer（web 卡片写入）
+schema 默认值 → 插件行 config（base）→ settings user layer（web 卡片 / TUI `/settings` 写入）
 ```
 
 - 无 settings service（未组合 `settings` 时，条件 `ctx.inject(['settings'], ...)` 子项不激活）→ source 恰为插件行 entry；
-- 有 settings service → `AdvisorSettingsBridge.source()` 读 scope 的 live 合成值；每次 committed 变更触发 `onChange`。
+- 有 settings service → `AdvisorSettingsBridge.source()` 读 scope 的 live 合成值；每次 committed 变更触发 `onChange`；
+- **TUI `/settings` 与 web 卡片对等**（dsh-tui ≥ v0.8.0）：两者都写同一个 user layer（`$DSH_HOME/settings.yaml`），与 profile 补丁层构成三条并行编辑路径。唯一的行为差异：web 卡片在 `enabled: true` 且必填字段为空时阻止保存；TUI seam 没有跨字段校验（上游行为，如实记录），保存可能写入 `enabled: true` + 空 `provider`/`model`——S4 门禁仍把该配置解析为 disabled-with-reason，运行时绝不发起模型调用（见 [显式模型门禁（S4）](#显式模型门禁s4)）。
 
 ## 行为要点
 

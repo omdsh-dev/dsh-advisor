@@ -49,7 +49,7 @@ dsh plugin --profile dsh-tui add dsh-advisor   # <name> = 你的 profile 名
 dsh plugin --profile dsh-tui add .
 ```
 
-组合包把同样的 `- insert: id: advisor` 行插入 dsh-tui profile 的补丁层（`~/.dsh/profiles/dsh-tui/cordis.patch.yml`）。`advisor` settings namespace 经全局 `$DSH_HOME/settings.yaml` 的 `advisor:` 段跨 profile 共享（web Settings 卡片也写入该文件）——TUI 没有设置页，因此 `/advisor config` 是回读手段（只读，附编辑提示），`/advisor` / `on|off|status|config` 则出现在 TUI 的 `/` 菜单中并带子命令补全（要求 `dsh-tui-command-trees` 行，随附的 dsh-tui 组合包自带）。
+组合包把同样的 `- insert: id: advisor` 行插入 dsh-tui profile 的补丁层（`~/.dsh/profiles/dsh-tui/cordis.patch.yml`）。`advisor` settings namespace 经全局 `$DSH_HOME/settings.yaml` 的 `advisor:` 段跨 profile 共享（web Settings 卡片也写入该文件）。dsh-tui ≥ v0.8.0 时，TUI `/settings` 屏幕同样可编辑这五个键（`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`）——在 Advisor 分节中暂存编辑，保存时经 revision 栅栏保护的 `settings.mutate` 写入同一个命名空间 user layer，live 重应用、无需重启。该分节随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供；旧版 dsh-tui 干净地 no-op，仍以补丁层 / settings.yaml 为编辑路径。`systemPrompt` 不是 TUI 字段（单行输入）——请经 web 卡片或 `$DSH_HOME/settings.yaml` 编辑。`/advisor config` 是回读手段（只读，seam 挂载时编辑提示指向 `/settings` 屏幕），`/advisor` / `on|off|status|config` 则出现在 TUI 的 `/` 菜单中并带子命令补全（要求 `dsh-tui-command-trees` 行，随附的 dsh-tui 组合包自带）。
 
 验证：
 
