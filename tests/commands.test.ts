@@ -19,10 +19,13 @@
  *   the explicit gate blocks model calls.
  */
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CommandId } from '@deepseek-ai/dsh-commands'
 import type { CommandDefinition, CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Context } from '@deepseek-ai/cordis'
+import { apply } from '../src/index'
+import type { AdvisorConfig } from '../src/config'
 import {
   AdvisorSessionOverrides,
   USAGE,
@@ -74,6 +77,7 @@ function baseConfig(overrides: Partial<AdvisorComposedConfig> = {}): AdvisorComp
     maxDeltaMessages: 60,
     systemPromptSet: false,
     systemPromptSummary: '',
+    tuiSettingsAvailable: false,
     ...overrides,
   }
 }
@@ -481,6 +485,44 @@ describe('advisorConfigText (the /advisor config surface, composed session-less 
     expect(text).toContain('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row)')
     expect(text).toContain('or $DSH_HOME/settings.yaml (advisor: section)')
   })
+
+  it('keeps the n8 edit-hint line when the TUI settings seam is unavailable (tuiSettingsAvailable: false)', () => {
+    // Byte-identical to the n8 hint: profile patch layer + settings.yaml only.
+    const text = advisorConfigText(baseConfig({ tuiSettingsAvailable: false }))
+    expect(text).toContain('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)')
+    expect(text).not.toContain('TUI /settings')
+  })
+
+  it('lists the TUI /settings screen first when the seam is available (tuiSettingsAvailable: true)', () => {
+    const text = advisorConfigText(baseConfig({ tuiSettingsAvailable: true }))
+    expect(text).toContain('Edit: TUI /settings screen (Advisor section, dsh-tui ≥ v0.8.0) or ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)')
+  })
+
+  it('all other render lines are unchanged across both hint branches', () => {
+    // The Edit hint is the ONLY line that differs between the branches — every
+    // other render line (switch, Model pair, immuneTurns, maxDeltaMessages
+    // incl. 0 → unbounded, systemPrompt default/summary, Reason) is identical.
+    const full = {
+      enabled: true,
+      provider: 'openai',
+      model: 'gpt-4o',
+      immuneTurns: 3,
+      maxDeltaMessages: 60,
+      systemPromptSet: true,
+      systemPromptSummary: 'You are a terse reviewer.',
+    }
+    const withoutTui = advisorConfigText(baseConfig(full))
+    const withTui = advisorConfigText(baseConfig({ ...full, tuiSettingsAvailable: true }))
+    const dropHint = (text: string): string =>
+      text.split('\n').filter((line) => !line.startsWith('Edit:')).join('\n')
+    expect(dropHint(withTui)).toBe(dropHint(withoutTui))
+    const nonHint = dropHint(withoutTui)
+    expect(nonHint).toContain('Advisor config: enabled')
+    expect(nonHint).toContain('Model: openai/gpt-4o')
+    expect(nonHint).toContain('immuneTurns: 3')
+    expect(nonHint).toContain('maxDeltaMessages: 60')
+    expect(nonHint).toContain('systemPrompt: "You are a terse reviewer."')
+  })
 })
 
 describe('summarizeSystemPrompt (first line, ≤ 80 chars, never a full dump)', () => {
@@ -550,6 +592,26 @@ describe('/advisor config subcommand (handler dispatch)', () => {
     expect(controller.setCalls).toHaveLength(0)
   })
 
+  it('config stays read-only in BOTH hint branches — never calls setEnabled (no settings write)', () => {
+    // The readback is session-less and read-only: the handler only renders
+    // `controller.getConfig()`, and the controller interface exposes no write
+    // method — the config path can never touch the persisted settings.
+    for (const tuiSettingsAvailable of [false, true]) {
+      const controller = new FakeController(
+        baseStatus({ enabled: true }),
+        baseConfig({ enabled: true, provider: 'openai', model: 'gpt-4o', tuiSettingsAvailable }),
+      )
+      const handler = registerAndGetHandler(controller)
+      const result = invoke(handler, 'config')
+      expect(result.kind).toBe('success')
+      expect(controller.setCalls).toHaveLength(0)
+      if (result.kind === 'success') {
+        if (tuiSettingsAvailable) expect(result.text).toContain('TUI /settings')
+        else expect(result.text).not.toContain('TUI /settings')
+      }
+    }
+  })
+
   it('config with an unknown subcommand still renders USAGE', () => {
     const controller = new FakeController(baseStatus())
     const handler = registerAndGetHandler(controller)
@@ -573,5 +635,73 @@ describe('/advisor unknown subcommand', () => {
     expect(result.text).toContain('Usage: /advisor')
     expect(result.text).toBe(USAGE)
     expect(controller.setCalls).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// apply wiring — /advisor config hint reflects the live tuiSettingsSections seam
+// (plan dsh-advisor-tui-settings-n9 T2, AC-2)
+// ---------------------------------------------------------------------------
+
+describe('apply wiring — /advisor config tuiSettingsAvailable reflects the tuiSettingsSections seam', () => {
+  // The single-reviewer claim is process-global; reset between cases
+  // (production keeps first-claim-wins; integration.test.ts does the same).
+  beforeEach(() => {
+    delete (globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']
+  })
+  // N-3 (QC fix wave): a future same-file `apply()` test must never inherit a
+  // held claim — this describe is the LAST to touch the global, so reset it
+  // after every case too (mirrors the beforeEach reset).
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']
+  })
+
+  /** Full plugin-row config shape for the apply wiring test. */
+  function entryConfig(): AdvisorConfig {
+    return { enabled: true, provider: 'openai', model: 'gpt-4o', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 }
+  }
+
+  /** Minimal apply()-shaped ctx that ACTIVATES the `commands` inject child
+   * against a fake registry (capturing the real /advisor handler wired by
+   * `apply`) and answers live `ctx.get('tuiSettingsSections')` probes with
+   * the seam presence flag. Other inject children are only recorded (no
+   * services), and the remaining surfaces `apply` touches are no-ops. */
+  function makeConfigApplyCtx(injectKeys: string[], registry: AdvisorCommandRegistry, seamMounted: boolean): Context {
+    return {
+      inject: (names: readonly string[], child?: (tctx: never) => unknown) => {
+        injectKeys.push(...names)
+        if (names.includes('commands') && child !== undefined) child({ commands: registry } as never)
+      },
+      get: (name: string) =>
+        name === 'tuiSettingsSections' && seamMounted ? { register: () => () => {} } : undefined,
+      logger: () => ({ debug: () => {}, warn: () => {}, info: () => {}, error: () => {} }),
+      reflect: { provide: () => {} },
+      effect: () => {},
+      on: () => {},
+      agents: { get: () => undefined },
+    } as unknown as Context
+  }
+
+  it('renders the n8 edit hint when the seam is NOT mounted (tuiSettingsAvailable: false)', () => {
+    const registry = new FakeRegistry()
+    const ctx = makeConfigApplyCtx([], registry, false)
+    apply(ctx, entryConfig())
+    const result = invoke(registry.definitions[0]!.handler, 'config')
+    expect(result.kind).toBe('success')
+    if (result.kind === 'success') {
+      expect(result.text).toContain('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)')
+      expect(result.text).not.toContain('TUI /settings')
+    }
+  })
+
+  it('renders the TUI /settings hint when the seam IS mounted (tuiSettingsAvailable: true)', () => {
+    const registry = new FakeRegistry()
+    const ctx = makeConfigApplyCtx([], registry, true)
+    apply(ctx, entryConfig())
+    const result = invoke(registry.definitions[0]!.handler, 'config')
+    expect(result.kind).toBe('success')
+    if (result.kind === 'success') {
+      expect(result.text).toContain('Edit: TUI /settings screen (Advisor section, dsh-tui ≥ v0.8.0) or ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)')
+    }
   })
 })

@@ -182,6 +182,17 @@ export interface AdvisorComposedConfig {
    * unset — the `<default>` marker is the renderer's job).
    */
   readonly systemPromptSummary: string
+  /**
+   * Whether the dsh-tui `tuiSettingsSections` seam is mounted (dsh-tui ≥
+   * v0.8.0) — a RENDERER INPUT for the edit hint, computed LIVE at render
+   * time by the wiring (`ctx.get('tuiSettingsSections') !== undefined`, plan
+   * dsh-advisor-tui-settings-n9 T2). An environment signal, never derived
+   * from the per-session override; it does not change the resolved-config
+   * read. When true the hint lists the TUI `/settings` screen as a write
+   * path; when false the n8 hint (profile patch layer + settings.yaml) is
+   * shown unchanged.
+   */
+  readonly tuiSettingsAvailable: boolean
 }
 
 /**
@@ -200,9 +211,11 @@ export function summarizeSystemPrompt(prompt: string): string {
 
 /**
  * Render the composed config surface. Mirrors the status renderer's minimal
- * line style; the edit hint points at the two operator edit paths (profile
- * patch layer + the shared `$DSH_HOME/settings.yaml` `advisor:` section the
- * web card writes).
+ * line style; the edit hint points at the operator edit paths — when the TUI
+ * `tuiSettingsSections` seam is mounted (dsh-tui ≥ v0.8.0) the TUI `/settings`
+ * Advisor section is listed FIRST, followed by the profile patch layer + the
+ * shared `$DSH_HOME/settings.yaml` `advisor:` section the web card writes;
+ * otherwise only the two file paths (n8 text, byte-identical).
  */
 export function advisorConfigText(config: AdvisorComposedConfig): string {
   const lines: string[] = []
@@ -224,7 +237,16 @@ export function advisorConfigText(config: AdvisorComposedConfig): string {
   )
   if (config.disabledReason !== undefined) lines.push(`Reason: ${config.disabledReason}`)
   lines.push('')
-  lines.push('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)')
+  // T2 (plan dsh-advisor-tui-settings-n9): truthful edit hint. The TUI
+  // `/settings` screen is a real write path only while the `tuiSettingsSections`
+  // seam is mounted — the renderer branch follows the LIVE
+  // `tuiSettingsAvailable` input the wiring supplies at render time; the
+  // absent-seam text is the n8 line, byte-identical.
+  lines.push(
+    config.tuiSettingsAvailable
+      ? 'Edit: TUI /settings screen (Advisor section, dsh-tui ≥ v0.8.0) or ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)'
+      : 'Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)',
+  )
   return lines.join('\n')
 }
 

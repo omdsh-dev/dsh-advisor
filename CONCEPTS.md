@@ -63,8 +63,8 @@ T4 提取与 T6 投递之间的守门员：normalize（小写 + NFKC + 非字母
 *Avoid:* 把 `/advisor` 当持久配置写入入口（override 是临时的、会话级）
 
 ### dsh-tui client seam（TUI client 面）
-dsh-TUI（终端前端，profile `dsh-tui`）的插件扩展面：DSH command registry 自动 merge 进 TUI `/` 菜单（dispatch 走 `commandService.execute`）；`ctx.tuiCommandTrees` 是唯一插件 UI seam —— 注册 `TuiCommandTreeProvider { root, descriptions?, children }` 提供 root 行本地化描述 + 子命令补全（结构类型本地声明，不引 `@deepseek-harness-tui/dsh-tui` peer）。TUI **无设置页**（上游 issue ccch1mneyyy/dsh-TUI#165）：插件 settings 面 = settings namespace + profile patch layer + 全局 `$DSH_HOME/settings.yaml`（跨 profile 共享，web 卡片写同一 user layer）+ 只读回读命令。**回读 parity 规则**：config 回读必须走与 web gateway 相同的组合配置解析（无 session），绝不读 per-session effective config（否则 `/advisor off` 会让回读误报持久配置）。
-*Avoid:* 用 per-session effective config 渲染配置回读；给 TUI 面引入宿主 peer 依赖；把 TUI 当有设置页的前端设计
+dsh-TUI（终端前端，profile `dsh-tui`）的插件扩展面：DSH command registry 自动 merge 进 TUI `/` 菜单（dispatch 走 `commandService.execute`）；两个插件 seam —— `ctx.tuiCommandTrees`（注册 `TuiCommandTreeProvider { root, descriptions?, children }` 提供 root 行本地化描述 + 子命令补全）与 `ctx.tuiSettingsSections`（dsh-tui ≥ v0.8.0 的 `/settings` 设置屏：注册 `TuiSettingsSection { ns, title, descriptions?, fields[] }` 声明可编辑字段，屏幕 staged 编辑 + revision-fenced `settings.mutate` 写回该 section 的 settings namespace；均结构类型本地声明，不引 `@deepseek-harness-tui/dsh-tui` peer）。TUI 设置写面 = 插件经 `tuiSettingsSections` 注册 section + 既有 settings namespace + profile patch layer + 全局 `$DSH_HOME/settings.yaml`（跨 profile 共享，web 卡片写同一 user layer）+ 只读回读命令。**回读 parity 规则**：config 回读必须走与 web gateway 相同的组合配置解析（无 session），绝不读 per-session effective config（否则 `/advisor off` 会让回读误报持久配置）。
+*Avoid:* 用 per-session effective config 渲染配置回读；给 TUI 面引入宿主 peer 依赖；绕过 `tuiSettingsSections` 另建平行的 TUI 设置写面
 
 ## 已决歧义
 

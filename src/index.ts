@@ -26,6 +26,11 @@
  * T2-tui (plan dsh-advisor-tui-client-n8): `/advisor config` — a session-less
  * readback of the composed `advisor` namespace (same resolved config the web
  * card reads), never the per-session override.
+ * T2 (plan dsh-advisor-tui-settings-n9): the readback's edit hint is truthful
+ * — `getConfig()` reports `tuiSettingsAvailable` LIVE at render time
+ * (`ctx.get('tuiSettingsSections') !== undefined`), so the hint names the TUI
+ * `/settings` Advisor section as a write path exactly while the seam is
+ * mounted; the readback itself stays session-less and read-only.
  * Settings (plan dsh-advisor-settings-n2): the plugin-row config is the
  * composition base of the `advisor` settings namespace (`src/settings.ts`),
  * read live through the bridge source; committed settings edits re-apply
@@ -61,6 +66,7 @@ import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts.js'
 import { AdvisorSessionOverrides, registerAdvisorCommands, summarizeSystemPrompt } from './commands.js'
 import type { AdvisorCommandController } from './commands.js'
 import { installTuiClient } from './tui.js'
+import { TUI_SETTINGS_SECTIONS, installTuiSettingsSection } from './tui-settings.js'
 
 export const name = 'dsh-advisor'
 
@@ -518,6 +524,24 @@ export function apply(ctx: Context, config: AdvisorConfig) {
         maxDeltaMessages: resolved.maxDeltaMessages,
         systemPromptSet: resolved.systemPrompt !== '',
         systemPromptSummary: summarizeSystemPrompt(resolved.systemPrompt),
+        // T2 (plan dsh-advisor-tui-settings-n9): the truthful edit-hint input.
+        // Computed LIVE at render time — `ctx.get(TUI_SETTINGS_SECTIONS) !==
+        // undefined` (architect ruling): the upstream seam supports mid-session
+        // mount/unmount via `subscribe()`, so a captured boolean set by the
+        // inject child would go stale without extra bookkeeping; `ctx.get` is
+        // the minimal truthful observable. An environment signal, NEVER derived
+        // from the per-session override — the readback stays session-less and
+        // read-only (this read only ever probes service presence).
+        //
+        // Servability assumption (QC2): a mounted `tuiSettingsSections` seam
+        // implies a composed settings service in real dsh-tui profiles (the
+        // `/settings` screen requires it), so the hint's "TUI /settings screen
+        // (Advisor section)" claim is truthful; in the unreachable
+        // seam-without-settings corner the section would render unavailable in
+        // the host screen. The probe key is the SHARED
+        // `TUI_SETTINGS_SECTIONS` constant (S-001) — the same key the section
+        // registration condition uses, so the two cannot drift apart.
+        tuiSettingsAvailable: ctx.get(TUI_SETTINGS_SECTIONS) !== undefined,
       }
     },
   }
@@ -537,4 +561,15 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // conditional like `commands`/`settings`/`typert`: profiles without the
   // `dsh-tui-command-trees` row keep working (clean no-op).
   installTuiClient(ctx)
+
+  // T1 (plan dsh-advisor-tui-settings-n9): the dsh-tui settings-section seam —
+  // the `tuiSettingsSections` "Advisor" section (editable `/settings` screen
+  // fields: enabled/provider/model/immuneTurns/maxDeltaMessages). Runs AFTER
+  // the single-reviewer claim like `installTuiClient`, so the section
+  // registers at most once per process (duplicate-ns registration is
+  // contained inside the module). The inject is conditional: profiles without
+  // the `dsh-tui-settings-sections` row (dsh-tui < v0.8.0, non-TUI hosts)
+  // keep working (clean no-op). Order vs `installTuiClient` is irrelevant —
+  // independent services; kept adjacent for cohesion.
+  installTuiSettingsSection(ctx)
 }
