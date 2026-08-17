@@ -66,7 +66,7 @@ import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts.js'
 import { AdvisorSessionOverrides, registerAdvisorCommands, summarizeSystemPrompt } from './commands.js'
 import type { AdvisorCommandController } from './commands.js'
 import { installTuiClient } from './tui.js'
-import { installTuiSettingsSection } from './tui-settings.js'
+import { TUI_SETTINGS_SECTIONS, installTuiSettingsSection } from './tui-settings.js'
 
 export const name = 'dsh-advisor'
 
@@ -525,14 +525,23 @@ export function apply(ctx: Context, config: AdvisorConfig) {
         systemPromptSet: resolved.systemPrompt !== '',
         systemPromptSummary: summarizeSystemPrompt(resolved.systemPrompt),
         // T2 (plan dsh-advisor-tui-settings-n9): the truthful edit-hint input.
-        // Computed LIVE at render time — `ctx.get('tuiSettingsSections') !==
+        // Computed LIVE at render time — `ctx.get(TUI_SETTINGS_SECTIONS) !==
         // undefined` (architect ruling): the upstream seam supports mid-session
         // mount/unmount via `subscribe()`, so a captured boolean set by the
         // inject child would go stale without extra bookkeeping; `ctx.get` is
         // the minimal truthful observable. An environment signal, NEVER derived
         // from the per-session override — the readback stays session-less and
         // read-only (this read only ever probes service presence).
-        tuiSettingsAvailable: ctx.get('tuiSettingsSections') !== undefined,
+        //
+        // Servability assumption (QC2): a mounted `tuiSettingsSections` seam
+        // implies a composed settings service in real dsh-tui profiles (the
+        // `/settings` screen requires it), so the hint's "TUI /settings screen
+        // (Advisor section)" claim is truthful; in the unreachable
+        // seam-without-settings corner the section would render unavailable in
+        // the host screen. The probe key is the SHARED
+        // `TUI_SETTINGS_SECTIONS` constant (S-001) — the same key the section
+        // registration condition uses, so the two cannot drift apart.
+        tuiSettingsAvailable: ctx.get(TUI_SETTINGS_SECTIONS) !== undefined,
       }
     },
   }

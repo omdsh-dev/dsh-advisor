@@ -23,6 +23,13 @@
  * so drift against the upstream shape is bounded to the structural cast at
  * the inject boundary and pinned by `tests/tui-settings.test.ts`.
  *
+ * Upstream revision pin: the structural shapes mirror
+ * `@deepseek-harness-tui/dsh-tui` v0.8.0 (`src/dsh-adapter/settings-sections.ts`,
+ * dsh-TUI commit `02ff08e`). Residual drift window: an upstream
+ * addition/rename of a REQUIRED field would NOT fail the structural cast (the
+ * cast goes through `unknown`) and could cause host-side misrender rather than
+ * a compile error — re-verify against the dsh-TUI repo when bumping.
+ *
  * Field subset (grill-me locked): the section covers the five SAFE §5.1 keys
  * (`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`).
  * `systemPrompt` is intentionally NOT a field — the TUI `text` control is
@@ -107,6 +114,13 @@ export interface TuiSettingsSection {
   fields: readonly TuiSettingsField[]
 }
 
+/** The `tuiSettingsSections` host service key — the ONE name the T1
+ * registration condition (`installTuiSettingsSection`'s inject) and the T2
+ * hint truthfulness probe (`getConfig`'s `ctx.get`) are both keyed on. Shared
+ * so the registration condition and the render-time hint can never drift
+ * apart (S-001, plan QC fix wave). */
+export const TUI_SETTINGS_SECTIONS = 'tuiSettingsSections'
+
 /** Test-friendly alias for the section namespace (`'advisor'`). The section
  * itself reuses the shared {@link ADVISOR_SETTINGS_NAMESPACE} brand — a
  * mismatched ns would silently render the section "unavailable" in the host
@@ -185,7 +199,7 @@ export const ADVISOR_TUI_SETTINGS_SECTION: TuiSettingsSection = {
  * (debug log + no-op disposer, never throws — multi-fiber dedupe).
  */
 export function installTuiSettingsSection(ctx: Context): void {
-  ctx.inject(['tuiSettingsSections'], (tctx) => {
+  ctx.inject([TUI_SETTINGS_SECTIONS], (tctx) => {
     const sections = (tctx as unknown as { tuiSettingsSections?: { register(s: TuiSettingsSection): () => void } }).tuiSettingsSections
     if (sections === undefined) return
     try {

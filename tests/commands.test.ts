@@ -19,7 +19,7 @@
  *   the explicit gate blocks model calls.
  */
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CommandId } from '@deepseek-ai/dsh-commands'
 import type { CommandDefinition, CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -647,6 +647,12 @@ describe('apply wiring — /advisor config tuiSettingsAvailable reflects the tui
   // The single-reviewer claim is process-global; reset between cases
   // (production keeps first-claim-wins; integration.test.ts does the same).
   beforeEach(() => {
+    delete (globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']
+  })
+  // N-3 (QC fix wave): a future same-file `apply()` test must never inherit a
+  // held claim — this describe is the LAST to touch the global, so reset it
+  // after every case too (mirrors the beforeEach reset).
+  afterEach(() => {
     delete (globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']
   })
 

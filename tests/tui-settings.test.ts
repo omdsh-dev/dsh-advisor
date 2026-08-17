@@ -28,12 +28,21 @@
  *    the single-reviewer (claiming) fiber — a non-claiming apply returns
  *    before the wiring and must not ask for the service. The globalThis
  *    reviewer claim is reset between cases (as tui-client.test.ts does).
+ * ⑦ Wiring-level coupling pin (S-001, QC fix wave): on the claiming apply the
+ *    section registration is requested under the shared service constant
+ *    `TUI_SETTINGS_SECTIONS`, and the `/advisor config` readback's live probe
+ *    (`ctx.get`) reads the SAME constant — registration condition and hint
+ *    truthfulness are driven by one service key.
+ * ⑧ Behavioral dispose (S-1, QC fix wave): the stub's `register` returns a
+ *    REAL removal disposer (mirroring the upstream contract — deletes the
+ *    section and notifies), and invoking the disposer returned by
+ *    `installTuiSettingsSection` withdraws the section from the registry.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { apply } from '../src/index'
-import { ADVISOR_TUI_SETTINGS_NS, installTuiSettingsSection } from '../src/tui-settings'
+import { ADVISOR_TUI_SETTINGS_NS, TUI_SETTINGS_SECTIONS, installTuiSettingsSection } from '../src/tui-settings'
 import type { TuiSettingsSection } from '../src/tui-settings'
 import { ADVISOR_SETTINGS_NAMESPACE } from '../src/settings'
 import type { AdvisorConfig } from '../src/config'
@@ -71,12 +80,24 @@ const TUI_FIELD_KEYS: readonly (keyof AdvisorConfig)[] = [
 /** Stub `tuiSettingsSections` registry mirroring the dsh-TUI host contract
  * (`src/dsh-adapter/settings-sections.ts`): `register` enforces the ns regex
  * `^[a-z][a-z0-9_-]*$` and throws on a duplicate ns (`... is already
- * registered`), and returns a disposer. Records every section so tests can
- * inspect the registered section. */
+ * registered`). By default the returned disposer is a REAL removal disposer
+ * mirroring the upstream contract (deletes the section from the registry and
+ * records the removal — the upstream "deletes + notifies"); a custom disposer
+ * may be injected for disposer-passthrough assertions. Records every section
+ * so tests can inspect the registered section; `section(ns)` mirrors the
+ * upstream lookup. */
 class StubSettingsSections {
   readonly sections: TuiSettingsSection[] = []
+  /** ns of every section removed through a returned disposer (the upstream
+   * "notify" analog — deletion is the observable, removal is recorded). */
+  readonly removals: string[] = []
 
-  constructor(private readonly disposer: () => void = vi.fn()) {}
+  constructor(private readonly disposer?: () => void) {}
+
+  /** The registered section for `ns`, or undefined when absent. */
+  section(ns: string): TuiSettingsSection | undefined {
+    return this.sections.find((s) => s.ns === ns)
+  }
 
   register(section: TuiSettingsSection): () => void {
     const ns = section.ns.trim()
@@ -87,7 +108,13 @@ class StubSettingsSections {
       throw new Error(`TUI settings section "${ns}" is already registered`)
     }
     this.sections.push(section)
-    return this.disposer
+    if (this.disposer !== undefined) return this.disposer
+    // Real removal disposer (upstream contract: deletes + notifies).
+    return () => {
+      const index = this.sections.findIndex((s) => s.ns === ns)
+      if (index >= 0) this.sections.splice(index, 1)
+      this.removals.push(ns)
+    }
   }
 }
 
@@ -142,6 +169,24 @@ describe('installTuiSettingsSection — registration (AC-1)', () => {
     installTuiSettingsSection(ctx)
 
     expect(returned()).toBe(dispose)
+  })
+
+  it('invoking the returned disposer withdraws the section from the registry (behavioral, S-1)', () => {
+    // The default stub disposer is a REAL removal disposer (upstream contract:
+    // deletes the section + notifies) — the fiber's withdraw path must leave
+    // no stale entry behind, not just "not throw".
+    const sections = new StubSettingsSections()
+    const { ctx, returned } = activateCtx({ tuiSettingsSections: sections })
+
+    installTuiSettingsSection(ctx)
+
+    expect(sections.section(ADVISOR_SETTINGS_NAMESPACE)).toBeDefined()
+    const disposer = returned() as () => void
+    expect(typeof disposer).toBe('function')
+    disposer()
+    expect(sections.section(ADVISOR_SETTINGS_NAMESPACE)).toBeUndefined()
+    expect(sections.sections).toHaveLength(0)
+    expect(sections.removals).toEqual(['advisor'])
   })
 })
 
@@ -265,6 +310,41 @@ describe('apply wiring — reviewer-claim gating (AC-1)', () => {
     } as unknown as Context
   }
 
+  /** Extended apply()-shaped ctx for the S-001 coupling pin: records inject
+   * requests AND live `ctx.get` probe keys, and activates the `commands`
+   * child against a capturing registry so the `/advisor config` readback
+   * (whose `getConfig` runs the seam probe) can actually be invoked. */
+  function makeProbeApplyCtx(
+    injectKeys: string[],
+    probeKeys: string[],
+    definitions: Array<{ handler: (invocation: unknown) => unknown }>,
+  ): Context {
+    return {
+      inject: (names: readonly string[], child?: (tctx: unknown) => unknown) => {
+        injectKeys.push(...names)
+        if (names.includes('commands') && child !== undefined) {
+          child({
+            commands: {
+              register: (d: { handler: (invocation: unknown) => unknown }) => {
+                definitions.push(d)
+                return () => {}
+              },
+            },
+          })
+        }
+      },
+      get: (name: string) => {
+        probeKeys.push(name)
+        return undefined
+      },
+      logger: () => ({ debug: () => {}, warn: () => {}, info: () => {}, error: () => {} }),
+      reflect: { provide: () => {} },
+      effect: () => {},
+      on: () => {},
+      agents: { get: () => undefined },
+    } as unknown as Context
+  }
+
   it('a non-claiming apply (claim already held) never requests tuiSettingsSections', () => {
     ;(globalThis as Record<string, unknown>)['__dshAdvisorReviewer__'] = true
     const injectKeys: string[] = []
@@ -272,7 +352,7 @@ describe('apply wiring — reviewer-claim gating (AC-1)', () => {
 
     apply(ctx, entryConfig())
 
-    expect(injectKeys).not.toContain('tuiSettingsSections')
+    expect(injectKeys).not.toContain(TUI_SETTINGS_SECTIONS)
     // Same guard also skips the commands child — the whole reviewer-only
     // wiring block is bypassed on a non-claiming fiber.
     expect(injectKeys).not.toContain('commands')
@@ -284,7 +364,30 @@ describe('apply wiring — reviewer-claim gating (AC-1)', () => {
 
     apply(ctx, entryConfig())
 
-    expect(injectKeys).toContain('tuiSettingsSections')
+    expect(injectKeys).toContain(TUI_SETTINGS_SECTIONS)
     expect(injectKeys).toContain('commands')
+  })
+
+  it('pins registration request key === probe key === TUI_SETTINGS_SECTIONS (S-001)', () => {
+    // The T1 registration condition (the `tuiSettingsSections` inject request)
+    // and the T2 hint truthfulness probe (`ctx.get` inside `getConfig`) are
+    // driven by ONE service key. Exercise both through the real wiring: the
+    // claiming apply must request the section under the shared constant, and
+    // running the `/advisor config` readback must probe the SAME constant —
+    // the registration condition and the hint are coupled by construction.
+    const injectKeys: string[] = []
+    const probeKeys: string[] = []
+    const definitions: Array<{ handler: (invocation: unknown) => unknown }> = []
+    const ctx = makeProbeApplyCtx(injectKeys, probeKeys, definitions)
+
+    apply(ctx, entryConfig())
+
+    // Registration request key: the shared constant (claiming path).
+    expect(injectKeys).toContain(TUI_SETTINGS_SECTIONS)
+    // Probe key: run the composed-config readback → getConfig probes the
+    // seam LIVE via `ctx.get` — same constant the registration used.
+    expect(definitions).toHaveLength(1)
+    definitions[0]!.handler({ rawInput: 'config', agent: { session: { id: 'session-1' } } })
+    expect(probeKeys).toContain(TUI_SETTINGS_SECTIONS)
   })
 })
