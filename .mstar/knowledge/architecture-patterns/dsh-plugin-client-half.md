@@ -62,7 +62,8 @@ Mirror `ui-models`: `inject = ['slots','locale','connection']`; `ctx.effect(() =
 > **LEGACY for the advisor (since iteration iter-20260811-dsh-advisor-n6)**:
 > the standalone `settings.section` registration is the retired surface for
 > the advisor — the web configuration UI now registers a `settings.plugin.item`
-> card on the "插件配置" page (id `advisor`, order 30) using the generator +
+> card on the "插件配置" page (key `advisor`, the settings namespace the card
+> edits) using the generator +
 > `yield` shape with `locale: NS` and a business-only inject face. The current
 > card recipe (registration shape, PropsRuntime + PropsLocale + InjectFace
 > contract, type-only peer dependency, load-on-mount invariant,
