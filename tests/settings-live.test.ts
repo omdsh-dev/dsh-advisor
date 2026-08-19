@@ -342,6 +342,7 @@ function invokeAdvisor(handler: CommandDefinition['handler'], rawInput: string, 
     commandId: 'c' as never,
     agent: { id: session.id, session } as unknown as Agent,
     rawInput,
+    attachments: [],
     signal: new AbortController().signal,
   } as CommandInvocation)
   if (result instanceof Promise) throw new Error('test: /advisor handler must be synchronous')

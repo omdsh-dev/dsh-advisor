@@ -365,6 +365,7 @@ function invokeHandler(
     commandId: CommandId('cmd-qc-fix'),
     agent: { id: session.id, session } as unknown as Agent,
     rawInput,
+    attachments: [],
     signal: new AbortController().signal,
   })
   if (result instanceof Promise) throw new Error('test: /advisor handler must be synchronous')
@@ -772,6 +773,7 @@ describe('integration — /advisor commands conditional activation (T7)', () => 
       commandId: CommandId('cmd-t8'),
       agent: { id: 's1', session: { id: 's1', events: log } } as unknown as Agent,
       rawInput: ' on',
+      attachments: [],
       signal: new AbortController().signal,
     })
     if (result instanceof Promise) throw new Error('test: /advisor handler must be synchronous')

@@ -65,16 +65,20 @@
 import { useState, type ReactNode } from 'react'
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-web-react'
+import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ApplyFailure, AdvisorSettingsState, AdvisorSettingsStore } from './advisor-store.ts'
 import styles from './advisor-card.module.css'
 
-/** Injected dependencies of {@link AdvisorCard} (slot `inject`). */
+/** Injected dependencies of {@link AdvisorCard} (slot `inject`). The `hooks`
+ * compartment carries the bare snapshot store; the slot renderer binds it to
+ * the `useSnapshot` selector hook the component consumes (rc.8 contract). */
 export interface AdvisorCardInjected {
   /** The card store (loaded on mount, refreshed on pushed invalidations). */
   controller: AdvisorSettingsStore
-  /** uSES subscription hook bound to the store. */
-  useSnapshot: SnapshotSelectorHook<AdvisorSettingsState>
+  /** Bare snapshot source the renderer binds as `useSnapshot`. */
+  hooks: {
+    snapshot: SnapshotStore<AdvisorSettingsState>
+  }
 }
 
 /**
