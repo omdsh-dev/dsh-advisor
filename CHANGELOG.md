@@ -2,6 +2,11 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.2.3] - 2026-08-20
+
+- 264038b docs: badge the DSH compatible version 0.1.0-rc.8 (#62)
+- 5ba0eb8 feat: upgrade dsh peers to 0.1.0-rc.8 (#61)
+
 ## [0.2.2] - 2026-08-17
 
 - 50d9e38 fix(client): rc.7 keyed settings.plugin.item + dsh peer floor (#59)
