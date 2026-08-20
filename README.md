@@ -5,6 +5,7 @@
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933.svg)
 ![dsh](https://img.shields.io/badge/dsh-0.1.0--rc.8-4B32C3.svg)
+![dsh tui](https://img.shields.io/badge/dsh%20tui-compatible-4B32C3.svg)
 [![dshfind](https://dshfind.com/api/badge/omdsh-dev/dsh-advisor)](https://dshfind.com/plugins/omdsh-dev/dsh-advisor?ref=badge)
 
 A standalone dsh (DeepSeek Harness) plugin bundle porting the omp "advisor" subsystem: a per-session independent reviewer model that observes the primary transcript, reviews each stepped turn with an explicitly configured model (provider + model are required), and injects severity-ranked advice (nit / concern / blocker) back into the session — without polluting or recursively reviewing itself.
