@@ -7,16 +7,15 @@
  * provider directory through the connection wire, and keeps fresh on pushed
  * invalidations. Export discipline: the client half value-imports ONLY the
  * frozen platform module table (CLIENT_EXTERNALS: react /
- * @deepseek-ai/cordis / ui-slots / web-react / ui-primitives /
- * schema-form / the documented `@deepseek-ai/dsh-client-runtime/client`
- * exemption); every other `@deepseek-ai/*` import is type-only (erased at
- * build) — values arrive via cordis injection (`ctx.get('connection')`, slot
- * inject faces). Mirrors the ui-models reference entry.
+ * @deepseek-ai/cordis / ui-slots / ui-primitives / the documented
+ * `@deepseek-ai/dsh-client-runtime/client` exemption); every other
+ * `@deepseek-ai/*` import is type-only (erased at build) — values arrive via
+ * cordis injection (`ctx.get('connection')`, slot inject faces, the
+ * `settingsSchema` service). Mirrors the ui-models reference entry.
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { TypertClientRemote } from '@deepseek-ai/dsh-typert-protocol'
-import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 // Type-only: pulls the plugin-config card slot's SlotMap merge (the
 // 'settings.plugin.item' entry — this half's registration target). Same empty
 // type-only import pattern as the old ui-settings one: it loads the module's
@@ -25,6 +24,9 @@ import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+// Type-only: pulls ui-settings' Context merge (ctx.settingsSchema — the
+// rc.8 home of the immutable schema path writers the store needs).
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { AdvisorCard } from './advisor-card.tsx'
 import { AdvisorSettingsStore, refreshIfLoaded } from './advisor-store.ts'
 import { en, zh, type AdvisorKey } from './locales.ts'
@@ -57,7 +59,7 @@ export { refreshIfLoaded } from './advisor-store.ts'
  * ui-plugin-config's apply, whose activation order relative to this one is
  * NOT constrained; registration depends on the slot through `slots.inject()`.
  */
-export const inject = ['slots', 'locale', 'connection']
+export const inject = ['slots', 'locale', 'connection', 'settingsSchema']
 
 /**
  * Register the Advisor card once the `settings.plugin.item` declaration is on
@@ -72,8 +74,7 @@ export function apply(ctx: ClientContext): void {
   // The store reads/writes the advisor config over the connection's generic
   // RPC channel (the host gateway `/api/advisor/get` + `/api/advisor/set`);
   // the provider/model directory still rides `connection.api` (KD-G3).
-  const controller = new AdvisorSettingsStore(connection.api, connection.rpc)
-  const useSnapshot = bindSnapshotSelector(controller.store)
+  const controller = new AdvisorSettingsStore(connection.api, connection.rpc, ctx.settingsSchema)
 
   // Pushed invalidations converge the open surface without polling. Two
   // planes feed the shared microtask debounce:
@@ -85,7 +86,7 @@ export function apply(ctx: ClientContext): void {
   //   face (`remote.$on`, subscribed on the `ctx.get('remote')` handle —
   //   feature-detected below, never a hard `ctx.remote` dependency; legal
   //   key set = `API_REMOTE_FORWARDED_EVENTS` in @deepseek-ai/dsh-api-remotes,
-  //   pinned ^0.1.0-rc.7):
+  //   pinned ^0.1.0-rc.8):
   //   `settings/document-updated` (a settings namespace document changed on
   //   the host — e.g. a provider section edited on the Models page) and
   //   `llm/adapters-updated` (provider/model topology mutation — e.g. a
@@ -134,7 +135,7 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('settings.plugin.item', function* () {
     yield ctx.slots.register({
       name: 'settings.plugin.item',
-      // rc.7 keyed slot: the key is the settings namespace the card edits —
+      // rc.8 keyed slot: the key is the settings namespace the card edits —
       // the already-installed `advisor` namespace (ADVISOR_SETTINGS_NAMESPACE
       // in src/settings.ts; spelled as a literal here because the host-half
       // settings module is outside the client bundle's externals). Keyed
@@ -142,7 +143,10 @@ export function apply(ctx: ClientContext): void {
       // order, which still places this card after the upstream three.
       key: 'advisor',
       locale: NS,
-      inject: () => ({ controller, useSnapshot }),
+      // rc.8 hooks compartment: the renderer binds `hooks.snapshot` to the
+      // component's `useSnapshot` selector hook (the old web-react
+      // bindSnapshotSelector call is gone with that package).
+      inject: () => ({ controller, hooks: { snapshot: controller.store } }),
     }, AdvisorCard)
   })
 }

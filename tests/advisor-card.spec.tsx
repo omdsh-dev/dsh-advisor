@@ -24,14 +24,17 @@
  * Registration surface (KD-1): `apply` registers the card into the
  * `settings.plugin.item` keyed slot ledger (key 'advisor' — the settings
  * namespace the card edits, locale 'settings.advisor') with a
- * business-face-only inject (controller + useSnapshot — no `t`); the old
+ * business-face-only inject (controller + the `hooks.snapshot` store — no
+ * `t`); the old
  * `settings.section` advisor registration is gone, so the section ledger
  * never holds an advisor entry (nav removal regression).
  *
- * Note on the dev-time `bindSnapshotSelector` stand-in: the stub web-react
- * hook reads the current snapshot per render (no uSES subscription), so
- * assertions after a store mutation re-render the card explicitly
- * (`rerender`), exactly like the ui-models specs do.
+ * Note on the dev-time `bindSnapshotSelector` stand-in: the rc.8 renderer
+ * binds the card's `hooks.snapshot` store to its `useSnapshot` prop inside
+ * ui-renderer (not importable from a spec); the stub here reproduces the
+ * same hook shape by reading the current snapshot per render (no uSES
+ * subscription), so assertions after a store mutation re-render the card
+ * explicitly (`rerender`), exactly like the ui-models specs do.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -40,7 +43,8 @@ import type {
   ClientConnectionRpc, ConfigurableProviderView, IApiClient, ModelProviderGroup,
   RpcResponse, RpcResult, SettingsNamespaceView,
 } from '@deepseek-ai/dsh-client-connection/client'
-import { bindSnapshotSelector, type SnapshotSelectorHook } from '@deepseek-ai/dsh-client-web-react'
+import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
+import { fakeSchema } from './support/schema-ops'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import { AdvisorCard } from '../src/client/advisor-card'
 import type { AdvisorCardProps } from '../src/client/advisor-card'
@@ -50,6 +54,17 @@ import { apply } from '../src/client/index'
 import { en, zh } from '../src/client/locales'
 
 afterEach(cleanup)
+
+/** Real rc.8 settings schema service (immutable path writers under test). */
+const schema = fakeSchema()
+
+/**
+ * Dev-time stand-in for the renderer's hooks binding (see the header note):
+ * a selector hook reading the current snapshot per render, no subscription.
+ */
+function bindSnapshotSelector<T>(w: HostObservable<T>): SnapshotSelectorHook<T> {
+  return (sel) => sel(w.getSnapshot())
+}
 
 // The synthesized `t` seat's key domain is the namespace dictionary union
 // plus the shared `common` vocabulary; the specs only ever call the card's
@@ -180,7 +195,7 @@ function scriptedApi(options: {
 /** Preload the store, then render the card (ui-models spec pattern). */
 async function mountCard(options: Parameters<typeof scriptedApi>[0] = {}, preload = true) {
   const scripted = scriptedApi(options)
-  const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc)
+  const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc, schema)
   if (preload) await controller.load()
   const props = cardProps(controller, bindSnapshotSelector(controller.store))
   const view = render(<AdvisorCard {...props} />)
@@ -212,7 +227,7 @@ function toggleCard(): void {
  * `remote` service mirrors the client assembly's forwarded Host invalidation
  * face (plan 003: `ctx.remote.$on` with `settings/document-updated` +
  * `llm/adapters-updated`, probe of API_REMOTE_FORWARDED_EVENTS in
- * @deepseek-ai/dsh-api-remotes rc.7) — `withRemote: false` simulates a shell
+ * @deepseek-ai/dsh-api-remotes rc.8) — `withRemote: false` simulates a shell
  * that never mounted the service (graceful-degrade path). Everything else
  * the plugin's apply touches (locale register, connection/reset) is recorded
  * but inert.
@@ -246,6 +261,7 @@ function fakeRuntime(scripted: Scripted, withRemote = true) {
     },
   }
   const ctx = {
+    settingsSchema: schema,
     slots,
     locale: {
       register: (ns: string, dict: unknown): (() => void) => {
@@ -287,7 +303,7 @@ describe('AdvisorCard registration (settings.plugin.item)', () => {
     // The card ledger holds exactly one advisor card.
     const cards = ledger['settings.plugin.item'] ?? []
     expect(cards).toHaveLength(1)
-    // rc.7 keyed slot: `key` is the settings namespace the card edits; the
+    // rc.8 keyed slot: `key` is the settings namespace the card edits; the
     // old list-slot `id` / `order` options must be absent.
     expect(cards[0].options.key).toBe('advisor')
     expect(cards[0].options).not.toHaveProperty('id')
@@ -298,7 +314,12 @@ describe('AdvisorCard registration (settings.plugin.item)', () => {
     // synthesized by the renderer from `locale:` (KD-1), never injected.
     const face = (cards[0].options.inject as () => object)()
     expect(typeof (face as { controller: unknown }).controller).toBe('object')
-    expect(typeof (face as { useSnapshot: unknown }).useSnapshot).toBe('function')
+    // rc.8 hooks compartment: the bare store rides `hooks.snapshot` and the
+    // renderer binds it to the component's `useSnapshot` selector hook.
+    const hooks = (face as { hooks: { snapshot: unknown } }).hooks
+    expect(typeof hooks.snapshot).toBe('object')
+    expect(typeof (hooks.snapshot as { subscribe: unknown }).subscribe).toBe('function')
+    expect(face).not.toHaveProperty('useSnapshot')
     expect(face).not.toHaveProperty('t')
 
     // The old section registration is gone (nav removal regression): the
@@ -329,7 +350,7 @@ describe('AdvisorCard invalidation refresh (plan 003 / residual R3)', () => {
 
     // Dual-plane registration: both forwarded Host events on the remote face
     // plus the connection/reset fallback (the 20260811 vocabulary removal
-    // note — plan 003 probe: API_REMOTE_FORWARDED_EVENTS, rc.7).
+    // note — plan 003 probe: API_REMOTE_FORWARDED_EVENTS, rc.8).
     expect(remoteHandlers['settings/document-updated']?.size).toBe(1)
     expect(remoteHandlers['llm/adapters-updated']?.size).toBe(1)
     expect(resetHandlers.size).toBe(1)
@@ -559,7 +580,7 @@ describe('AdvisorCard', () => {
     // window — the store's latched `degraded` holds the disclosure open until
     // the refresh settles back to degraded.
     const scripted = scriptedApi({ config: null })
-    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc)
+    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc, schema)
     await controller.load() // settled degraded: ready + advisorPresent=false
     const view = render(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
     expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
@@ -592,7 +613,7 @@ describe('AdvisorCard', () => {
     // recovered form) and aria-expanded must stay true (no false
     // collapse announcement).
     const scripted = scriptedApi({ config: null })
-    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc)
+    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc, schema)
     await controller.load()
     const view = render(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
     expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
@@ -896,7 +917,7 @@ describe('AdvisorCard', () => {
     // get call 1 (initial load) succeeds; the post-apply reload get fails.
     scripted.get.mockImplementationOnce(() => Promise.resolve(okResult({ config: defaultConfig() })))
     scripted.get.mockImplementationOnce(() => Promise.resolve(failResult('advisor gateway is not ready')))
-    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc)
+    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc, schema)
     await controller.load()
     controller.setEnabled(true)
     controller.setProvider('deepseek-official')
@@ -911,7 +932,7 @@ describe('AdvisorCard', () => {
   it('renders the load failure in the card chrome with a working retry', async () => {
     const scripted = scriptedApi()
     scripted.describe.mockRejectedValueOnce(new Error('transport down'))
-    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc)
+    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc, schema)
     await controller.load()
     const view = render(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
     expect(screen.getByText(`${en.loadFailed}: transport down`)).toBeTruthy()

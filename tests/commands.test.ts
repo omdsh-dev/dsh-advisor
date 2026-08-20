@@ -57,6 +57,8 @@ function invoke(handler: CommandDefinition['handler'], rawInput: string, session
     commandId: CommandId('cmd-test-1'),
     agent: fakeAgent(sessionId),
     rawInput,
+    // rc.8: durable image blocks accompanying the invocation (empty here).
+    attachments: [],
     signal: new AbortController().signal,
   }
   const result = handler(invocation)

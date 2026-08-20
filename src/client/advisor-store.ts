@@ -44,7 +44,15 @@ import type {
 } from '@deepseek-ai/dsh-client-connection/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import { deletePath, getPath, setPath } from '@deepseek-ai/dsh-client-schema-form'
+import type { SettingsSchemaService } from '@deepseek-ai/dsh-client-ui-settings/client'
+/**
+ * The rc.8 schema face the card store uses: ui-settings owns the immutable
+ * path writers (`ctx.settingsSchema`); this narrow pick hides the Cordis
+ * service identity from the store and its tests.
+ */
+export type SettingsSchemaOperations = Pick<
+  SettingsSchemaService, 'getPath' | 'setPath' | 'deletePath'
+>
 
 /**
  * The wire `config` value the host gateway returns — mirror of the node-side
@@ -216,22 +224,6 @@ function gateFailure(draft: AdvisorDraft): 'provider' | 'model' | undefined {
   return undefined
 }
 
-/** Profile-declared models (the provider's `models` directory), when the profile has one. */
-function profileModels(profile: unknown): readonly ModelOption[] | undefined {
-  const models = getPath(profile, ['models'])
-  if (!Array.isArray(models)) return undefined
-  return models.flatMap((entry: unknown) => {
-    if (typeof entry !== 'object' || entry === null) return []
-    const model = entry as { id?: unknown; name?: unknown; description?: unknown }
-    if (typeof model.id !== 'string' || model.id.length === 0) return []
-    return [{
-      id: model.id,
-      name: typeof model.name === 'string' ? model.name : model.id,
-      ...typeof model.description === 'string' ? { description: model.description } : {},
-    }]
-  })
-}
-
 /**
  * The advisor settings card controller (one per settings surface).
  */
@@ -292,7 +284,24 @@ export class AdvisorSettingsStore {
   constructor(
     private readonly api: Pick<IApiClient, 'settings' | 'llm'>,
     private readonly rpc: ClientConnectionRpc,
+    private readonly schema: SettingsSchemaOperations,
   ) {}
+
+  /** Profile-declared models (the provider's `models` directory), when the profile has one. */
+  private profileModels(profile: unknown): readonly ModelOption[] | undefined {
+    const models = this.schema.getPath(profile, ['models'])
+    if (!Array.isArray(models)) return undefined
+    return models.flatMap((entry: unknown) => {
+      if (typeof entry !== 'object' || entry === null) return []
+      const model = entry as { id?: unknown; name?: unknown; description?: unknown }
+      if (typeof model.id !== 'string' || model.id.length === 0) return []
+      return [{
+        id: model.id,
+        name: typeof model.name === 'string' ? model.name : model.id,
+        ...typeof model.description === 'string' ? { description: model.description } : {},
+      }]
+    })
+  }
 
   /**
    * Refresh the whole page snapshot: the provider directory and the settings
@@ -353,7 +362,7 @@ export class AdvisorSettingsStore {
     for (const entry of providers) {
       const namespace = namespaces[entry.settingsNs]
       const configured = namespace !== undefined
-        && (entry.settingsPath.length === 0 || getPath(namespace.value, entry.settingsPath) !== undefined)
+        && (entry.settingsPath.length === 0 || this.schema.getPath(namespace.value, entry.settingsPath) !== undefined)
       if (!configured) continue
       options.push({
         provider: entry.provider,
@@ -436,8 +445,8 @@ export class AdvisorSettingsStore {
     const option = state.providers.find(candidate => candidate.provider === provider)
     if (option === undefined) return // not a configured provider — nothing to offer
     const namespace = state.namespaces[option.settingsNs]
-    const profile = namespace !== undefined ? getPath(namespace.value, option.settingsPath) : undefined
-    const declared = profileModels(profile)
+    const profile = namespace !== undefined ? this.schema.getPath(namespace.value, option.settingsPath) : undefined
+    const declared = this.profileModels(profile)
     if (declared !== undefined) {
       this.store.update((s) => {
         if (declared.length > 0) {
@@ -519,10 +528,10 @@ export class AdvisorSettingsStore {
     this.store.update((s) => {
       const draft = s.draft as unknown as Record<string, unknown>
       const withoutProvider = trimmed.length === 0
-        ? deletePath(draft, ['provider'])
-        : setPath(draft, ['provider'], trimmed)
+        ? this.schema.deletePath(draft, ['provider'])
+        : this.schema.setPath(draft, ['provider'], trimmed)
       // A provider switch invalidates the previously chosen model.
-      s.draft = deletePath(withoutProvider, ['model']) as unknown as AdvisorDraft
+      s.draft = this.schema.deletePath(withoutProvider, ['model']) as unknown as AdvisorDraft
       s.applyState = { kind: 'idle' }
       s.dirty = this.recomputeDirty(s.draft)
     })
@@ -725,19 +734,19 @@ export class AdvisorSettingsStore {
     return Object.keys(this.patchFor(draft)).length > 0
   }
 
-  /** Edit one always-present draft field via the schema-form path writer. */
+  /** Edit one always-present draft field via the settings schema path writer. */
   private setField(key: string, value: unknown): void {
     this.store.update((s) => {
-      s.draft = setPath(s.draft as unknown as Record<string, unknown>, [key], value) as unknown as AdvisorDraft
+      s.draft = this.schema.setPath(s.draft as unknown as Record<string, unknown>, [key], value) as unknown as AdvisorDraft
       s.applyState = { kind: 'idle' }
       s.dirty = this.recomputeDirty(s.draft)
     })
   }
 
-  /** Remove one optional draft field via the schema-form path writer. */
+  /** Remove one optional draft field via the settings schema path writer. */
   private clearField(key: string): void {
     this.store.update((s) => {
-      s.draft = deletePath(s.draft as unknown as Record<string, unknown>, [key]) as unknown as AdvisorDraft
+      s.draft = this.schema.deletePath(s.draft as unknown as Record<string, unknown>, [key]) as unknown as AdvisorDraft
       s.applyState = { kind: 'idle' }
       s.dirty = this.recomputeDirty(s.draft)
     })
