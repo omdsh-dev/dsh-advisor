@@ -60,7 +60,11 @@ packages (CI supply-chain policy rejects fresh rc releases). After the
 re-resolution, diff the lockfile's `@deepseek-ai/dsh-*@<line>` entries
 against the exemption list and add any new packages (alphabetical
 placement). Verify with `comm -3` between the two sorted sets — they must
-be identical.
+be identical. New entries MUST use the same
+`'@deepseek-ai/<pkg>@<line> || <line>'` form as the rest of the list (never
+a bare single-form tail) and each package must appear exactly once — the
+0.1.1-rc.1 bump duplicated five new packages by appending a single-form
+tail after the `||` entries.
 
 ### 4. Update the pin tests and docs
 
