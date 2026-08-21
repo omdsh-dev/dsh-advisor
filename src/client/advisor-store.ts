@@ -46,7 +46,7 @@ import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SettingsSchemaService } from '@deepseek-ai/dsh-client-ui-settings/client'
 /**
- * The rc.8 schema face the card store uses: ui-settings owns the immutable
+ * The schema face the card store uses: ui-settings owns the immutable
  * path writers (`ctx.settingsSchema`); this narrow pick hides the Cordis
  * service identity from the store and its tests.
  */

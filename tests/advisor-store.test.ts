@@ -41,7 +41,7 @@ import { fakeSchema } from './support/schema-ops'
 import { AdvisorSettingsStore, refreshIfLoaded } from '../src/client/advisor-store'
 import type { AdvisorConfigView, AdvisorDraft } from '../src/client/advisor-store'
 
-/** Real rc.8 settings schema service (immutable path writers under test). */
+/** Real settings schema service (immutable path writers under test). */
 const schema = fakeSchema()
 
 /** One unary wire response (provider directory calls). */

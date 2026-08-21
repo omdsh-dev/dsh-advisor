@@ -71,7 +71,7 @@ import styles from './advisor-card.module.css'
 
 /** Injected dependencies of {@link AdvisorCard} (slot `inject`). The `hooks`
  * compartment carries the bare snapshot store; the slot renderer binds it to
- * the `useSnapshot` selector hook the component consumes (rc.8 contract). */
+ * the `useSnapshot` selector hook the component consumes (host renderer contract). */
 export interface AdvisorCardInjected {
   /** The card store (loaded on mount, refreshed on pushed invalidations). */
   controller: AdvisorSettingsStore

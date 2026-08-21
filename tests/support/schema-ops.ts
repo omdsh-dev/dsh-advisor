@@ -1,12 +1,12 @@
 /**
- * Test-only immutable path writers mirroring the rc.8
+ * Test-only immutable path writers mirroring the
  * `@deepseek-ai/dsh-client-ui-settings` `SettingsSchemaService` semantics.
  *
  * The published ui-settings package exports `SettingsSchemaService` as a
  * TYPE only (`./client`), and its `./src/*` export is not shipped in the
  * tarball, so a spec cannot construct the real service. The store's tests
  * exercise patch/dirty semantics through these writers, so this fake is a
- * faithful copy of the rc.8 implementation (packages/client/ui-settings
+ * faithful copy of the published implementation (packages/client/ui-settings
  * src/client/schema.ts): immutability, materialized missing containers on
  * set, array-index splice on delete, and the non-empty-path throw. The
  * `SettingsSchemaOperations` type keeps the signature pinned to the real

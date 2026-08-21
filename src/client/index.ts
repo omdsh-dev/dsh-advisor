@@ -25,7 +25,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls ui-settings' Context merge (ctx.settingsSchema — the
-// rc.8 home of the immutable schema path writers the store needs).
+// home of the immutable schema path writers the store needs).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { AdvisorCard } from './advisor-card.tsx'
 import { AdvisorSettingsStore, refreshIfLoaded } from './advisor-store.ts'
@@ -85,8 +85,7 @@ export function apply(ctx: ClientContext): void {
   // - the granular Host invalidation events forwarded to the client remote
   //   face (`remote.$on`, subscribed on the `ctx.get('remote')` handle —
   //   feature-detected below, never a hard `ctx.remote` dependency; legal
-  //   key set = `API_REMOTE_FORWARDED_EVENTS` in @deepseek-ai/dsh-api-remotes,
-  //   pinned ^0.1.0-rc.8):
+  //   key set = `API_REMOTE_FORWARDED_EVENTS` in @deepseek-ai/dsh-api-remotes):
   //   `settings/document-updated` (a settings namespace document changed on
   //   the host — e.g. a provider section edited on the Models page) and
   //   `llm/adapters-updated` (provider/model topology mutation — e.g. a
@@ -135,7 +134,7 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('settings.plugin.item', function* () {
     yield ctx.slots.register({
       name: 'settings.plugin.item',
-      // rc.8 keyed slot: the key is the settings namespace the card edits —
+      // Keyed slot: the key is the settings namespace the card edits —
       // the already-installed `advisor` namespace (ADVISOR_SETTINGS_NAMESPACE
       // in src/settings.ts; spelled as a literal here because the host-half
       // settings module is outside the client bundle's externals). Keyed
@@ -143,7 +142,7 @@ export function apply(ctx: ClientContext): void {
       // order, which still places this card after the upstream three.
       key: 'advisor',
       locale: NS,
-      // rc.8 hooks compartment: the renderer binds `hooks.snapshot` to the
+      // Hooks compartment: the renderer binds `hooks.snapshot` to the
       // component's `useSnapshot` selector hook (the old web-react
       // bindSnapshotSelector call is gone with that package).
       inject: () => ({ controller, hooks: { snapshot: controller.store } }),

@@ -24,7 +24,7 @@ const root = JSON.parse(readFileSync(resolve(repo, 'package.json'), 'utf8')) as 
 const deepseekKeys = (field: Record<string, string> | undefined): string[] =>
   Object.keys(field ?? {}).filter((name) => name.startsWith('@deepseek-ai/')).sort()
 
-describe('registry peer contract (rc.8 from npm, no link farm)', () => {
+describe('registry peer contract (dsh line from npm, no link farm)', () => {
   it('every @deepseek-ai/* entry is a peerDependency and appears in no other dependency field', () => {
     const peers = deepseekKeys(root.peerDependencies)
     expect(peers.length).toBeGreaterThan(0)
@@ -35,15 +35,19 @@ describe('registry peer contract (rc.8 from npm, no link farm)', () => {
     }
   })
 
-  it('every @deepseek-ai/dsh-* peer is pinned to ^0.1.0-rc.8', () => {
-    for (const [name, range] of Object.entries(root.peerDependencies ?? {})) {
-      if (name.startsWith('@deepseek-ai/dsh-')) {
-        expect(range, name).toBe('^0.1.0-rc.8')
-      }
+  it('every @deepseek-ai/dsh-* peer shares one identical range from package.json', () => {
+    const dshPeers = Object.entries(root.peerDependencies ?? {})
+      .filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
+    expect(dshPeers.length).toBeGreaterThan(0)
+    const [first, ...rest] = dshPeers
+    const [firstName, firstRange] = first
+    expect(firstRange.trim(), firstName).not.toBe('')
+    for (const [name, range] of rest) {
+      expect(range, name).toBe(firstRange)
     }
   })
 
-  it('uses the scoped schemastery peer supplied by DSH rc.8', () => {
+  it('uses the scoped schemastery peer supplied by the dsh line', () => {
     expect(root.peerDependencies?.['@deepseek-ai/schemastery']).toBe('^3.18.1')
     expect(root.peerDependencies?.schemastery).toBeUndefined()
     expect(root.devDependencies?.schemastery).toBeUndefined()

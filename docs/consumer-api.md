@@ -48,7 +48,7 @@ import type { AdvisorConfig, ResolvedAdvisorConfig } from 'dsh-advisor'
 import type { AdvisorCardProps, AdvisorSettingsStore, ModelOption, ProviderOption } from 'dsh-advisor/client'
 ```
 
-- **`inject`**：`['slots', 'locale', 'connection', 'settingsSchema']`（cordis fiber 注入；`settingsSchema` 为 rc.8 ui-settings 提供的不可变路径写入服务）；locale 字典命名空间 `settings.advisor`（zh / en）；
+- **`inject`**：`['slots', 'locale', 'connection', 'settingsSchema']`（cordis fiber 注入；`settingsSchema` 为 ui-settings 提供的不可变路径写入服务）；locale 字典命名空间 `settings.advisor`（zh / en）；
 - **类型导出**：`AdvisorCardInjected`、`AdvisorCardProps`、`AdvisorKey`、`AdvisorDraft`、`AdvisorSettingsState`、`AdvisorSettingsStore`、`ApplyFailure`、`ApplyState`、`ModelOption`、`ModelsEmptyReason`、`ProviderOption`；
 - **value 导出**：`refreshIfLoaded`（纯 controller 辅助：仅在卡片首次加载后重取页面快照；未打开的卡片不在后台失效时发起 fetch）；
 - **web 注入声明**（`package.json` `dsh.client`）：`@deepseek-ai/dsh-client-runtime` + `@deepseek-ai/dsh-client-ui-settings-plugins` + `@deepseek-ai/dsh-client-locale`，平台 `web`；
