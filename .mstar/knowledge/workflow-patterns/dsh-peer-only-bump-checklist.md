@@ -5,7 +5,7 @@ problem_type: workflow_issue
 category: workflow-patterns
 severity: low
 title: Mechanical checklist for bumping dsh peerDependencies to a new published line
-description: Verified process for a peer-only dsh bump (no API migration): verify the published line on the registry, bump every @deepseek-ai/dsh-* peer, re-resolve the lockfile, sync pnpm-workspace minimumReleaseAgeExclude including NEW transitive peers pulled in by the re-resolution, update the peer-deps pin test and docs badges, then typecheck/test/build. The 0.1.1-rc.1 breaking changes (credentials records/authorization, session-projection stateSchema, pi-ai auth injection, webserver index-inject, cacheHitPercent string|null, acp-snapshot scrub rename) are N/A for a plugin that consumes none of those APIs — the settings.plugin.item card surface (settingsSchema service, keyed slot + hooks compartment) is unchanged.
+description: Verified process for a peer-only dsh bump (no API migration): verify the published line on the registry, bump every @deepseek-ai/dsh-* peer, re-resolve the lockfile, sync pnpm-workspace minimumReleaseAgeExclude including NEW transitive peers pulled in by the re-resolution, update the README badge, then typecheck/test/build. The 0.1.1-rc.1 breaking changes (credentials records/authorization, session-projection stateSchema, pi-ai auth injection, webserver index-inject, cacheHitPercent string|null, acp-snapshot scrub rename) are N/A for a plugin that consumes none of those APIs — the settings.plugin.item card surface (settingsSchema service, keyed slot + hooks compartment) is unchanged.
 tags:
   - dsh
   - upstream-bump
@@ -62,17 +62,19 @@ against the exemption list and add any new packages (alphabetical
 placement). Verify with `comm -3` between the two sorted sets — they must
 be identical. New entries MUST use the same
 `'@deepseek-ai/<pkg>@<line> || <line>'` form as the rest of the list (never
-a bare single-form tail) and each package must appear exactly once — the
-0.1.1-rc.1 bump duplicated five new packages by appending a single-form
+a bare single-form tail) and each package must appear exactly once — a
+previous bump duplicated five new packages by appending a single-form
 tail after the `||` entries.
 
-### 4. Update the pin tests and docs
+### 4. Update the README badge
 
-- `tests/peer-deps.test.ts`: describe title + the `^0.1.0-rc.8` pin
-  assertion + the schemastery title.
-- README / README.zh dsh badge, `docs/verification.md` peer-deps row,
-  `docs/consumer-api.md` version mentions, source/test comments that name
-  the old line as the floor, CONCEPTS.md peer-contract line.
+- README.md / README.zh.md shields.io dsh badge — the single
+  human-facing compatible-version signal.
+- `tests/peer-deps.test.ts` is version-agnostic: it derives the shared
+  `dsh-*` range from package.json, so a bump needs no test edits.
+- Do NOT retouch scattered version mentions in source/test comments or
+  docs (CONCEPTS.md, docs/verification.md, docs/consumer-api.md) — they
+  describe host-API facts, not the pinned line.
 - CHANGELOG.md and historical knowledge docs are records — do NOT rewrite
   past entries.
 

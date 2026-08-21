@@ -37,8 +37,8 @@ const CHANGELOG_HEADER =
  * suffix); null when not parseable. The suffix character set matches the
  * workflows' guard regex `[0-9A-Za-z.-]+` (keep-simple: no leading-zero or
  * empty-identifier rules), with one tightening: the suffix MUST contain at
- * least one digit, so `0.1.1-alpha.1` / `0.1.1-rc.2` parse but `0.1.1-alpha`
- * (no numeric identifier) and `0.1.1-` (empty suffix) are rejected. Returns
+ * least one digit, so `1.2.3-alpha.1` / `1.2.3-rc.2` parse but `1.2.3-alpha`
+ * (no numeric identifier) and `1.2.3-` (empty suffix) are rejected. Returns
  * { major, minor, patch, prerelease? } — prerelease is the raw suffix text
  * (e.g. 'alpha.1') when present, undefined for formal versions.
  */
