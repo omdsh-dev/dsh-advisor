@@ -55,7 +55,7 @@ T4 提取与 T6 投递之间的守门员：normalize（小写 + NFKC + 非字母
 *Avoid:* patch 交付 / 本地修改交付（历史方案，已移除）
 
 ### registry peers（开发期依赖解析）
-私有 `@deepseek-ai/*` 包**只**作 `peerDependencies`（绝不进 `dependencies` / `devDependencies`）：`pnpm-workspace.yaml` 的 `autoInstallPeers: true` + 用户级 `~/.npmrc` registry 认证令牌从 npm registry 解析 `@deepseek-ai/*@0.1.0-rc.6`（pnpm 11 起项目级 `.npmrc` 不再展开 `${NPM_TOKEN}`；无本地 link farm，`nodeLinker: hoisted`）。`tests/peer-deps.test.ts` 数据驱动钉住该契约（peer-only、rc.6 钉版、autoInstallPeers、scoped schemastery、prepare 仅 build）。运行时值 import 保持 external，由宿主 in-box / 扁平 profile 模块 fallback 解析。
+私有 `@deepseek-ai/*` 包**只**作 `peerDependencies`（绝不进 `dependencies` / `devDependencies`）：`pnpm-workspace.yaml` 的 `autoInstallPeers: true` + 用户级 `~/.npmrc` registry 认证令牌从 npm registry 解析 `@deepseek-ai/*@0.1.1-rc.1`（pnpm 11 起项目级 `.npmrc` 不再展开 `${NPM_TOKEN}`；无本地 link farm，`nodeLinker: hoisted`）。`tests/peer-deps.test.ts` 数据驱动钉住该契约（peer-only、0.1.1-rc.1 钉版、autoInstallPeers、scoped schemastery、prepare 仅 build）。运行时值 import 保持 external，由宿主 in-box / 扁平 profile 模块 fallback 解析。
 *Avoid:* peer-stubs / tsconfig paths / 本地 link farm（历史方案，已移除）
 
 ### /advisor commands
