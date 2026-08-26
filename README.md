@@ -2,6 +2,7 @@
 
 [English](README.md) | [中文](README.zh.md)
 
+[![npm](https://img.shields.io/npm/dt/dsh-advisor)](https://www.npmjs.com/package/dsh-advisor)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933.svg)
 ![dsh](https://img.shields.io/badge/dsh-0.1.1--rc.2-4B32C3.svg)
