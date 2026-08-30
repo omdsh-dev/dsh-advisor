@@ -7,7 +7,7 @@
  *    source thunk falls back to the entry config (the plugin-row config),
  *    behavior identical to today, and the value still passes through the
  *    `resolveAdvisorConfig` hard gate (SSOT unchanged).
- * ② With a settings service mounted — `installSettingsSection` registers the
+ * ② With a settings service mounted — the settings service's `installSection` registers the
  *    `advisor` namespace: `describe` exposes it, the schema is the `Config`
  *    schema, the composition `base` is the entry config.
  * ③ A user-layer write (enabled/provider/model) is reflected live in the
