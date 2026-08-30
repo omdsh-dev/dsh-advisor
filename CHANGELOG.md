@@ -2,6 +2,12 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.3.0-alpha.1] - 2026-08-30
+
+- e20c856 Merge pull request #69 from omdsh-dev/chore/dsh-0.1.2-alpha.2
+- 579d65c docs: add npm total downloads badge to READMEs (#67)
+- 82d04b6 chore(deps): upgrade dsh peers to 0.1.1-rc.2 (#66)
+
 ## [0.2.4] - 2026-08-21
 
 - 2c08ef9 feat: upgrade dsh peers to 0.1.1-rc.1 (#64)
