@@ -13,8 +13,11 @@
  *   old `api.settings.describe`/`mutate` path is dead for it and the gateway
  *   is the only web-visible channel (host side: `src/gateway.ts`, `@Remote`
  *   get/set against the live `AdvisorSettingsBridge` source);
- * - the **provider/model directory** stays on `api.settings.describe` /
- *   `api.llm.*` (the `llm-deepseek` namespaces ARE in the exposed set).
+ * - the **provider/model directory** and the settings namespaces ride the
+ *   client Remote assembly (`ctx.remote.llm.listConfigurableProviders` /
+ *   `ctx.remote.settings.describe` / `ctx.remote.session.modelCatalog` — the
+ *   alpha.2 replacement for the removed `connection.api` surface; the
+ *   `llm-deepseek` namespaces ARE in the exposed describe set).
  *
  * The returned config is the RESOLVED config (through the host hard gate):
  * absent keys (provider/model/disabledReason) are omitted by the wire
@@ -38,12 +41,13 @@
  *   form — never a hard load error, and never Apply).
  */
 
-import type {
-  ClientConnectionRpc, ConfigurableProviderView, IApiClient, ModelProviderGroup,
-  SettingsNamespaceView,
-} from '@deepseek-ai/dsh-client-connection/client'
-import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
+import type { LlmConfigurableProvider } from '@deepseek-ai/dsh-llm/types'
+import type { SettingsDescribeValue, SettingsNamespaceView } from '@deepseek-ai/dsh-settings/types'
+import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
+import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SettingsSchemaService } from '@deepseek-ai/dsh-client-ui-settings/client'
 /**
  * The schema face the card store uses: ui-settings owns the immutable
@@ -53,6 +57,22 @@ import type { SettingsSchemaService } from '@deepseek-ai/dsh-client-ui-settings/
 export type SettingsSchemaOperations = Pick<
   SettingsSchemaService, 'getPath' | 'setPath' | 'deletePath'
 >
+
+/**
+ * The wire face the card store uses (KD-G3, alpha.2): the provider/model
+ * directory and the settings describe surface ride the client Remote
+ * assembly (`ctx.remote` — `llm.listConfigurableProviders`,
+ * `settings.describe`, `session.modelCatalog`); the advisor config itself
+ * stays on the gateway RPC channel (`rpc.call('/api', …)`) because the
+ * `advisor` namespace is not exposed on the settings describe wire. Narrow
+ * pick of the assembled `ClientRemote` so the store and its tests never
+ * depend on the generated namespace surface.
+ */
+export interface AdvisorStoreRemote {
+  llm: { listConfigurableProviders(): Promise<RemoteResult<LlmConfigurableProvider[]>> }
+  settings: { describe(): Promise<RemoteResult<SettingsDescribeValue>> }
+  session: { modelCatalog(): Promise<RemoteResult<ModelCatalog>> }
+}
 
 /**
  * The wire `config` value the host gateway returns — mirror of the node-side
@@ -254,7 +274,7 @@ export class AdvisorSettingsStore {
   private generation = 0
 
   /** Host-scoped model catalog; cached only on success (a transient failure stays uncached and is refetched). */
-  private catalog: ModelProviderGroup[] | undefined
+  private catalog: ModelCatalog['groups'] | undefined
 
   /** In-flight host-scoped catalog fetch; one promise shared across providers. */
   private catalogPromise: Promise<void> | undefined
@@ -276,13 +296,14 @@ export class AdvisorSettingsStore {
   private seed: AdvisorDraft = defaultDraft()
 
   /**
-   * @param api - the wire face (settings/llm domains) for the provider/model
-   *   directory (the advisor namespace is NOT on that wire).
+   * @param remote - the client Remote assembly face (llm/settings/session
+   *   namespaces) for the provider/model directory (the advisor namespace is
+   *   NOT on that wire).
    * @param rpc - the connection's generic RPC caller for the host gateway
    *   channel (`/api`), injected from the connection handle.
    */
   constructor(
-    private readonly api: Pick<IApiClient, 'settings' | 'llm'>,
+    private readonly remote: AdvisorStoreRemote,
     private readonly rpc: ClientConnectionRpc,
     private readonly schema: SettingsSchemaOperations,
   ) {}
@@ -317,19 +338,19 @@ export class AdvisorSettingsStore {
   async load(): Promise<void> {
     const generation = ++this.generation
     this.store.update((s) => { s.status = 'loading'; s.error = null })
-    let providers: ConfigurableProviderView[]
+    let providers: LlmConfigurableProvider[]
     let writable: boolean
     let views: SettingsNamespaceView[]
     try {
-      const [providersResponse, settingsResponse] = await Promise.all([
-        this.api.llm.providers({}),
-        this.api.settings.describe({}),
+      const [providersResult, settingsResult] = await Promise.all([
+        this.remote.llm.listConfigurableProviders(),
+        this.remote.settings.describe(),
       ])
-      if (!providersResponse.result.ok) throw new Error(providersResponse.result.error.message)
-      if (!settingsResponse.result.ok) throw new Error(settingsResponse.result.error.message)
-      providers = providersResponse.result.value.providers
-      writable = settingsResponse.result.value.writable
-      views = settingsResponse.result.value.namespaces
+      if (!providersResult.ok) throw new Error(providersResult.error.message)
+      if (!settingsResult.ok) throw new Error(settingsResult.error.message)
+      providers = providersResult.value
+      writable = settingsResult.value.writable
+      views = settingsResult.value.namespaces
     } catch (error) {
       if (generation !== this.generation) return
       this.store.update((s) => {
@@ -431,10 +452,10 @@ export class AdvisorSettingsStore {
 
   /**
    * Resolve the model options for one provider (KD-S2): profile-declared
-   * `models` win; otherwise the `llm.models` catalog group for that provider;
-   * neither → empty options + a reason. The host-scoped catalog is fetched at
-   * most once (concurrent first resolutions share one in-flight fetch) and
-   * cached only on success. No-op for unconfigured providers.
+   * `models` win; otherwise the `session.modelCatalog` group for that
+   * provider; neither → empty options + a reason. The host-scoped catalog is
+   * fetched at most once (concurrent first resolutions share one in-flight
+   * fetch) and cached only on success. No-op for unconfigured providers.
    * @param provider - provider route id.
    * @returns nothing; the snapshot carries the outcome.
    */
@@ -463,11 +484,11 @@ export class AdvisorSettingsStore {
       // catalog mid-flight (qc1 W-1 / qc3 S-1): a fetch started before the
       // invalidation is stale and must not cache stale/empty data — the
       // generation check below detects it and starts a fresh fetch.
-      let group: ModelProviderGroup | undefined
+      let group: ModelCatalog['groups'][number] | undefined
       for (;;) {
         if (this.catalog === undefined) {
           // One shared in-flight fetch: concurrent first resolutions for
-          // different providers must not double-call llm.models.
+          // different providers must not double-call session.modelCatalog.
           if (this.catalogPromise === undefined) {
             const fetch = this.fetchCatalog()
             const tracked = fetch.finally(() => {
@@ -509,9 +530,9 @@ export class AdvisorSettingsStore {
   private async fetchCatalog(): Promise<void> {
     const generation = this.catalogGeneration
     try {
-      const response = await this.api.llm.models({})
+      const response = await this.remote.session.modelCatalog()
       if (generation !== this.catalogGeneration) return
-      this.catalog = response.result.ok ? response.result.value.groups : undefined
+      this.catalog = response.ok ? response.value.groups : undefined
     } catch {
       if (generation === this.catalogGeneration) this.catalog = undefined
     }

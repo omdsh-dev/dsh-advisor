@@ -7,15 +7,14 @@
  * provider directory through the connection wire, and keeps fresh on pushed
  * invalidations. Export discipline: the client half value-imports ONLY the
  * frozen platform module table (CLIENT_EXTERNALS: react /
- * @deepseek-ai/cordis / ui-slots / ui-primitives / the documented
- * `@deepseek-ai/dsh-client-runtime/client` exemption); every other
+ * `@deepseek-ai/cordis` / ui-slots / ui-primitives / the documented
+ * `@deepseek-ai/dsh-client-store` exemption); every other
  * `@deepseek-ai/*` import is type-only (erased at build) — values arrive via
  * cordis injection (`ctx.get('connection')`, slot inject faces, the
  * `settingsSchema` service). Mirrors the ui-models reference entry.
  */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
-import type { TypertClientRemote } from '@deepseek-ai/dsh-typert-protocol'
 // Type-only: pulls the plugin-config card slot's SlotMap merge (the
 // 'settings.plugin.item' entry — this half's registration target). Same empty
 // type-only import pattern as the old ui-settings one: it loads the module's
@@ -27,6 +26,22 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls ui-settings' Context merge (ctx.settingsSchema — the
 // home of the immutable schema path writers the store needs).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+// Type-only: pulls the client Remote assembly's Context merge (ctx.remote)
+// and the generated namespace surface (remote.llm / remote.settings /
+// remote.session — the alpha.2 replacement for the removed `connection.api`
+// wire face the store previously read the provider directory from).
+import type {} from '@deepseek-ai/dsh-api-gateway/client'
+import type {} from '@deepseek-ai/dsh-llm/remote'
+import type {} from '@deepseek-ai/dsh-api-settings-controller/remote'
+import type {} from '@deepseek-ai/dsh-api-session-controller/remote'
+// Type-only: pulls the forwarded-Host-event selection (the legal key set of
+// `ctx.remote.$on` — API_REMOTE_FORWARDED_EVENTS in @deepseek-ai/dsh-api-remotes):
+// `settings/document-updated` + `llm/adapters-updated` below.
+import type {} from '@deepseek-ai/dsh-api-remotes/types'
+// Type-only: pulls the renderer's Context merge (ctx.slots — the SlotRegistry
+// seat the card registers into; the seat moved from dsh-client-runtime to the
+// ui-renderer in the alpha.2 line).
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { AdvisorCard } from './advisor-card.tsx'
 import { AdvisorSettingsStore, refreshIfLoaded } from './advisor-store.ts'
 import { en, zh, type AdvisorKey } from './locales.ts'
@@ -59,7 +74,7 @@ export { refreshIfLoaded } from './advisor-store.ts'
  * ui-plugin-config's apply, whose activation order relative to this one is
  * NOT constrained; registration depends on the slot through `slots.inject()`.
  */
-export const inject = ['slots', 'locale', 'connection', 'settingsSchema']
+export const inject = ['slots', 'locale', 'connection', 'settingsSchema', 'remote']
 
 /**
  * Register the Advisor card once the `settings.plugin.item` declaration is on
@@ -73,8 +88,9 @@ export function apply(ctx: ClientContext): void {
   const connection = ctx.get('connection') as ConnectionHandle
   // The store reads/writes the advisor config over the connection's generic
   // RPC channel (the host gateway `/api/advisor/get` + `/api/advisor/set`);
-  // the provider/model directory still rides `connection.api` (KD-G3).
-  const controller = new AdvisorSettingsStore(connection.api, connection.rpc, ctx.settingsSchema)
+  // the provider/model directory rides the client Remote assembly (`remote`
+  // — injected above; KD-G3, alpha.2).
+  const controller = new AdvisorSettingsStore(ctx.remote, connection.rpc, ctx.settingsSchema)
 
   // Pushed invalidations converge the open surface without polling. Two
   // planes feed the shared microtask debounce:
@@ -83,23 +99,21 @@ export function apply(ctx: ClientContext): void {
   //   signal — its `SettingsScopeBinder` also subscribes to the remote
   //   settings event below);
   // - the granular Host invalidation events forwarded to the client remote
-  //   face (`remote.$on`, subscribed on the `ctx.get('remote')` handle —
-  //   feature-detected below, never a hard `ctx.remote` dependency; legal
-  //   key set = `API_REMOTE_FORWARDED_EVENTS` in @deepseek-ai/dsh-api-remotes):
-  //   `settings/document-updated` (a settings namespace document changed on
-  //   the host — e.g. a provider section edited on the Models page) and
-  //   `llm/adapters-updated` (provider/model topology mutation — e.g. a
-  //   model added on the Models page). The 20260811 dsh snapshot removed the
-  //   old `settings/changed` / `models/changed` host passthroughs from the
-  //   client runtime Events vocabulary; the forwarded-event allowlist is
-  //   their replacement (plan 003 / status R3 — restores same-host live
-  //   convergence without a reconnect).
-  // `remote` is a client-assembly service, resolved with `ctx.get` (not
-  // injected) and feature-detected: a shell that does not mount it keeps
-  // today's reset-only behavior — no throw on registration. A burst of
-  // invalidations coalesces into a single refetch via the microtask debounce
-  // — events in separate ticks each trigger a load, and `refreshIfLoaded`
-  // keeps an unopened card idle.
+  //   face (`ctx.remote.$on`; legal key set = `API_REMOTE_FORWARDED_EVENTS`
+  //   in @deepseek-ai/dsh-api-remotes): `settings/document-updated` (a
+  //   settings namespace document changed on the host — e.g. a provider
+  //   section edited on the Models page) and `llm/adapters-updated`
+  //   (provider/model topology mutation — e.g. a model added on the Models
+  //   page). The 20260811 dsh snapshot removed the old `settings/changed` /
+  //   `models/changed` host passthroughs from the client runtime Events
+  //   vocabulary; the forwarded-event allowlist is their replacement (plan
+  //   003 / status R3 — restores same-host live convergence without a
+  //   reconnect).
+  // `remote` is injected above (alpha.2: the client Remote assembly is the
+  // store's provider-directory wire, so it is a hard registration
+  // dependency). A burst of invalidations coalesces into a single refetch via
+  // the microtask debounce — events in separate ticks each trigger a load,
+  // and `refreshIfLoaded` keeps an unopened card idle.
   ctx.effect(() => {
     let pending = false
     const refresh = (): void => {
@@ -111,16 +125,13 @@ export function apply(ctx: ClientContext): void {
       })
     }
     const disposers: Array<() => void> = [ctx.on('connection/reset', refresh)]
-    const remote: TypertClientRemote | undefined = ctx.get('remote')
-    if (remote) {
-      // Deliberately unfiltered: the store reads the whole settings surface
-      // (provider directory + all namespaces + advisor config), so a
-      // namespace filter (upstream SettingsScopeBinder applies one) would
-      // miss provider-section changes; the microtask debounce + load()'s
-      // generation guard bound the cost.
-      disposers.push(remote.$on('settings/document-updated', refresh))
-      disposers.push(remote.$on('llm/adapters-updated', refresh))
-    }
+    // Deliberately unfiltered: the store reads the whole settings surface
+    // (provider directory + all namespaces + advisor config), so a
+    // namespace filter (upstream SettingsScopeBinder applies one) would
+    // miss provider-section changes; the microtask debounce + load()'s
+    // generation guard bound the cost.
+    disposers.push(ctx.remote.$on('settings/document-updated', refresh))
+    disposers.push(ctx.remote.$on('llm/adapters-updated', refresh))
     return () => { for (const dispose of disposers) dispose() }
   }, 'advisor: pushed invalidations')
 

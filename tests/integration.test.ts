@@ -35,7 +35,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { CallId, LlmAdapter, LlmRuntime, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, LlmAdapter, LlmRuntime, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, StreamChunk, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -242,7 +242,7 @@ function assistantMessage(value: string, toolCalls: Array<{ name: string; args: 
   const content: ContentBlock[] = []
   if (value.length > 0) content.push(text(value))
   for (const [index, call] of toolCalls.entries()) {
-    content.push({ type: 'tool-call', id: CallId(`call-${index}`), name: call.name, arguments: call.args })
+    content.push({ type: 'tool-call', id: ToolCallId(`call-${index}`), name: call.name, arguments: call.args })
   }
   return {
     type: 'assistant/message',
@@ -269,8 +269,8 @@ function toolResultMessage(value: string): EventSpec {
       message: {
         id: MessageId(`tool-${value}`),
         role: 'user',
-        content: [{ type: 'tool-result', toolCallId: CallId('call-0'), content: [text(value)], isError: false }],
-        source: { kind: 'tool', callId: CallId('call-0') },
+        content: [{ type: 'tool-result', toolCallId: ToolCallId('call-0'), content: [text(value)], isError: false }],
+        source: { kind: 'tool', callId: ToolCallId('call-0') },
       },
     },
     surfaceOp: 'append',

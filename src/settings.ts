@@ -37,13 +37,12 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace, SettingsScope } from '@deepseek-ai/dsh-settings'
 import { Config } from './config.js'
 import type { AdvisorConfig } from './config.js'
 
 /** The `advisor` settings namespace (registered when a settings service exists). */
-export const ADVISOR_SETTINGS_NAMESPACE = settingsNamespace('advisor')
+export const ADVISOR_SETTINGS_NAMESPACE = 'advisor' as SettingsNamespace
 
 /**
  * Mirror of @deepseek-ai/dsh-settings' `isUnloading` guard (its

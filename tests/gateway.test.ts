@@ -346,10 +346,9 @@ type FakeRpcResult =
 
 type FakeRpcHandler = (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<FakeRpcResult>
 
-/** Records the `/api` interceptor the typertGateway mounts (gateway.spec.ts pattern). */
+/** Records the `/api` interceptor the typertGateway mounts (alpha.2 `HostConnectionRpc.intercept` shape). */
 class FakeConnectionService extends Service {
   channel: string | undefined
-  authority: string | undefined
   matches: ((endpoint: string) => boolean) | undefined
   handler: FakeRpcHandler | undefined
 
@@ -361,19 +360,16 @@ class FakeConnectionService extends Service {
     const owner = this.ctx
     return {
       intercept: (
-        channel: string,
+        channel: '/api',
         matches: (endpoint: string) => boolean,
         handler: FakeRpcHandler,
-        options: { readonly authority: string },
       ) =>
         owner.effect(() => {
           this.channel = channel
-          this.authority = options.authority
           this.matches = matches
           this.handler = handler
           return () => {
             this.channel = undefined
-            this.authority = undefined
             this.matches = undefined
             this.handler = undefined
           }
@@ -413,7 +409,6 @@ describe('typertGateway endpoint claims + payload contract', () => {
     expect(ctx.reflect.props['advisor']).toEqual({ type: 'service' })
     expect(ctx.typert.local.get('advisor/get')).toMatchObject({ service: 'advisor', namespace: 'advisor', method: 'get' })
     expect(ctx.typert.local.get('advisor/set')).toMatchObject({ service: 'advisor', namespace: 'advisor', method: 'set' })
-    expect(connection.authority).toBe('trusted-host')
     expect(connection.matches!('advisor/get')).toBe(true)
     expect(connection.matches!('advisor/set')).toBe(true)
     // Unrelated endpoints are NOT claimed (the interceptor falls through).

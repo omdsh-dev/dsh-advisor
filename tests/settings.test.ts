@@ -21,7 +21,6 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { MemorySettings } from './support/memory-settings'
 import { ADVISOR_SETTINGS_NAMESPACE, installAdvisorSettings } from '../src/settings'
 import { Config, resolveAdvisorConfig } from '../src/config'
@@ -276,7 +275,6 @@ describe('unknown config keys (strict rejection unchanged)', () => {
   })
 
   it('the namespace id is the exact `advisor` kebab-case brand', () => {
-    expect(settingsNamespace('advisor')).toBe(ADVISOR_SETTINGS_NAMESPACE)
-    expect(settingsNamespace('advisor')).toBe('advisor')
+    expect(ADVISOR_SETTINGS_NAMESPACE).toBe('advisor')
   })
 })

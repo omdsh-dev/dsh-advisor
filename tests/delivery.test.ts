@@ -33,7 +33,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import type { GenerateOptions, StreamChunk, UserMessage } from '@deepseek-ai/dsh-llm'
-import { CallId, CONTEXT_SUMMARY_MAX_CHARS, MessageId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, CONTEXT_SUMMARY_MAX_CHARS, MessageId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, SurfaceOp } from '@deepseek-ai/dsh-session'
 import { AdvisorDelivery, buildAdvisorMessage } from '../src/delivery'

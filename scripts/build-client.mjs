@@ -5,7 +5,7 @@
  * `window.__ModuleLoader__.load({ id: 'dsh-advisor', factory: (require) => {
  * … return module.exports; } })`. Externals resolve through the loader module
  * table — the frozen `CLIENT_EXTERNALS` (platform seed entries + the
- * documented `@deepseek-ai/dsh-client-runtime/client` exemption); everything
+ * documented `@deepseek-ai/dsh-client-store` exemption); everything
  * else inlines. The web shell's ClientModuleHostService serves the artifact at
  * `/plugins/dsh-advisor/client.js` and executes it as a CLASSIC <script>, so
  * the emitted text must contain NO `import.meta` and no top-level ESM
@@ -45,7 +45,7 @@ const ID = 'dsh-advisor'
 const ENTRY = 'src/client/index.ts'
 const OUT_FILE = 'lib/client.js'
 
-/** Loader module table (KD-S5): platform seed entries plus the documented runtime/client exemption. */
+/** Loader module table (KD-S5): platform seed entries plus the documented client-store exemption. */
 export const CLIENT_EXTERNALS = [
   'react',
   'react/jsx-runtime',
@@ -54,7 +54,7 @@ export const CLIENT_EXTERNALS = [
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-runtime/client',
+  '@deepseek-ai/dsh-client-store',
 ]
 
 /** Virtual-id wrapper keeping module CSS away from esbuild's own css pipeline (mirror of dsh tsdown.client.ts dsh-css-modules-inline). */
@@ -64,7 +64,7 @@ const CSS_VIRTUAL_SUFFIX = '.mjs'
 const CSS_NAMESPACE = 'dsh-css-modules'
 
 /** Wire/type layers with no shared runtime identity that may inline (tsdown.client.ts mirror). */
-const INLINE_SAFE = /^@deepseek-ai\/dsh-(host-apiproxy|session|llm|tools|brand)(\/|$)/
+const INLINE_SAFE = /^@deepseek-ai\/dsh-(session|llm|tools|brand)(\/|$)/
 /** Generated descriptor/codec contribution with no shared runtime identity. */
 const GENERATED_REMOTE = /^@deepseek-ai\/dsh-[a-z0-9]+(?:-[a-z0-9]+)*\/remote$/
 
