@@ -40,7 +40,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
-import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { ADVISOR_SETTINGS_NAMESPACE } from './settings.js'
 import type { AdvisorSettingsBridge } from './settings.js'
 import { resolveAdvisorConfig } from './config.js'
@@ -121,7 +121,10 @@ export class AdvisorConfigGateway extends TypertRemoteService {
     if (Object.keys(patch).length === 0) return { config: this.readConfig() }
     const settings = this.settings
     if (settings === undefined) {
-      throw new Error('advisor: settings service is unavailable — configuration cannot be written')
+      // Remote failure vocabulary (dsh 0.1.2-alpha.2): the gateway dispatch
+      // encodes thrown RemoteError onto the wire unchanged, so the card
+      // receives a coded RemoteFailure instead of an ad-hoc Error shape.
+      throw new RemoteError('gateway/internal', 'advisor: settings service is unavailable — configuration cannot be written', {})
     }
     // Wire normalization (QC tri M-2): JSON cannot carry undefined, so a
     // null-valued key is a third-party client's way of saying "absent" — the

@@ -7,7 +7,7 @@
  * `installAdvisorSettings` directly) and the integration suite (composes
  * `apply` WITHOUT a settings service), these tests compose the REAL plugin
  * into a real cordis `Context` with `MemorySettings` mounted, so the full
- * wiring — settings service → `installSettingsSection` → bridge source thunk →
+ * wiring — settings service → `installSection` → bridge source thunk →
  * `onChange` → re-apply (setImmuneTurns / setMaxDeltaMessages /
  * setConfigEnabled / dispose+ensure per-session runtimes) — is exercised end
  * to end. `MemorySettings` notifies watchers synchronously inside
@@ -172,7 +172,7 @@ function fullConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
 
 /**
  * Compose the real plugin into a cordis context with the settings service
- * mounted: `MemorySettings` first (the `installSettingsSection` consumer child
+ * mounted: `MemorySettings` first (the `installSection` consumer child
  * then activates once the advisor plugin loads), real `LlmRuntime` + the stub
  * adapter on both provider routes, fake `sessions`/`agents` services so the
  * plugin's top-level inject list resolves, then load the plugin through the
@@ -680,8 +680,8 @@ describe('settings live re-apply — attach ordering + detach fallback (qc1 S-1 
     feed(ctx, session, log, simpleTurn(1, 'first request', 'first reply'))
     await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
 
-    // Detach: the settings service goes away → installSettingsSection's
-    // disposer falls back to the entry (setSource(entry) + onChange) →
+    // Detach: the settings service goes away → installSection's
+    // detach effect falls back to the entry (setSource(entry) + onChange) →
     // latches re-applied (immuneTurns 4 → 2) with no runtime rebuild (the
     // runtime-affecting triple and the effective switch are unchanged).
     ctx.registry.delete(MemorySettings)

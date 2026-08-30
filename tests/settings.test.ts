@@ -7,7 +7,7 @@
  *    source thunk falls back to the entry config (the plugin-row config),
  *    behavior identical to today, and the value still passes through the
  *    `resolveAdvisorConfig` hard gate (SSOT unchanged).
- * ② With a settings service mounted — `installSettingsSection` registers the
+ * ② With a settings service mounted — the settings service's `installSection` registers the
  *    `advisor` namespace: `describe` exposes it, the schema is the `Config`
  *    schema, the composition `base` is the entry config.
  * ③ A user-layer write (enabled/provider/model) is reflected live in the
@@ -21,7 +21,6 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { MemorySettings } from './support/memory-settings'
 import { ADVISOR_SETTINGS_NAMESPACE, installAdvisorSettings } from '../src/settings'
 import { Config, resolveAdvisorConfig } from '../src/config'
@@ -276,7 +275,6 @@ describe('unknown config keys (strict rejection unchanged)', () => {
   })
 
   it('the namespace id is the exact `advisor` kebab-case brand', () => {
-    expect(settingsNamespace('advisor')).toBe(ADVISOR_SETTINGS_NAMESPACE)
-    expect(settingsNamespace('advisor')).toBe('advisor')
+    expect(ADVISOR_SETTINGS_NAMESPACE).toBe('advisor')
   })
 })

@@ -28,7 +28,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { CallId, MessageId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, MessageId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, SurfaceOp } from '@deepseek-ai/dsh-session'
 import {
@@ -91,7 +91,7 @@ function assistantMessage(value: string, toolCalls: Array<{ name: string; args: 
   const content: ContentBlock[] = []
   if (value.length > 0) content.push(text(value))
   for (const [index, call] of toolCalls.entries()) {
-    content.push({ type: 'tool-call', id: CallId(`call-${index}`), name: call.name, arguments: call.args })
+    content.push({ type: 'tool-call', id: ToolCallId(`call-${index}`), name: call.name, arguments: call.args })
   }
   return {
     type: 'assistant/message',
@@ -118,8 +118,8 @@ function toolResultMessage(value: string): EventSpec {
       message: {
         id: MessageId(`tool-${value}`),
         role: 'user',
-        content: [{ type: 'tool-result', toolCallId: CallId('call-0'), content: [text(value)], isError: false }],
-        source: { kind: 'tool', callId: CallId('call-0') },
+        content: [{ type: 'tool-result', toolCallId: ToolCallId('call-0'), content: [text(value)], isError: false }],
+        source: { kind: 'tool', callId: ToolCallId('call-0') },
       },
     },
     surfaceOp: 'append',
@@ -821,7 +821,7 @@ describe('SessionTranscriptObserver — inbox-spliced payload discrimination (C-
     const { deltas, stepped, observer } = observe()
     feed(observer, 's1', [
       ...round(),
-      inboxSplicedWith('3 passed', { kind: 'tool', callId: CallId('call-0') }),
+      inboxSplicedWith('3 passed', { kind: 'tool', callId: ToolCallId('call-0') }),
     ])
     expect(deltas).toHaveLength(0)
     expect(stepped).toHaveLength(0)
@@ -840,7 +840,7 @@ describe('SessionTranscriptObserver — inbox-spliced payload discrimination (C-
       ...round(),
       inboxSplicedWith('[advisor:nit] a note', { kind: ADVISOR_SOURCE_KIND }),
       inboxSplicedWith('workspace sync', { kind: 'workspace-instructions' }),
-      inboxSplicedWith('2 failed', { kind: 'tool', callId: CallId('call-0') }),
+      inboxSplicedWith('2 failed', { kind: 'tool', callId: ToolCallId('call-0') }),
       inboxClear(),
       inboxSpliced('prompt two'),           // the one genuine human splice
     ])

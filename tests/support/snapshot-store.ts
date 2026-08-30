@@ -1,10 +1,10 @@
 /**
- * Node-safe test double for the published `@deepseek-ai/dsh-client-runtime`
- * `./client` entry. The published package ships `./client` only as a browser
- * loader artifact (`window.__ModuleLoader__.load(...)` — not an importable
- * module), so dev-time tests resolve the one VALUE import the client store
- * makes (`createSnapshotStore`) here instead of a dsh source tree (the former
- * link farm). Mirrors the SnapshotStore API the client store uses:
+ * Node-safe test double for the published `@deepseek-ai/dsh-client-store`
+ * entry. The web shell serves the package through the loader table
+ * (`CLIENT_EXTERNALS`) rather than the bundle, and the suite does not want
+ * zustand/immer internals in the tests, so dev-time tests resolve the one
+ * VALUE import the client store makes (`createSnapshotStore`) here.
+ * Mirrors the SnapshotStore API the client store uses:
  * `getSnapshot` / `subscribe` / `update` / `set`.
  */
 

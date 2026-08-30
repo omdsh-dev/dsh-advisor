@@ -48,7 +48,7 @@ describe('registry peer contract (dsh line from npm, no link farm)', () => {
   })
 
   it('uses the scoped schemastery peer supplied by the dsh line', () => {
-    expect(root.peerDependencies?.['@deepseek-ai/schemastery']).toBe('^3.18.1')
+    expect(root.peerDependencies?.['@deepseek-ai/schemastery']).toBe('^3.18.2')
     expect(root.peerDependencies?.schemastery).toBeUndefined()
     expect(root.devDependencies?.schemastery).toBeUndefined()
   })

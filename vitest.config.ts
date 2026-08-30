@@ -12,15 +12,15 @@ export default defineConfig({
   },
   resolve: {
     alias: [
-      // The published @deepseek-ai/dsh-client-runtime `./client` entry is a
-      // browser loader artifact (`window.__ModuleLoader__.load(...)`, served to
-      // the web shell at runtime) — not a node-importable module, and the
-      // published tarball carries no `src/`. Dev-time tests resolve the one
-      // VALUE import the client store makes (`createSnapshotStore`) to a
-      // node-safe local double; every other `@deepseek-ai/*` import is
-      // type-only (erased at runtime) and resolves from the registry package.
+      // The published @deepseek-ai/dsh-client-store entry is served to the
+      // web shell through the loader table (`CLIENT_EXTERNALS`) rather than
+      // bundled; dev-time tests resolve the one VALUE import the client
+      // store makes (`createSnapshotStore`) to a node-safe local double
+      // instead of pulling zustand/immer into the suite. Every other
+      // `@deepseek-ai/*` import is type-only (erased at runtime) and resolves
+      // from the registry package.
       {
-        find: '@deepseek-ai/dsh-client-runtime/client',
+        find: '@deepseek-ai/dsh-client-store',
         replacement: resolve(here, 'tests', 'support', 'snapshot-store.ts'),
       },
     ],

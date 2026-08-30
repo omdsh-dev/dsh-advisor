@@ -1,15 +1,17 @@
 /**
  * Advisor settings store (plan dsh-advisor-settings-gateway-n5, task 2) —
- * store unit tests over a scripted wire face (fake `settings`/`llm` api for
- * the provider directory + a fake connection RPC caller for the `advisor`
- * gateway channel).
+ * store unit tests over a scripted wire face (fake client Remote assembly —
+ * `llm.listConfigurableProviders` / `settings.describe` /
+ * `session.modelCatalog` — for the provider directory + a fake connection RPC
+ * caller for the `advisor` gateway channel).
  *
  * Contract under test (brief Step 1 + 4):
  * ① providers join: a provider whose profile resolves (namespace exists +
  *    profile path resolves) enters the option list; an unconfigured one
  *    (missing profile or missing namespace) does not.
- * ② model options: profile-declared `models` win; else the `llm.models`
- *    catalog group for that provider; neither → empty options + a reason.
+ * ② model options: profile-declared `models` win; else the
+ *    `session.modelCatalog` group for that provider; neither → empty options
+ *    + a reason.
  * ③ Apply gate (KD-S4): enabled + missing provider/model → blocked with the
  *    gate failure; disabled → provider/model may be empty and the apply lands.
  * ④ gateway patch semantics: the advisor config is read/written over
@@ -34,27 +36,33 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import type {
-  ClientConnectionRpc, ConfigurableProviderView, IApiClient, ModelProviderGroup,
-  RpcResponse, RpcResult, SettingsNamespaceView,
+  ClientConnectionRpc, RpcResult,
 } from '@deepseek-ai/dsh-client-connection/client'
+import type { LlmConfigurableProvider } from '@deepseek-ai/dsh-llm/types'
+import type { SettingsNamespaceView } from '@deepseek-ai/dsh-settings/types'
+import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import { fakeSchema } from './support/schema-ops'
 import { AdvisorSettingsStore, refreshIfLoaded } from '../src/client/advisor-store'
-import type { AdvisorConfigView, AdvisorDraft } from '../src/client/advisor-store'
+import type { AdvisorConfigView, AdvisorDraft, AdvisorStoreRemote } from '../src/client/advisor-store'
 
 /** Real settings schema service (immutable path writers under test). */
 const schema = fakeSchema()
 
-/** One unary wire response (provider directory calls). */
-function ok<T>(value: T): RpcResponse<T> {
-  return { rpcId: 'r' as never, result: { ok: true, value } }
+/** One Remote assembly success (provider directory calls). */
+function ok<T>(value: T): RemoteResult<T> {
+  return { ok: true, value }
 }
 
-/** One unary wire failure (provider directory calls). */
-function fail<T>(message: string): RpcResponse<T> {
-  return {
-    rpcId: 'r' as never,
-    result: { ok: false, error: { code: 'settings-rejected', message, details: { ns: 'advisor' as string } } },
-  }
+/** One Remote assembly failure (provider directory calls). */
+function fail<T>(message: string): RemoteResult<T> {
+  return { ok: false, error: new RemoteError('gateway/internal', message, {}) }
+}
+
+/** One `session.modelCatalog` success (the store only reads `groups`). */
+function catalogOk(groups: ModelCatalog['groups']): RemoteResult<ModelCatalog> {
+  return ok({ default: { provider: '', model: '' }, routableProviders: [], groups, failures: [] })
 }
 
 /** One gateway RPC success (the channel returns the unwrapped result). */
@@ -72,27 +80,27 @@ function defaultConfig(): AdvisorConfigView {
   return { enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 }
 }
 
-const DEEPSEEK: ConfigurableProviderView = {
-  provider: 'deepseek-official', displayName: 'DeepSeek', settingsNs: 'llm-deepseek', settingsPath: [], active: true,
+const DEEPSEEK: LlmConfigurableProvider = {
+  provider: 'deepseek-official', displayName: 'DeepSeek', settingsNs: 'llm-deepseek', settingsPath: [],
 }
-const OPENAI: ConfigurableProviderView = {
-  provider: 'openai', displayName: 'openai', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'openai'], active: true,
+const OPENAI: LlmConfigurableProvider = {
+  provider: 'openai', displayName: 'openai', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'openai'],
 }
 /** Profile path resolves to nothing in its namespace → not configured. */
-const ZOMBIE: ConfigurableProviderView = {
-  provider: 'zombie', displayName: 'zombie', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'zombie'], active: false,
+const ZOMBIE: LlmConfigurableProvider = {
+  provider: 'zombie', displayName: 'zombie', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'zombie'],
 }
 /** Whole-section provider whose settings namespace does not exist → not configured. */
-const ORPHAN: ConfigurableProviderView = {
-  provider: 'orphan', displayName: 'orphan', settingsNs: 'llm-orphan', settingsPath: [], active: true,
+const ORPHAN: LlmConfigurableProvider = {
+  provider: 'orphan', displayName: 'orphan', settingsNs: 'llm-orphan', settingsPath: [],
 }
 /** Whole-section provider whose section resolves but declares no models anywhere. */
-const EMPTY: ConfigurableProviderView = {
-  provider: 'empty', displayName: 'empty', settingsNs: 'llm-empty', settingsPath: [], active: true,
+const EMPTY: LlmConfigurableProvider = {
+  provider: 'empty', displayName: 'empty', settingsNs: 'llm-empty', settingsPath: [],
 }
 /** Whole-section provider whose profile declares an EMPTY models list. */
-const EMPTYLIST: ConfigurableProviderView = {
-  provider: 'emptylist', displayName: 'emptylist', settingsNs: 'llm-emptylist', settingsPath: [], active: true,
+const EMPTYLIST: LlmConfigurableProvider = {
+  provider: 'emptylist', displayName: 'emptylist', settingsNs: 'llm-emptylist', settingsPath: [],
 }
 
 /** llm-deepseek: whole-section profile declaring a models catalog (schema default). */
@@ -135,21 +143,21 @@ function emptylistNs(): SettingsNamespaceView {
   return { ns: 'llm-emptylist', schema: {}, value: { models: [] }, applies: 'live', secrets: [], revision: 0 }
 }
 
-const CATALOG: ModelProviderGroup[] = [
+const CATALOG: ModelCatalog['groups'] = [
   { id: 'openai', name: 'openai', models: [{ id: 'gpt-4o', name: 'GPT-4o' }] },
   { id: 'empty', name: 'empty', models: [] },
 ]
 
-/** A scripted wire face: provider directory via api, advisor config via rpc. */
+/** A scripted wire face: provider directory via the Remote assembly, advisor config via rpc. */
 interface Scripted {
-  api: Pick<IApiClient, 'settings' | 'llm'>
+  remote: AdvisorStoreRemote
   rpc: ClientConnectionRpc
   call: ReturnType<typeof vi.fn>
   get: ReturnType<typeof vi.fn>
   set: ReturnType<typeof vi.fn>
   describe: ReturnType<typeof vi.fn>
-  providers: ReturnType<typeof vi.fn>
-  models: ReturnType<typeof vi.fn>
+  listConfigurableProviders: ReturnType<typeof vi.fn>
+  modelCatalog: ReturnType<typeof vi.fn>
 }
 
 /**
@@ -161,8 +169,8 @@ interface Scripted {
 function scriptedApi(options: {
   config?: AdvisorConfigView | null
   namespaces?: SettingsNamespaceView[]
-  entries?: ConfigurableProviderView[]
-  groups?: ModelProviderGroup[]
+  entries?: LlmConfigurableProvider[]
+  groups?: ModelCatalog['groups']
   writable?: boolean
 } = {}): Scripted {
   const others = options.namespaces ?? [deepseekNs(), piAiNs()]
@@ -173,8 +181,13 @@ function scriptedApi(options: {
     hasDocument: false,
     namespaces: others,
   })))
-  const providers = vi.fn(() => Promise.resolve(ok({ providers: entries })))
-  const models = vi.fn(() => Promise.resolve(ok({ groups: options.groups ?? CATALOG, failures: [] })))
+  const listConfigurableProviders = vi.fn(() => Promise.resolve(ok(entries)))
+  const modelCatalog = vi.fn(() => Promise.resolve(ok({
+    default: { provider: '', model: '' },
+    routableProviders: [],
+    groups: options.groups ?? CATALOG,
+    failures: [],
+  } satisfies ModelCatalog)))
   const get = vi.fn(() => Promise.resolve(
     current === null
       ? failResult('advisor gateway is not ready')
@@ -192,12 +205,13 @@ function scriptedApi(options: {
     throw new Error(`test: unexpected endpoint ${endpoint}`)
   })
   return {
-    api: {
-      settings: { describe, update: vi.fn(), replace: vi.fn(), mutate: vi.fn() },
-      llm: { providers, models, discoverModels: vi.fn() },
-    } as unknown as Pick<IApiClient, 'settings' | 'llm'>,
+    remote: {
+      llm: { listConfigurableProviders },
+      settings: { describe },
+      session: { modelCatalog },
+    },
     rpc: { call } as unknown as ClientConnectionRpc,
-    call, get, set, describe, providers, models,
+    call, get, set, describe, listConfigurableProviders, modelCatalog,
   }
 }
 
@@ -207,8 +221,8 @@ function draftOf(store: AdvisorSettingsStore): AdvisorDraft {
 
 describe('providers join (KD-S2 configured determination)', () => {
   it('lists only providers whose profile resolves; excludes missing profiles and missing namespaces', async () => {
-    const { api, rpc } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     const { providers: options } = store.store.getSnapshot()
     const routes = options.map(option => option.provider)
@@ -220,10 +234,10 @@ describe('providers join (KD-S2 configured determination)', () => {
   })
 
   it('seeds the draft from the resolved advisor config on first load', async () => {
-    const { api, rpc } = scriptedApi({
+    const { remote, rpc } = scriptedApi({
       config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     expect(draftOf(store)).toEqual({
       enabled: true,
@@ -239,10 +253,10 @@ describe('providers join (KD-S2 configured determination)', () => {
     // The gateway returns the RESOLVED config — the composition base / user
     // layer split is host-side and invisible here: the form shows the
     // effective values so the toggle is not off while the advisor is running.
-    const { api, rpc } = scriptedApi({
+    const { remote, rpc } = scriptedApi({
       config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     expect(draftOf(store).enabled).toBe(true)
     expect(draftOf(store).provider).toBe('deepseek-official')
@@ -255,10 +269,10 @@ describe('providers join (KD-S2 configured determination)', () => {
   it('treats absent provider/model keys as missing (wire normalization)', async () => {
     // The wire omits absent keys (never present-as-undefined): the seed must
     // read them as missing, not invent defaults that would trip the gate.
-    const { api, rpc } = scriptedApi({
+    const { remote, rpc } = scriptedApi({
       config: { enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     expect(draftOf(store).provider).toBeUndefined()
     expect(draftOf(store).model).toBeUndefined()
@@ -268,65 +282,64 @@ describe('providers join (KD-S2 configured determination)', () => {
 
 describe('model options (KD-S2 profile-first, catalog fallback)', () => {
   it('uses the provider profile models and never calls the catalog', async () => {
-    const { api, rpc, models } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, modelCatalog } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     await store.ensureModels('deepseek-official')
     const { modelsByProvider } = store.store.getSnapshot()
     expect(modelsByProvider['deepseek-official']?.map(model => model.id)).toEqual(['ds-a', 'ds-b'])
-    expect(models).not.toHaveBeenCalled()
+    expect(modelCatalog).not.toHaveBeenCalled()
   })
 
   it('falls back to the llm.models catalog group when the profile declares none', async () => {
-    const { api, rpc, models } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, modelCatalog } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     await store.ensureModels('openai')
     const { modelsByProvider } = store.store.getSnapshot()
     expect(modelsByProvider['openai']?.map(model => model.id)).toEqual(['gpt-4o'])
-    expect(models).toHaveBeenCalledTimes(1)
+    expect(modelCatalog).toHaveBeenCalledTimes(1)
   })
 
   it('caches the catalog: a second provider needs no second llm.models call', async () => {
-    const { api, rpc, models } = scriptedApi({
+    const { remote, rpc, modelCatalog } = scriptedApi({
       namespaces: [piAiNs(), emptyNs()],
       entries: [OPENAI, EMPTY],
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     await store.ensureModels('openai')
     await store.ensureModels('empty')
-    expect(models).toHaveBeenCalledTimes(1)
+    expect(modelCatalog).toHaveBeenCalledTimes(1)
   })
 
   it('shares one in-flight catalog fetch across concurrent providers', async () => {
-    type CatalogPayload = { groups: ModelProviderGroup[]; failures: unknown[] }
-    let deferredResolve!: (value: RpcResponse<CatalogPayload>) => void
-    const deferred = new Promise<RpcResponse<CatalogPayload>>((resolve) => {
+    let deferredResolve!: (value: RemoteResult<ModelCatalog>) => void
+    const deferred = new Promise<RemoteResult<ModelCatalog>>((resolve) => {
       deferredResolve = resolve
     })
-    const { api, rpc, models } = scriptedApi({
+    const { remote, rpc, modelCatalog } = scriptedApi({
       namespaces: [piAiNs(), emptyNs()],
       entries: [OPENAI, EMPTY],
     })
-    models.mockReturnValueOnce(deferred)
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    modelCatalog.mockReturnValueOnce(deferred)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     const first = store.ensureModels('openai')
     const second = store.ensureModels('empty')
-    deferredResolve(ok({ groups: CATALOG, failures: [] }))
+    deferredResolve(ok({ default: { provider: '', model: '' }, routableProviders: [], groups: CATALOG, failures: [] }))
     await Promise.all([first, second])
-    expect(models).toHaveBeenCalledTimes(1)
+    expect(modelCatalog).toHaveBeenCalledTimes(1)
     expect(store.store.getSnapshot().modelsByProvider['openai']?.map(model => model.id)).toEqual(['gpt-4o'])
   })
 
   it('does not cache a transient catalog failure: a later provider refetches', async () => {
-    const { api, rpc, models } = scriptedApi({
+    const { remote, rpc, modelCatalog } = scriptedApi({
       namespaces: [piAiNs(), emptyNs()],
       entries: [OPENAI, EMPTY],
     })
-    models.mockReturnValueOnce(Promise.resolve(fail('catalog down')))
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    modelCatalog.mockReturnValueOnce(Promise.resolve(fail('catalog down')))
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     // First resolution hits a failing catalog fetch: the provider gets the
     // empty-options reason, but the failure is NOT cached at catalog level.
@@ -334,15 +347,15 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
     expect(store.store.getSnapshot().modelsEmptyReason['openai']).toBe('unavailable')
     // The next provider's resolution refetches and sees the recovered catalog.
     await store.ensureModels('empty')
-    expect(models).toHaveBeenCalledTimes(2)
+    expect(modelCatalog).toHaveBeenCalledTimes(2)
     expect(store.store.getSnapshot().modelsEmptyReason['empty']).toBe('catalog-empty')
   })
 
   it('marks empty options with a reason when neither source has models', async () => {
-    const { api, rpc } = scriptedApi({
+    const { remote, rpc } = scriptedApi({
       namespaces: [deepseekNs(), piAiNs(), emptyNs(), emptylistNs()],
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     await store.ensureModels('empty')     // profile has no models field; catalog group empty
     await store.ensureModels('emptylist') // profile declares an empty models list (profile wins)
@@ -359,8 +372,8 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
 
 describe('apply gate (KD-S4 required-when-enabled)', () => {
   it('blocks Apply when enabled with no provider, naming the gate failure', async () => {
-    const { api, rpc, set } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setEnabled(true)
     await store.apply()
@@ -374,8 +387,8 @@ describe('apply gate (KD-S4 required-when-enabled)', () => {
   })
 
   it('blocks Apply when enabled with a provider but no model', async () => {
-    const { api, rpc, set } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setEnabled(true)
     store.setProvider('deepseek-official')
@@ -389,8 +402,8 @@ describe('apply gate (KD-S4 required-when-enabled)', () => {
   })
 
   it('allows empty provider/model while disabled and lands the apply', async () => {
-    const { api, rpc, set } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setImmuneTurns(5)
     await store.apply()
@@ -402,10 +415,10 @@ describe('apply gate (KD-S4 required-when-enabled)', () => {
 
 describe('apply patch + seed (gateway channel semantics)', () => {
   it('writes only the changed keys as a patch against the last-read config', async () => {
-    const { api, rpc, call } = scriptedApi({
+    const { remote, rpc, call } = scriptedApi({
       config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setModel('ds-b')
     await store.apply()
@@ -418,10 +431,10 @@ describe('apply patch + seed (gateway channel semantics)', () => {
     // The seed pins the values through the effective config; the explicit ''
     // override is used because the gateway merge cannot express an unset (the
     // host resolver treats '' as absent — the clear stays stable).
-    const { api, rpc, call } = scriptedApi({
+    const { remote, rpc, call } = scriptedApi({
       config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     // The KD-S4 gate forbids Apply while enabled with empty provider/model,
     // so the clear path is exercised with the switch off (values are then
@@ -439,10 +452,10 @@ describe('apply patch + seed (gateway channel semantics)', () => {
     // returns the stored '' (the wire may carry it), but the resolver treats
     // '' as absent and the client reads it as missing, so the seed no longer
     // pins provider/model and the second patch carries neither.
-    const { api, rpc, call } = scriptedApi({
+    const { remote, rpc, call } = scriptedApi({
       config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setEnabled(false)
     store.setProvider('')
@@ -464,8 +477,8 @@ describe('apply patch + seed (gateway channel semantics)', () => {
     // nothing — there is no stored value to remove (the old unset branch is
     // unreachable through the gateway: the returned config IS the effective
     // view).
-    const { api, rpc, set } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setProvider('')
     await store.apply()
@@ -474,10 +487,10 @@ describe('apply patch + seed (gateway channel semantics)', () => {
   })
 
   it('omits a cleared number field from the patch (empty input = leave unchanged)', async () => {
-    const { api, rpc, call } = scriptedApi({
+    const { remote, rpc, call } = scriptedApi({
       config: { enabled: false, systemPrompt: '', immuneTurns: 5, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setImmuneTurns(undefined)
     store.setSystemPrompt('edited')
@@ -487,8 +500,8 @@ describe('apply patch + seed (gateway channel semantics)', () => {
   })
 
   it('reports saved without a gateway call when the patch is empty', async () => {
-    const { api, rpc, set } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     await store.apply() // no edits at all → nothing to write
     expect(set).not.toHaveBeenCalled()
@@ -499,10 +512,10 @@ describe('apply patch + seed (gateway channel semantics)', () => {
   })
 
   it('adopts the returned config as the new seed after a successful apply', async () => {
-    const { api, rpc, call } = scriptedApi({
+    const { remote, rpc, call } = scriptedApi({
       config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setModel('ds-b')
     await store.apply()
@@ -519,9 +532,9 @@ describe('apply patch + seed (gateway channel semantics)', () => {
   })
 
   it('surfaces a plain rpc rejection without re-syncing', async () => {
-    const { api, rpc, describe, set } = scriptedApi()
+    const { remote, rpc, describe, set } = scriptedApi()
     set.mockReturnValueOnce(Promise.resolve(failResult('host refused')))
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setEnabled(true)
     store.setProvider('deepseek-official')
@@ -541,8 +554,8 @@ describe('apply patch + seed (gateway channel semantics)', () => {
     // The transport itself rejects (network down mid-write): the catch branch
     // folds the thrown message into the apply state — the form keeps the
     // edits for a retry and no reload re-syncs.
-    const { api, rpc, describe, call } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, describe, call } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     // The Once is registered AFTER load so it targets the set call, not the
     // load's get call.
@@ -566,8 +579,8 @@ describe('apply patch + seed (gateway channel semantics)', () => {
 
 describe('invalidations (refreshIfLoaded)', () => {
   it('refetches a loaded store', async () => {
-    const { api, rpc, describe } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, describe } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     expect(describe).toHaveBeenCalledTimes(1)
     refreshIfLoaded(store)
@@ -575,15 +588,15 @@ describe('invalidations (refreshIfLoaded)', () => {
   })
 
   it('skips a never-loaded (idle) store', async () => {
-    const { api, rpc, describe } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, describe } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     refreshIfLoaded(store)
     expect(describe).not.toHaveBeenCalled()
   })
 
   it('keeps an in-progress draft across a refresh (no re-seed)', async () => {
-    const { api, rpc } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setImmuneTurns(9)
     refreshIfLoaded(store)
@@ -594,30 +607,29 @@ describe('invalidations (refreshIfLoaded)', () => {
 
 describe('model option refresh on invalidation (qc1 W-1 / qc3 S-1)', () => {
   it('a reload after models/changed re-resolves a previously-resolved provider with the NEW options', async () => {
-    const { api, rpc, models } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, modelCatalog } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     await store.ensureModels('openai')
     expect(store.store.getSnapshot().modelsByProvider['openai']?.map(model => model.id)).toEqual(['gpt-4o'])
-    expect(models).toHaveBeenCalledTimes(1)
+    expect(modelCatalog).toHaveBeenCalledTimes(1)
 
     // The catalog changes on the host (a model added on the Models page).
-    models.mockReturnValueOnce(Promise.resolve(ok({
-      groups: [{ id: 'openai', name: 'openai', models: [{ id: 'gpt-5', name: 'GPT-5' }] }],
-      failures: [],
-    })))
+    modelCatalog.mockReturnValueOnce(Promise.resolve(catalogOk([
+      { id: 'openai', name: 'openai', models: [{ id: 'gpt-5', name: 'GPT-5' }] },
+    ])))
 
     // The invalidation path (refreshIfLoaded → load()) clears the per-provider
     // caches + catalog; the next resolution must see the fresh options.
     await store.load()
     await store.ensureModels('openai')
     expect(store.store.getSnapshot().modelsByProvider['openai']?.map(model => model.id)).toEqual(['gpt-5'])
-    expect(models).toHaveBeenCalledTimes(2)
+    expect(modelCatalog).toHaveBeenCalledTimes(2)
   })
 
   it('clears the per-provider caches on every load, even when the stored provider did not change', async () => {
-    const { api, rpc } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setProvider('openai')
     await vi.waitFor(() => {
@@ -632,40 +644,37 @@ describe('model option refresh on invalidation (qc1 W-1 / qc3 S-1)', () => {
   })
 
   it('abandons a catalog fetch started before an invalidation and refetches fresh data', async () => {
-    type CatalogPayload = { groups: ModelProviderGroup[]; failures: unknown[] }
-    let deferredResolve!: (value: RpcResponse<CatalogPayload>) => void
-    const deferred = new Promise<RpcResponse<CatalogPayload>>((resolve) => { deferredResolve = resolve })
-    const { api, rpc, models } = scriptedApi({
+    let deferredResolve!: (value: RemoteResult<ModelCatalog>) => void
+    const deferred = new Promise<RemoteResult<ModelCatalog>>((resolve) => { deferredResolve = resolve })
+    const { remote, rpc, modelCatalog } = scriptedApi({
       namespaces: [piAiNs()],
       entries: [OPENAI],
     })
     // Fetch A hangs; fetch B (after the invalidation) sees the NEW catalog.
-    models.mockReturnValueOnce(deferred)
-    models.mockReturnValueOnce(Promise.resolve(ok({
-      groups: [{ id: 'openai', name: 'openai', models: [{ id: 'gpt-5', name: 'GPT-5' }] }],
-      failures: [],
-    })))
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    modelCatalog.mockReturnValueOnce(deferred)
+    modelCatalog.mockReturnValueOnce(Promise.resolve(catalogOk([
+      { id: 'openai', name: 'openai', models: [{ id: 'gpt-5', name: 'GPT-5' }] },
+    ])))
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     const first = store.ensureModels('openai')
     // The models/changed invalidation arrives while fetch A is in flight.
     await store.load()
     // The stale fetch resolves with the OLD group AFTER the invalidation.
-    deferredResolve(ok({
-      groups: [{ id: 'openai', name: 'openai', models: [{ id: 'gpt-4o', name: 'GPT-4o' }] }],
-      failures: [],
-    }))
+    deferredResolve(catalogOk([
+      { id: 'openai', name: 'openai', models: [{ id: 'gpt-4o', name: 'GPT-4o' }] },
+    ]))
     await first
     // The stale result was dropped; the resolution loop refetched fresh.
     expect(store.store.getSnapshot().modelsByProvider['openai']?.map(model => model.id)).toEqual(['gpt-5'])
-    expect(models).toHaveBeenCalledTimes(2)
+    expect(modelCatalog).toHaveBeenCalledTimes(2)
   })
 })
 
 describe('gateway availability (KD-G5 — advisorPresent)', () => {
   it('tracks advisorPresent true when the advisor/get endpoint succeeds', async () => {
-    const { api, rpc } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     const state = store.store.getSnapshot()
     expect(state.advisorPresent).toBe(true)
@@ -675,8 +684,8 @@ describe('gateway availability (KD-G5 — advisorPresent)', () => {
   it('tracks advisorPresent false when the gateway get fails (ok:false) without failing the page', async () => {
     // Gateway down (no settings service / channel unreachable): the provider
     // directory still loads — the section shows the config-channel notice.
-    const { api, rpc } = scriptedApi({ config: null })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc } = scriptedApi({ config: null })
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     const state = store.store.getSnapshot()
     expect(state.advisorPresent).toBe(false)
@@ -684,9 +693,9 @@ describe('gateway availability (KD-G5 — advisorPresent)', () => {
   })
 
   it('tracks advisorPresent false when the gateway get throws (transport down) without failing the page', async () => {
-    const { api, rpc, get } = scriptedApi()
+    const { remote, rpc, get } = scriptedApi()
     get.mockRejectedValueOnce(new Error('transport down'))
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     const state = store.store.getSnapshot()
     expect(state.advisorPresent).toBe(false)
@@ -699,13 +708,13 @@ describe('gateway availability (KD-G5 — advisorPresent)', () => {
     // seeded with schema defaults NOR marked seeded — otherwise a later Apply
     // (diffed against the recovered real seed) would send a full-default
     // patch and wipe the actual configuration.
-    const { api, rpc, get } = scriptedApi()
+    const { remote, rpc, get } = scriptedApi()
     get
       .mockImplementationOnce(() => Promise.resolve(failResult('advisor gateway is not ready')))
       .mockImplementationOnce(() => Promise.resolve(okResult({
         config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20 },
       })))
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     let state = store.store.getSnapshot()
     expect(state.advisorPresent).toBe(false)
@@ -725,7 +734,7 @@ describe('gateway availability (KD-G5 — advisorPresent)', () => {
 
 describe('post-apply reload failure (qc3 N-1)', () => {
   it('keeps the saved feedback when the reload after a successful set fails', async () => {
-    const { api, rpc, describe, set } = scriptedApi()
+    const { remote, rpc, describe, set } = scriptedApi()
     // First describe (initial load) resolves; the post-apply reload fails.
     describe.mockReturnValueOnce(Promise.resolve(ok({
       writable: true,
@@ -733,7 +742,7 @@ describe('post-apply reload failure (qc3 N-1)', () => {
       namespaces: [deepseekNs(), piAiNs()],
     })))
     describe.mockReturnValueOnce(Promise.resolve(fail('transport down')))
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setImmuneTurns(5)
     await store.apply()
@@ -749,10 +758,10 @@ describe('post-apply reload failure (qc3 N-1)', () => {
 
 describe('discard (card draft rewind — T2 store add, T3 review)', () => {
   it('rewinds the draft to the last-known host config without any gateway write', async () => {
-    const { api, rpc, set } = scriptedApi({
+    const { remote, rpc, set } = scriptedApi({
       config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setProvider('openai') // a provider switch invalidates the chosen model
     store.setEnabled(false)
@@ -773,10 +782,10 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
     // The T3-review-flagged assertion: discard restores the draft to the seed,
     // so a follow-up apply has an EMPTY diff and reports saved WITHOUT calling
     // advisor/set (the host stays the single fact source — nothing to write).
-    const { api, rpc, set } = scriptedApi({
+    const { remote, rpc, set } = scriptedApi({
       config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setEnabled(false)
     store.setProvider('openai')
@@ -793,8 +802,8 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
   })
 
   it('clears a pending gate-error apply state back to idle', async () => {
-    const { api, rpc } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setEnabled(true) // enabled without provider/model → the KD-S4 gate blocks Apply
     await store.apply()
@@ -804,8 +813,8 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
   })
 
   it('clears the saved feedback back to idle after a landed apply (discard is a no-op on values)', async () => {
-    const { api, rpc } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setImmuneTurns(5)
     await store.apply()
@@ -820,10 +829,10 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
   it('a fresh edit after discard diff-cleans against the restored seed', async () => {
     // Discard restores the diff baseline: a later apply carries ONLY the new
     // edit — the pre-discard model edit must not resurface in the patch.
-    const { api, rpc, call } = scriptedApi({
+    const { remote, rpc, call } = scriptedApi({
       config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setModel('ds-b')  // pre-discard edit
     store.discard()         // rewind → seed (ds-a)
@@ -838,13 +847,13 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
     // and the card shows the notice (no discard button), but a store-level
     // discard must not mark the draft seeded or invent values: once the
     // gateway recovers, the next load still seeds the REAL config.
-    const { api, rpc, get } = scriptedApi()
+    const { remote, rpc, get } = scriptedApi()
     get
       .mockImplementationOnce(() => Promise.resolve(failResult('advisor gateway is not ready')))
       .mockImplementationOnce(() => Promise.resolve(okResult({
         config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20 },
       })))
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     expect(store.store.getSnapshot().advisorPresent).toBe(false)
     store.discard()
@@ -860,8 +869,8 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
 
 describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — KD-U2)', () => {
   it('tracks the dirty lifecycle: clean → edit dirty → discard clean → edit → apply success clean', async () => {
-    const { api, rpc } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     // The store default is clean — no edits staged against any seed.
     expect(store.store.getSnapshot().dirty).toBe(false)
     await store.load()
@@ -879,10 +888,10 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
   })
 
   it('keeps a cleared number field clean by itself (patchFor omits it — leave stored value unchanged)', async () => {
-    const { api, rpc } = scriptedApi({
+    const { remote, rpc } = scriptedApi({
       config: { enabled: false, systemPrompt: '', immuneTurns: 5, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     expect(store.store.getSnapshot().dirty).toBe(false)
     store.setImmuneTurns(undefined) // cleared input → the key is omitted from the patch
@@ -894,10 +903,10 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
   })
 
   it("treats a cleared provider the seed pins as dirty (the '' override is a real edit)", async () => {
-    const { api, rpc } = scriptedApi({
+    const { remote, rpc } = scriptedApi({
       config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     expect(store.store.getSnapshot().dirty).toBe(false)
     // The KD-S4 gate forbids Apply while enabled with an empty provider/model,
@@ -914,10 +923,10 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
     // ''-provider semantic: NO enabled toggle, only the provider clear, and
     // the seed pins no model, so the resulting patch is exactly
     // { provider: '' } → dirty derives true from that alone.
-    const { api, rpc } = scriptedApi({
+    const { remote, rpc } = scriptedApi({
       config: { enabled: false, provider: 'deepseek-official', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     expect(store.store.getSnapshot().dirty).toBe(false)
     store.setProvider('') // patchFor emits provider: '' → a real write → dirty
@@ -928,13 +937,13 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
     // First load: the get fails (gateway not ready) — nothing seeded, nothing
     // staged: dirty must stay false. Once the gateway recovers, the REAL
     // config seeds the draft and dirty derives clean against it.
-    const { api, rpc, get } = scriptedApi()
+    const { remote, rpc, get } = scriptedApi()
     get
       .mockImplementationOnce(() => Promise.resolve(failResult('advisor gateway is not ready')))
       .mockImplementationOnce(() => Promise.resolve(okResult({
         config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20 },
       })))
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     let state = store.store.getSnapshot()
     expect(state.advisorPresent).toBe(false)
@@ -949,8 +958,8 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
     // dirty = "a save would write something": an edit that puts the draft
     // back to the seed produces an EMPTY patch → clean (the UI then hides
     // Save/Discard — the store keeps the defense as well).
-    const { api, rpc } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setSystemPrompt('review terser')
     expect(store.store.getSnapshot().dirty).toBe(true)
@@ -961,9 +970,9 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
   it('keeps the draft dirty when an apply is rejected (the form stays for retry)', async () => {
     // A rejected write leaves the seed untouched: the draft still differs,
     // so dirty stays true and the card keeps Save enabled for the retry.
-    const { api, rpc, set } = scriptedApi()
+    const { remote, rpc, set } = scriptedApi()
     set.mockReturnValueOnce(Promise.resolve(failResult('host refused')))
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setEnabled(true)
     store.setProvider('deepseek-official')
@@ -979,8 +988,8 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
     // values now match the draft (another session saved) correctly flips
     // dirty back to false." The invalidation test keeps the draft across a
     // refresh but never asserted the dirty recompute — this pins it (qc2 S-2).
-    const { api, rpc, get } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, get } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setSystemPrompt('review terser')
     expect(store.store.getSnapshot().dirty).toBe(true)
@@ -1003,8 +1012,8 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
     // that such a patch cannot be produced from the card: enabled without
     // provider/model is blocked by the gate BEFORE any write, dirty stays
     // true for the user to complete, and advisor/set is never called.
-    const { api, rpc, set } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setEnabled(true) // enabled + no provider/model → the KD-S4 gate blocks apply
     expect(store.store.getSnapshot().dirty).toBe(true)
@@ -1027,10 +1036,10 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
     // defaults while skipping the dirty recompute (config undefined). A
     // programmatic apply in that window would diff EMPTY against the
     // defaulted seed and report saved while the pill stayed lit.
-    const { api, rpc, get, set } = scriptedApi({
+    const { remote, rpc, get, set } = scriptedApi({
       config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     // Edit the draft back to the schema defaults (enabled off + cleared pair).
     store.setEnabled(false)
@@ -1061,8 +1070,8 @@ describe('read-only apply guard (qc2 W-1 — writable flips mid-session)', () =>
     // read-only. A mid-session invalidation refresh can return writable=false
     // while staged edits survive — dirty stays true in read-only, and apply()
     // must refuse instead of issuing the write.
-    const { api, rpc, describe, set } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, describe, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setSystemPrompt('review terser')
     expect(store.store.getSnapshot().dirty).toBe(true)
@@ -1093,8 +1102,8 @@ describe('card scenario (store-level load/save over the gateway channel)', () =>
     // The store-level mirror of the card interaction: a minimal patch lands on
     // the host, the post-apply reload re-reads the composed config, and after
     // a discard the follow-up apply diffs empty (saved-without-call).
-    const { api, rpc, call, get } = scriptedApi()
-    const store = new AdvisorSettingsStore(api, rpc, schema)
+    const { remote, rpc, call, get } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     expect(store.store.getSnapshot().advisorPresent).toBe(true)
 

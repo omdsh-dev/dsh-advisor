@@ -10,7 +10,7 @@
  *   scripts, where either is a parse-time SyntaxError);
  * - purity: every `require('@deepseek-ai/…')` it emits names one of the
  *   frozen `CLIENT_EXTERNALS` entries (the platform seed table + the
- *   documented `@deepseek-ai/dsh-client-runtime/client` exemption) — any
+ *   documented `@deepseek-ai/dsh-client-store` exemption) — any
  *   other `@deepseek-ai/*` VALUE import is a build error by contract
  *   (cross-plugin collaboration goes through cordis services; type-only
  *   imports are erased before resolution and never reach the bundle).
@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = resolve(here, '..')
 
-/** Frozen loader module table (mirror of dsh-private `web/src/platform.ts` + the runtime/client exemption). */
+/** Frozen loader module table (mirror of dsh-private `web/src/platform.ts` + the client-store exemption). */
 const CLIENT_EXTERNALS: readonly string[] = [
   'react',
   'react/jsx-runtime',
@@ -37,7 +37,7 @@ const CLIENT_EXTERNALS: readonly string[] = [
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-runtime/client',
+  '@deepseek-ai/dsh-client-store',
 ]
 
 /** Bundled entry id stamped into the load handoff. */
@@ -138,10 +138,12 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     // bundle as hashed names, and the map keys preserve the local names —
     // plan dsh-advisor-plugin-config-card-ux, task 1: the chrome classes
     // (header/body/footer/chevron/chevronOpen) replace the removed
-    // title/intro/editorActions classes; the form-field classes stay.
+    // title/intro/editorActions classes; the form-field classes stay. The
+    // hash charset is lightningcss-internal and filename-dependent (the
+    // absolute build path feeds it), so the prefix is matched loosely.
     expect(bundle).toMatch(/_card/)
     expect(bundle).toMatch(/_(card|header|body|footer|chevron|field|input)/)
-    expect(bundle).toMatch(/"card": "[A-Za-z0-9]+_card"/)
+    expect(bundle).toMatch(/"card": "[A-Za-z0-9_]+_card"/)
     expect(bundle).toContain('"card"')
     expect(bundle).toContain('"header"')
     expect(bundle).toContain('"chevronOpen"')
@@ -161,7 +163,7 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     expect(pkg.dsh?.client?.platform).toBe('web')
     expect(pkg.dsh?.client?.inject).toEqual(
       expect.arrayContaining([
-        '@deepseek-ai/dsh-client-runtime',
+        '@deepseek-ai/dsh-client-store',
         '@deepseek-ai/dsh-client-ui-settings-plugins',
         '@deepseek-ai/dsh-client-locale',
       ]),

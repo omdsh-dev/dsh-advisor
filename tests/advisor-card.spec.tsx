@@ -40,16 +40,19 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
-  ClientConnectionRpc, ConfigurableProviderView, IApiClient, ModelProviderGroup,
-  RpcResponse, RpcResult, SettingsNamespaceView,
+  ClientConnectionRpc, RpcResult,
 } from '@deepseek-ai/dsh-client-connection/client'
+import type { LlmConfigurableProvider } from '@deepseek-ai/dsh-llm/types'
+import type { SettingsNamespaceView } from '@deepseek-ai/dsh-settings/types'
+import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
+import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import { fakeSchema } from './support/schema-ops'
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { AdvisorCard } from '../src/client/advisor-card'
 import type { AdvisorCardProps } from '../src/client/advisor-card'
 import { AdvisorSettingsStore, refreshIfLoaded } from '../src/client/advisor-store'
-import type { AdvisorConfigView, AdvisorSettingsState } from '../src/client/advisor-store'
+import type { AdvisorConfigView, AdvisorSettingsState, AdvisorStoreRemote } from '../src/client/advisor-store'
 import { apply } from '../src/client/index'
 import { en, zh } from '../src/client/locales'
 
@@ -82,13 +85,11 @@ function cardProps(controller: AdvisorSettingsStore, useSnapshot: SnapshotSelect
     controller,
     useSnapshot,
     t,
-    useSessions: undefined as never,
-    useWorkspaces: undefined as never,
   }
 }
 
-function ok<T>(value: T): RpcResponse<T> {
-  return { rpcId: 'r' as never, result: { ok: true, value } }
+function ok<T>(value: T): RemoteResult<T> {
+  return { ok: true, value }
 }
 
 /** One gateway RPC success (the channel returns the unwrapped result, not the envelope). */
@@ -106,14 +107,14 @@ function defaultConfig(): AdvisorConfigView {
   return { enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 }
 }
 
-const DEEPSEEK: ConfigurableProviderView = {
-  provider: 'deepseek-official', displayName: 'DeepSeek', settingsNs: 'llm-deepseek', settingsPath: [], active: true,
+const DEEPSEEK: LlmConfigurableProvider = {
+  provider: 'deepseek-official', displayName: 'DeepSeek', settingsNs: 'llm-deepseek', settingsPath: [],
 }
-const OPENAI: ConfigurableProviderView = {
-  provider: 'openai', displayName: 'openai', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'openai'], active: true,
+const OPENAI: LlmConfigurableProvider = {
+  provider: 'openai', displayName: 'openai', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'openai'],
 }
-const ZOMBIE: ConfigurableProviderView = {
-  provider: 'zombie', displayName: 'zombie', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'zombie'], active: false,
+const ZOMBIE: LlmConfigurableProvider = {
+  provider: 'zombie', displayName: 'zombie', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'zombie'],
 }
 
 function deepseekNs(): SettingsNamespaceView {
@@ -134,27 +135,29 @@ function piAiNs(): SettingsNamespaceView {
 }
 
 interface Scripted {
-  api: Pick<IApiClient, 'settings' | 'llm'>
+  remote: AdvisorStoreRemote
   rpc: ClientConnectionRpc
   call: ReturnType<typeof vi.fn>
   get: ReturnType<typeof vi.fn>
   set: ReturnType<typeof vi.fn>
   describe: ReturnType<typeof vi.fn>
-  models: ReturnType<typeof vi.fn>
+  listConfigurableProviders: ReturnType<typeof vi.fn>
+  modelCatalog: ReturnType<typeof vi.fn>
 }
 
 /**
- * A scripted wire face: `settings.describe` carries ONLY the provider
- * namespaces (the advisor namespace is off the exposed set — the gateway
- * channel replaces it), and the fake `rpc.call` serves the `advisor/get` +
- * `advisor/set` endpoints against a mutable effective config. `config: null`
- * = the gateway is unreachable (get fails) — the C-1/KD-G5 notice path.
+ * A scripted wire face: the Remote assembly's `settings.describe` carries
+ * ONLY the provider namespaces (the advisor namespace is off the exposed set
+ * — the gateway channel replaces it), and the fake `rpc.call` serves the
+ * `advisor/get` + `advisor/set` endpoints against a mutable effective config.
+ * `config: null` = the gateway is unreachable (get fails) — the C-1/KD-G5
+ * notice path.
  */
 function scriptedApi(options: {
   config?: AdvisorConfigView | null
   namespaces?: SettingsNamespaceView[]
-  entries?: ConfigurableProviderView[]
-  groups?: ModelProviderGroup[]
+  entries?: LlmConfigurableProvider[]
+  groups?: ModelCatalog['groups']
   writable?: boolean
 } = {}): Scripted {
   const others = options.namespaces ?? [deepseekNs(), piAiNs()]
@@ -165,7 +168,13 @@ function scriptedApi(options: {
     hasDocument: false,
     namespaces: others,
   })))
-  const models = vi.fn(() => Promise.resolve(ok({ groups: options.groups ?? [], failures: [] })))
+  const listConfigurableProviders = vi.fn(() => Promise.resolve(ok(entries)))
+  const modelCatalog = vi.fn(() => Promise.resolve(ok({
+    default: { provider: '', model: '' },
+    routableProviders: [],
+    groups: options.groups ?? [],
+    failures: [],
+  } satisfies ModelCatalog)))
   const get = vi.fn(() => Promise.resolve(
     current === null
       ? failResult('advisor gateway is not ready')
@@ -183,19 +192,20 @@ function scriptedApi(options: {
     throw new Error(`test: unexpected endpoint ${endpoint}`)
   })
   return {
-    api: {
-      settings: { describe, update: vi.fn(), replace: vi.fn(), mutate: vi.fn() },
-      llm: { providers: vi.fn(() => Promise.resolve(ok({ providers: entries }))), models, discoverModels: vi.fn() },
-    } as unknown as Pick<IApiClient, 'settings' | 'llm'>,
+    remote: {
+      llm: { listConfigurableProviders },
+      settings: { describe },
+      session: { modelCatalog },
+    },
     rpc: { call } as unknown as ClientConnectionRpc,
-    call, get, set, describe, models,
+    call, get, set, describe, listConfigurableProviders, modelCatalog,
   }
 }
 
 /** Preload the store, then render the card (ui-models spec pattern). */
 async function mountCard(options: Parameters<typeof scriptedApi>[0] = {}, preload = true) {
   const scripted = scriptedApi(options)
-  const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc, schema)
+  const controller = new AdvisorSettingsStore(scripted.remote, scripted.rpc, schema)
   if (preload) await controller.load()
   const props = cardProps(controller, bindSnapshotSelector(controller.store))
   const view = render(<AdvisorCard {...props} />)
@@ -223,16 +233,15 @@ function toggleCard(): void {
  * A minimal fake of the client slots service + context for the registration
  * ledger test: `inject(name, generator)` runs the generator and records every
  * `register` call (the real runtime does the same through ctx.effect), and
- * `ctx.get('connection')` serves the scripted wire face. The optional
- * `remote` service mirrors the client assembly's forwarded Host invalidation
- * face (plan 003: `ctx.remote.$on` with `settings/document-updated` +
- * `llm/adapters-updated`, probe of API_REMOTE_FORWARDED_EVENTS in
- * @deepseek-ai/dsh-api-remotes) — `withRemote: false` simulates a shell
- * that never mounted the service (graceful-degrade path). Everything else
- * the plugin's apply touches (locale register, connection/reset) is recorded
- * but inert.
+ * `ctx.get('connection')` serves the scripted wire face. The `remote` service
+ * mirrors the client assembly's generated namespace surface + forwarded Host
+ * invalidation face (plan 003: `ctx.remote.$on` with
+ * `settings/document-updated` + `llm/adapters-updated`, probe of
+ * API_REMOTE_FORWARDED_EVENTS in @deepseek-ai/dsh-api-remotes). Everything
+ * else the plugin's apply touches (locale register, connection/reset) is
+ * recorded but inert.
  */
-function fakeRuntime(scripted: Scripted, withRemote = true) {
+function fakeRuntime(scripted: Scripted) {
   interface LedgerRow { name: string; options: Record<string, unknown>; component: unknown }
   const ledger: Record<string, LedgerRow[]> = {}
   const disposers: Array<() => void> = []
@@ -245,6 +254,11 @@ function fakeRuntime(scripted: Scripted, withRemote = true) {
       ;(remoteHandlers[event] ??= new Set()).add(handler)
       return () => { remoteHandlers[event]?.delete(handler) }
     },
+    // The generated namespace surface the store reads its provider directory
+    // from (alpha.2): wired to the same scripted fakes as the store tests.
+    llm: { listConfigurableProviders: scripted.listConfigurableProviders },
+    settings: { describe: scripted.describe },
+    session: { modelCatalog: scripted.modelCatalog },
   }
   const slots = {
     register: (options: Record<string, unknown>, component: unknown): (() => void) => {
@@ -263,6 +277,7 @@ function fakeRuntime(scripted: Scripted, withRemote = true) {
   const ctx = {
     settingsSchema: schema,
     slots,
+    remote,
     locale: {
       register: (ns: string, dict: unknown): (() => void) => {
         locales[ns] = dict
@@ -271,8 +286,7 @@ function fakeRuntime(scripted: Scripted, withRemote = true) {
       bind: (): never => { throw new Error('test: apply must not bind t — the card t seat comes from PropsLocale') },
     },
     get: (key: string): unknown => {
-      if (key === 'connection') return { api: scripted.api, rpc: scripted.rpc }
-      if (key === 'remote') return withRemote ? remote : undefined
+      if (key === 'connection') return { rpc: scripted.rpc }
       return undefined
     },
     effect: (fn: () => unknown): (() => void) => {
@@ -335,8 +349,8 @@ describe('AdvisorCard registration (settings.plugin.item)', () => {
 
 describe('AdvisorCard invalidation refresh (plan 003 / residual R3)', () => {
   /** Run apply, then hand back the injected controller (the open card surface). */
-  function applyAndController(scripted: Scripted, withRemote = true) {
-    const runtime = fakeRuntime(scripted, withRemote)
+  function applyAndController(scripted: Scripted) {
+    const runtime = fakeRuntime(scripted)
     apply(runtime.ctx as unknown as ClientContext)
     const cards = runtime.ledger['settings.plugin.item'] ?? []
     const inject = cards[0].options.inject as () => object
@@ -387,19 +401,7 @@ describe('AdvisorCard invalidation refresh (plan 003 / residual R3)', () => {
     expect(scripted.describe).not.toHaveBeenCalled()
   })
 
-  it('keeps connection/reset refresh when the remote service is absent (graceful degrade)', async () => {
-    const scripted = scriptedApi()
-    // A shell that never mounted `remote` must not throw on registration and
-    // keeps today's reset-only convergence.
-    const { controller, resetHandlers, remoteHandlers } = applyAndController(scripted, false)
-    expect(Object.keys(remoteHandlers)).toHaveLength(0)
-    expect(resetHandlers.size).toBe(1)
 
-    await controller.load()
-    expect(scripted.describe).toHaveBeenCalledTimes(1)
-    for (const handler of resetHandlers) handler()
-    await vi.waitFor(() => expect(scripted.describe).toHaveBeenCalledTimes(2))
-  })
 
   it('empties the remote/reset handler sets when the effect disposer runs (teardown)', () => {
     const scripted = scriptedApi()
@@ -580,7 +582,7 @@ describe('AdvisorCard', () => {
     // window — the store's latched `degraded` holds the disclosure open until
     // the refresh settles back to degraded.
     const scripted = scriptedApi({ config: null })
-    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc, schema)
+    const controller = new AdvisorSettingsStore(scripted.remote, scripted.rpc, schema)
     await controller.load() // settled degraded: ready + advisorPresent=false
     const view = render(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
     expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
@@ -613,7 +615,7 @@ describe('AdvisorCard', () => {
     // recovered form) and aria-expanded must stay true (no false
     // collapse announcement).
     const scripted = scriptedApi({ config: null })
-    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc, schema)
+    const controller = new AdvisorSettingsStore(scripted.remote, scripted.rpc, schema)
     await controller.load()
     const view = render(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
     expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
@@ -917,7 +919,7 @@ describe('AdvisorCard', () => {
     // get call 1 (initial load) succeeds; the post-apply reload get fails.
     scripted.get.mockImplementationOnce(() => Promise.resolve(okResult({ config: defaultConfig() })))
     scripted.get.mockImplementationOnce(() => Promise.resolve(failResult('advisor gateway is not ready')))
-    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc, schema)
+    const controller = new AdvisorSettingsStore(scripted.remote, scripted.rpc, schema)
     await controller.load()
     controller.setEnabled(true)
     controller.setProvider('deepseek-official')
@@ -932,7 +934,7 @@ describe('AdvisorCard', () => {
   it('renders the load failure in the card chrome with a working retry', async () => {
     const scripted = scriptedApi()
     scripted.describe.mockRejectedValueOnce(new Error('transport down'))
-    const controller = new AdvisorSettingsStore(scripted.api, scripted.rpc, schema)
+    const controller = new AdvisorSettingsStore(scripted.remote, scripted.rpc, schema)
     await controller.load()
     const view = render(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
     expect(screen.getByText(`${en.loadFailed}: transport down`)).toBeTruthy()
