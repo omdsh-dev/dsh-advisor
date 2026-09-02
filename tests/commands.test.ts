@@ -46,9 +46,9 @@ import type {
 // Test doubles
 // ---------------------------------------------------------------------------
 
-/** Minimal fake `Agent` — the handler only reads `agent.session.id`/events. */
+/** Minimal fake `Agent` — the handler only reads `agent.session.id`/`seq`. */
 function fakeAgent(sessionId = 'session-1'): Agent {
-  return { session: { id: sessionId, events: [] } } as unknown as Agent
+  return { session: { id: sessionId, seq: 0 } } as unknown as Agent
 }
 
 /** Invoke one handler with the exact dsh `CommandInvocation` shape. */

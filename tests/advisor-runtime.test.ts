@@ -973,7 +973,7 @@ describe('AdvisorRuntime — composed with a real LlmRuntime + registered adapte
 
     // A full stepped turn would otherwise render a delta and dispatch a call.
     const events = buildEvents(minimalTurn())
-    const session = { id: 's1', events } as unknown as Session
+    const session = { id: 's1', snapshotEvents: () => events } as unknown as Session
     for (const event of events) {
       ctx.emit('session/event', session, event)
     }

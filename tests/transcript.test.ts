@@ -44,10 +44,13 @@ import { ADVISOR_SOURCE_KIND } from '../src/kinds'
 // a stable fingerprint; different content ⇒ different ids ⇒ different fp).
 // ---------------------------------------------------------------------------
 
+/** Synthetic replace op — dsh brands seqs (`SessionSeq`), compile-time only here. */
+type ReplaceSurfaceOp = { op: 'replace'; start: number; end: number }
+
 interface EventSpec {
   type: string
   data: unknown
-  surfaceOp?: SurfaceOp
+  surfaceOp?: SurfaceOp | ReplaceSurfaceOp
   sourceEventSeqs?: number[]
 }
 
@@ -71,7 +74,7 @@ const text = (value: string): ContentBlock => ({ type: 'text', text: value })
 function userMessage(
   value: string,
   source: MessageSource = { kind: 'user' },
-  surfaceOp: SurfaceOp = 'append',
+  surfaceOp: SurfaceOp | ReplaceSurfaceOp = 'append',
   sourceEventSeqs?: number[],
 ): EventSpec {
   return {

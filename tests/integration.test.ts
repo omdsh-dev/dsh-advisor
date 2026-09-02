@@ -170,10 +170,10 @@ function makeFakeAgent(id = 's1'): {
   return { agent: { id, inject, steer } as unknown as Agent, inject, steer }
 }
 
-/** A session whose `events` is a live log the feed loop grows in place. */
+/** A session whose log is a live array the feed loop grows in place. */
 function makeSession(id = 's1'): { session: Session; log: SessionEvent[] } {
   const log: SessionEvent[] = []
-  return { session: { id, events: log } as unknown as Session, log }
+  return { session: { id, snapshotEvents: () => log } as unknown as Session, log }
 }
 
 /**
@@ -200,10 +200,13 @@ function deltaTextOf(options: GenerateOptions): string {
 // Synthetic session event builders (mirror of the T3/T6 test fixtures)
 // ---------------------------------------------------------------------------
 
+/** Synthetic replace op — dsh brands seqs (`SessionSeq`), compile-time only here. */
+type ReplaceSurfaceOp = { op: 'replace'; start: number; end: number }
+
 interface EventSpec {
   type: string
   data: unknown
-  surfaceOp?: SurfaceOp
+  surfaceOp?: SurfaceOp | ReplaceSurfaceOp
   sourceEventSeqs?: number[]
 }
 
@@ -227,7 +230,7 @@ const text = (value: string): ContentBlock => ({ type: 'text', text: value })
 function userMessage(
   value: string,
   source: { kind: string } = { kind: 'user' },
-  surfaceOp: SurfaceOp = 'append',
+  surfaceOp: SurfaceOp | ReplaceSurfaceOp = 'append',
   sourceEventSeqs?: number[],
 ): EventSpec {
   return {
@@ -771,7 +774,7 @@ describe('integration — /advisor commands conditional activation (T7)', () => 
     // to the current transcript length, and creates/resumes the runtime.
     const result = definitions[0]!.handler({
       commandId: CommandId('cmd-t8'),
-      agent: { id: 's1', session: { id: 's1', events: log } } as unknown as Agent,
+      agent: { id: 's1', session: { id: 's1', seq: log.length } } as unknown as Agent,
       rawInput: ' on',
       attachments: [],
       signal: new AbortController().signal,

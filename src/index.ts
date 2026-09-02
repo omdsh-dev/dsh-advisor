@@ -375,7 +375,7 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // symmetry restored; both dispose listeners are documented idempotent
   // (a runtime is disposed at most once, whichever signal lands first).
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
-    observer.handleEvent(session.id, session.events, event)
+    observer.handleEvent(session.id, session.snapshotEvents(), event)
   }, { global: true })
   // Per-session runtime lifecycle. Spec KD-5(c) pins `agent/disposed`;
   // `session/disposed` is the store-level pair (both are idempotent — a

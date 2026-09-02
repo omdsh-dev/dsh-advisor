@@ -309,7 +309,7 @@ function createAdvisorCommandHandler(controller: AdvisorCommandController) {
         const before = controller.getStatus(sessionId)
         const next = !before.enabled
         // The KD-5 seed length is only meaningful when enabling.
-        controller.setEnabled(sessionId, next, next ? invocation.agent.session.events.length : undefined)
+        controller.setEnabled(sessionId, next, next ? invocation.agent.session.seq : undefined)
         if (!next) return { kind: 'success', text: 'Advisor off for this session.' }
         // Post-flip status: the reply carries the S4 gate caveat when the
         // toggle-to-on flip trips the gate (qc2 W-2 / qc3 I-2).
@@ -326,7 +326,7 @@ function createAdvisorCommandHandler(controller: AdvisorCommandController) {
         if (before.enabled && !needsRecovery) {
           return { kind: 'success', text: 'Advisor is already on for this session.' }
         }
-        controller.setEnabled(sessionId, true, invocation.agent.session.events.length)
+        controller.setEnabled(sessionId, true, invocation.agent.session.seq)
         // Reply from the POST-flip status: when the override flip trips the
         // S4 gate (config-off + missing provider/model), the reply must say
         // the advisor did not start and why, not a bare "Advisor on" (qc2
