@@ -2,6 +2,10 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.3.1] - 2026-09-03
+
+- 058fa1b fix(client): declare dotted remote namespace injects (dsh 0.1.2-rc.1) (#76)
+
 ## [0.3.0] - 2026-09-03
 
 - 6ff3b0f chore(deps): upgrade dsh peers to 0.1.2-rc.1 (#74)
