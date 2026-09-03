@@ -73,8 +73,17 @@ export { refreshIfLoaded } from './advisor-store.ts'
  * Required services (cordis fiber inject). The target slot is declared by
  * ui-plugin-config's apply, whose activation order relative to this one is
  * NOT constrained; registration depends on the slot through `slots.inject()`.
+ *
+ * rc.1 dotted-namespace contract: each client Remote namespace is a
+ * child-fiber service named `remote.<ns>` (upstream `remoteServiceKey`), and
+ * the traceable proxy forwards `ctx.remote.llm` / `.settings` / `.session`
+ * to those context properties — consumers MUST declare the dotted names
+ * here or the fiber walk throws `cannot get property "remote.llm" without
+ * inject`. `remote` stays for the `$on` invalidation face; `connection` for
+ * the `connection.rpc` gateway channel. Reference shape:
+ * ../deepseek-harness/packages/client/ui-settings-models/src/client/index.ts.
  */
-export const inject = ['slots', 'locale', 'connection', 'settingsSchema', 'remote']
+export const inject = ['slots', 'locale', 'connection', 'settingsSchema', 'remote', 'remote.llm', 'remote.settings', 'remote.session']
 
 /**
  * Register the Advisor card once the `settings.plugin.item` declaration is on
@@ -89,7 +98,9 @@ export function apply(ctx: ClientContext): void {
   // The store reads/writes the advisor config over the connection's generic
   // RPC channel (the host gateway `/api/advisor/get` + `/api/advisor/set`);
   // the provider/model directory rides the client Remote assembly (`remote`
-  // — injected above; KD-G3, alpha.2).
+  // — injected above; KD-G3; the dotted `remote.llm` / `remote.settings` /
+  // `remote.session` namespaces are declared in `inject` per the rc.1
+  // dotted-namespace contract).
   const controller = new AdvisorSettingsStore(ctx.remote, connection.rpc, ctx.settingsSchema)
 
   // Pushed invalidations converge the open surface without polling. Two
@@ -109,9 +120,11 @@ export function apply(ctx: ClientContext): void {
   //   vocabulary; the forwarded-event allowlist is their replacement (plan
   //   003 / status R3 — restores same-host live convergence without a
   //   reconnect).
-  // `remote` is injected above (alpha.2: the client Remote assembly is the
-  // store's provider-directory wire, so it is a hard registration
-  // dependency). A burst of invalidations coalesces into a single refetch via
+  // `remote` is injected above (the client Remote assembly is the store's
+  // provider-directory wire, so it is a hard registration dependency; its
+  // dotted namespace services `remote.llm` / `remote.settings` /
+  // `remote.session` are declared in `inject` — rc.1 dotted-namespace
+  // contract). A burst of invalidations coalesces into a single refetch via
   // the microtask debounce — events in separate ticks each trigger a load,
   // and `refreshIfLoaded` keeps an unopened card idle.
   ctx.effect(() => {

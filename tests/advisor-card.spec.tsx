@@ -53,7 +53,7 @@ import { AdvisorCard } from '../src/client/advisor-card'
 import type { AdvisorCardProps } from '../src/client/advisor-card'
 import { AdvisorSettingsStore, refreshIfLoaded } from '../src/client/advisor-store'
 import type { AdvisorConfigView, AdvisorSettingsState, AdvisorStoreRemote } from '../src/client/advisor-store'
-import { apply } from '../src/client/index'
+import { apply, inject } from '../src/client/index'
 import { en, zh } from '../src/client/locales'
 
 afterEach(cleanup)
@@ -249,16 +249,25 @@ function fakeRuntime(scripted: Scripted) {
   const locales: Record<string, unknown> = {}
   const resetHandlers = new Set<() => void>()
   const remoteHandlers: Record<string, Set<() => void>> = {}
+  // The generated namespace surface (rc.1 dotted contract): each Remote
+  // namespace is a child-fiber service named `remote.<ns>` (upstream
+  // `remoteServiceKey`), so the fixture provides them as separate dotted
+  // services — the declared injects resolve exactly like production. The
+  // assembly face forwards `remote.llm` etc. to the dotted services (mirror
+  // of the traceable proxy: `ctx.remote.llm` → `ctx['remote.llm']`).
+  const services: Record<string, unknown> = {
+    'remote.llm': { listConfigurableProviders: scripted.listConfigurableProviders },
+    'remote.settings': { describe: scripted.describe },
+    'remote.session': { modelCatalog: scripted.modelCatalog },
+  }
   const remote = {
     $on: (event: string, handler: () => void): (() => void) => {
       ;(remoteHandlers[event] ??= new Set()).add(handler)
       return () => { remoteHandlers[event]?.delete(handler) }
     },
-    // The generated namespace surface the store reads its provider directory
-    // from (alpha.2): wired to the same scripted fakes as the store tests.
-    llm: { listConfigurableProviders: scripted.listConfigurableProviders },
-    settings: { describe: scripted.describe },
-    session: { modelCatalog: scripted.modelCatalog },
+    get llm() { return services['remote.llm'] },
+    get settings() { return services['remote.settings'] },
+    get session() { return services['remote.session'] },
   }
   const slots = {
     register: (options: Record<string, unknown>, component: unknown): (() => void) => {
@@ -287,7 +296,7 @@ function fakeRuntime(scripted: Scripted) {
     },
     get: (key: string): unknown => {
       if (key === 'connection') return { rpc: scripted.rpc }
-      return undefined
+      return services[key]
     },
     effect: (fn: () => unknown): (() => void) => {
       const disposer = fn()
@@ -309,6 +318,17 @@ function fakeRuntime(scripted: Scripted) {
 }
 
 describe('AdvisorCard registration (settings.plugin.item)', () => {
+  it('declares the dotted remote namespace injects (rc.1 contract)', () => {
+    // Regression pin (upstream apply.client.spec.ts asserts the array
+    // literally): each client Remote namespace is a child-fiber service
+    // named `remote.<ns>`; without the dotted names the fiber walk throws
+    // `cannot get property "remote.llm" without inject` at card load.
+    expect(inject).toEqual([
+      'slots', 'locale', 'connection', 'settingsSchema', 'remote',
+      'remote.llm', 'remote.settings', 'remote.session',
+    ])
+  })
+
   it('registers the advisor card and leaves no advisor entry in settings.section', () => {
     const scripted = scriptedApi()
     const { ctx, ledger, locales } = fakeRuntime(scripted)
