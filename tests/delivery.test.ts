@@ -155,6 +155,20 @@ describe('AdvisorDelivery — advisor message construction (spec §6)', () => {
     expect(isAdvisorMessage(message)).toBe(true)
   })
 
+  it('pins the persisted plugin id to the literal "advisor" (durable-log identity)', () => {
+    // QC1-F-003: every other assertion in this suite — and `isAdvisorMessage`
+    // itself — reaches the persisted key only THROUGH `ADVISOR_PLUGIN_ID`, so
+    // revaluing that constant would keep the whole suite green while the notes
+    // already written into session logs silently fell out of the self-review
+    // exclusion (a replay trigger resets the renderer cursor and `rebuild()`
+    // re-filters the log through `isAdvisorMessage`). This is the one assertion
+    // that reads the persisted literal, so a rename fails here — where the
+    // author has to confront the already-written logs — instead of in a session
+    // that quietly starts reviewing the advisor's own advice.
+    const message = buildAdvisorMessage({ note: 'extract the helper', severity: 'concern' })
+    expect(message.source).toMatchObject({ plugin: 'advisor' })
+  })
+
   it('rejects a plugin-arm message carrying a different plugin id (self-review guard)', () => {
     // Counterpart of the positive case above, which proves the predicate
     // accepts the advisor's own shape. Here the SAME message differs in exactly

@@ -789,10 +789,10 @@ describe('SessionTranscriptObserver — agentic reply-complete gate (KD-N4-5)', 
 //
 // `agent/inbox/spliced` fires on EVERY inbox mutation, including the advisor's
 // own inject/steer deliveries (the `plugin` arm tagged `plugin: 'advisor'`),
-// workspace-context sync
-// ('workspace-instructions'), tool-result splicing ('tool'), and claim/clear
-// (empty `inserted`). Only an inserted message with `source.kind === 'user'`
-// is a human input — anything else must not self-trigger the review gate.
+// workspace-context sync (the `agent-instructions` kind its own producer
+// commits), tool-result splicing ('tool'), and claim/clear (empty `inserted`).
+// Only an inserted message with `source.kind === 'user'` is a human input —
+// anything else must not self-trigger the review gate.
 // ---------------------------------------------------------------------------
 
 describe('SessionTranscriptObserver — inbox-spliced payload discrimination (C-1 self-trigger fix)', () => {
@@ -806,6 +806,21 @@ describe('SessionTranscriptObserver — inbox-spliced payload discrimination (C-
     })
     return { deltas, stepped, observer }
   }
+  /**
+   * The workspace-context producer's REAL inbox source
+   * (`@deepseek-ai/dsh-agent-instructions`): its own first-party
+   * `agent-instructions` kind carrying the `instructions` form — not a
+   * `plugin` arm, and not a `workspace-instructions` kind, which no released
+   * edge vocabulary (`dsh-session-format-v2-to-v3`'s `SOURCE_KINDS`) declares.
+   */
+  const workspaceContextSource = {
+    kind: 'agent-instructions',
+    form: 'instructions',
+    // `changes` is the producer's own reconciliation journal: `action` is
+    // set/replace/remove, `scope` is the logical instruction scope (project
+    // root here) and `digest` the content SHA-1 in lowercase hex.
+    changes: [{ action: 'set', scope: '.', path: 'AGENTS.md', digest: 'da39a3ee5e6b4b0d3255bfef95601890afd80709' }],
+  } as const
   /** One completed agentic round with an unreviewed assistant increment in place. */
   const round = (): EventSpec[] => [userMessage('prompt one'), assistantMessage('reply one')]
 
@@ -819,11 +834,11 @@ describe('SessionTranscriptObserver — inbox-spliced payload discrimination (C-
     expect(stepped).toHaveLength(0)
   })
 
-  it('a workspace-context sync (inserted source.kind workspace-instructions) never triggers', () => {
+  it('a workspace-context sync (inserted agent-instructions source) never triggers', () => {
     const { deltas, stepped, observer } = observe()
     feed(observer, 's1', [
       ...round(),
-      inboxSplicedWith('the repo is at /repo', { kind: 'workspace-instructions' }),
+      inboxSplicedWith('the repo is at /repo', workspaceContextSource),
     ])
     expect(deltas).toHaveLength(0)
     expect(stepped).toHaveLength(0)
@@ -851,7 +866,7 @@ describe('SessionTranscriptObserver — inbox-spliced payload discrimination (C-
     feed(observer, 's1', [
       ...round(),
       inboxSplicedWith('[advisor:nit] a note', advisorSource),
-      inboxSplicedWith('workspace sync', { kind: 'workspace-instructions' }),
+      inboxSplicedWith('workspace sync', workspaceContextSource),
       inboxSplicedWith('2 failed', { kind: 'tool', callId: ToolCallId('call-0') }),
       inboxClear(),
       inboxSpliced('prompt two'),           // the one genuine human splice
