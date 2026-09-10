@@ -201,7 +201,7 @@ function deltaTextOf(options: GenerateOptions): string {
 // ---------------------------------------------------------------------------
 
 /** Synthetic replace op — dsh brands seqs (`SessionSeq`), compile-time only here. */
-type ReplaceSurfaceOp = { op: 'replace'; start: number; end: number }
+type ReplaceSurfaceOp = { op: 'replace'; startSeq: number; endSeq: number }
 
 interface EventSpec {
   type: string
@@ -823,7 +823,7 @@ describe('integration — compact / surface-replace reset the composed observer 
     feed(ctx, session, log, [
       compactStart(),
       compactSummary(),
-      userMessage('Summary of earlier work.', { kind: 'user' }, { op: 'replace', start: 1, end: 3 }, [1, 3]),
+      userMessage('Summary of earlier work.', { kind: 'user' }, { op: 'replace', startSeq: 1, endSeq: 3 }, [1, 3]),
       compactEnd(),
     ])
 
@@ -859,7 +859,7 @@ describe('integration — compact / surface-replace reset the composed observer 
     // A surface replace WITHOUT compact/* events (the authoritative KD-5
     // trigger b) rewrites the delivered prefix.
     feed(ctx, session, log, [
-      userMessage('Replacement summary.', { kind: 'user' }, { op: 'replace', start: 1, end: 3 }, [1, 3]),
+      userMessage('Replacement summary.', { kind: 'user' }, { op: 'replace', startSeq: 1, endSeq: 3 }, [1, 3]),
     ])
 
     feed(ctx, session, log, simpleTurn(2, 'continue', 'Continuing.'))

@@ -5,7 +5,7 @@
 [![npm](https://img.shields.io/npm/dt/dsh-advisor)](https://www.npmjs.com/package/dsh-advisor)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933.svg)
-![dsh](https://img.shields.io/badge/dsh-0.1.2--rc.1-4B32C3.svg)
+![dsh](https://img.shields.io/badge/dsh-0.1.5--rc.1-4B32C3.svg)
 ![dsh tui](https://img.shields.io/badge/dsh%20tui-compatible-4B32C3.svg)
 [![dshfind](https://dshfind.com/api/badge/omdsh-dev/dsh-advisor)](https://dshfind.com/plugins/omdsh-dev/dsh-advisor?ref=badge)
 
@@ -34,7 +34,7 @@ Add an `advisor:` section to the global dsh settings document (default `$DSH_HOM
 advisor:
   enabled: true                # master switch (default false) — set explicitly to enable
   provider: deepseek-official  # REQUIRED when enabled
-  model: deepseek-v4-flash     # REQUIRED when enabled
+  model: deepseek-flash        # REQUIRED when enabled; fallback: deepseek-v4-flash (or another V4 id) until the gateway enables the V41 route
   systemPrompt: ""             # optional; "" = built-in reviewer prompt
   immuneTurns: 3               # int ≥ 0, default 3 — cooldown after a delivered steer
   maxDeltaMessages: 60         # int ≥ 0, default 60 — delta window; 0 = unbounded

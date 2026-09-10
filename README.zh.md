@@ -5,7 +5,7 @@
 [![npm](https://img.shields.io/npm/dt/dsh-advisor)](https://www.npmjs.com/package/dsh-advisor)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933.svg)
-![dsh](https://img.shields.io/badge/dsh-0.1.2--rc.1-4B32C3.svg)
+![dsh](https://img.shields.io/badge/dsh-0.1.5--rc.1-4B32C3.svg)
 ![dsh tui](https://img.shields.io/badge/dsh%20tui-compatible-4B32C3.svg)
 [![dshfind](https://dshfind.com/api/badge/omdsh-dev/dsh-advisor?lang=zh)](https://dshfind.com/zh/plugins/omdsh-dev/dsh-advisor?ref=badge)
 
@@ -34,7 +34,7 @@ dsh plugin --profile dsh-tui add dsh-advisor  # dsh-tui 终端 profile
 advisor:
   enabled: true                # 总开关（默认 false）——需显式打开后生效
   provider: deepseek-official  # enabled: true 时必填（非空）
-  model: deepseek-v4-flash     # enabled: true 时必填（非空）
+  model: deepseek-flash        # enabled: true 时必填（非空）；网关未开放 V41 路由时回退 deepseek-v4-flash（或其它 V4 id）
   systemPrompt: ""             # 可选；"" = 内置评审 prompt
   immuneTurns: 3               # 整数 ≥ 0，默认 3 —— 打断性送达后的冷却步数
   maxDeltaMessages: 60         # 整数 ≥ 0，默认 60 —— delta 窗口；0 = 无上限
