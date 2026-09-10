@@ -103,6 +103,7 @@ MVP 有意放弃与 omp 的完整对等。已接受的差距（在 harness 迭�
 - **不隔离不安全的 advisor 输出**——行为异常的 note 可能携带指令性文本；JSON frame + 校验 + advisory-only 框架是仅有的缓解手段，且 note 会原样送达主 transcript（路线图）。
 - **无 `syncBacklog` 追赶等待**——落后很多的 advisor 不会等待主循环；其 backlog 有界且会被丢弃，因此 note 可能在下一次主 turn 开始之后才到达（路线图：context-maintenance batch）。
 - **advisor 上下文有界**——长会话的完整重放会被截断（`maxDeltaMessages`），因此 compaction 后 advisor 可能丢失早期上下文（路线图：下下迭代）。
+- **本次变更之前写入的会话不由本插件修复**——其中的 advisor note 带有旧的自定义 `source.kind`（`kind: 'advisor'`），dsh 的 V2→V3 会话格式边会拒绝它，因此这些日志无法迁移（原始文件完好，只是打不开）。修复它们属于上游工作：针对这一类缺陷的统一修复正在 [`omdsh-dev/dsh-llm-fallbacks`](https://github.com/omdsh-dev/dsh-llm-fallbacks) 开发中。本版本及之后写入的日志不受影响。
 
 ## 文档
 
