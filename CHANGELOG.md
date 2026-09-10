@@ -2,6 +2,11 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.4.0] - 2026-09-10
+
+- a2cc44f Merge pull request #83 from omdsh-dev/chore/vitest-4.1.11
+- 1e7d11e fix(advisor): carry the advisor identity on the plugin source arm (#82)
+
 ## [0.3.2] - 2026-09-10
 
 - 663ed6d chore(deps): 升级 dsh peers 到 0.1.5-rc.1 / upgrade dsh peers to 0.1.5-rc.1 (#79)
