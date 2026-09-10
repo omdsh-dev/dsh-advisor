@@ -29,7 +29,7 @@ advisor 回复必须恰好是一个 JSON 对象 `{"note": "<text>", "severity": 
 *Avoid:* 让 advisor 自由文本回复（帧契约失效）；解析失败无限重试
 
 ### transcript delta / self-review exclusion（转录增量与自审排除）
-DeltaRenderer 用 cursor 在 `session.events` 序列上推进 + 已投递前缀的 fingerprint；检测到前缀重写（fingerprint 失配或 `surfaceOp replace`）→ 重置并全量重放。渲染为 role 标注的 markdown（`**user:**` / `**agent:**`，assistant 文本加 tool intent、tool 结果标 `[tool result]`、reasoning 排除）。`plugin` arm（`kind: 'plugin'` + `plugin: 'advisor'`，`isAdvisorMessage`）的消息被排除在后续增量之外——advisor 不会读回自己在该形状下投递的注入。**迁移代价**：该识别只覆盖 `plugin` arm；迁移前写入的 note 带旧的自定义 kind（`kind: 'advisor'`），已不再被谓词匹配，一次全量重放（compaction、非 append `surfaceOp`、或已投递前缀 fingerprint 失配 → `reset()` + `rebuild()` 自 0 重新折叠存活 surface）会把它重新呈现给 advisor，每次重放一次。这是把插件身份移出 `source.kind` 的已接受、有界代价（无数据丢失，仅 advisor 侧自审污染；受影响日志已登记为 residual R1），不是缺陷。`maxDeltaMessages`（默认 60，0 = 无界）约束重放窗口，超限保留最近 N 条并前置 `… <earlier messages omitted>` 标记。
+DeltaRenderer 用 cursor 在 `session.events` 序列上推进 + 已投递前缀的 fingerprint；检测到前缀重写（fingerprint 失配或 `surfaceOp replace`）→ 重置并全量重放。渲染为 role 标注的 markdown（`**user:**` / `**agent:**`，assistant 文本加 tool intent、tool 结果标 `[tool result]`、reasoning 排除）。`plugin` arm（`kind: 'plugin'` + `plugin: 'advisor'`，`isAdvisorMessage`）的消息被排除在后续增量之外——advisor 不会读回自己在该形状下投递的注入。**迁移代价**：该识别只覆盖 `plugin` arm；迁移前写入的 note 带旧的自定义 kind（`kind: 'advisor'`），已不再被谓词匹配，一次全量重放（compaction、非 append `surfaceOp`、或已投递前缀 fingerprint 失配 → `reset()` + `rebuild()` 自 0 重新折叠存活 surface）会把它重新呈现给 advisor，每次重放一次。这是把插件身份移出 `source.kind` 的已接受、有界代价（无数据丢失，仅 advisor 侧自审污染）——有意不添加旧格式读取分支：项目的「不保持向后兼容」不变量禁止兼容层，故这是被接受而非被修复的代价，不是缺陷。`maxDeltaMessages`（默认 60，0 = 无界）约束重放窗口，超限保留最近 N 条并前置 `… <earlier messages omitted>` 标记。
 *Avoid:* 把 advisor 自己的注入读回增量（自审污染）；长会话无界全量重放
 
 ### emission guard（发射守卫）

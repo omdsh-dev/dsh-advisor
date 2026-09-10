@@ -73,7 +73,7 @@ dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-adv
 
 ## 能力一览
 
-- **每个会话一个独立评审者**：独立的模型调用观察主 transcript 并评审每个 stepped 主 turn；advisor 消息被排除在此后的 delta 之外，因此 advisor 不会读回自己的建议。一个例外，已接受且有界：迁移前写入、带旧自定义 kind（`kind: 'advisor'`）的 note 已不再被自审排除匹配，每次全量重放（如 compaction 之后）都会重新进入 delta 一次——无数据丢失，仅 advisor 侧自审污染，已登记为 residual `R1`。
+- **每个会话一个独立评审者**：独立的模型调用观察主 transcript 并评审每个 stepped 主 turn；advisor 消息被排除在此后的 delta 之外，因此 advisor 不会读回自己的建议。一个例外，已接受且有界：迁移前写入、带旧自定义 kind（`kind: 'advisor'`）的 note 已不再被自审排除匹配，每次全量重放（如 compaction 之后）都会重新进入 delta 一次——无数据丢失，仅 advisor 侧自审污染。这一代价是有意接受的，而非被推迟：不刻意添加旧格式读取分支，因为兼容层被项目的「不保持向后兼容」不变量禁止。
 - **按严重度排序的建议 + inject/steer 语义**：每次评审至多发出一条 note——**nit**（轻微的样式、清晰度或质量建议；经非唤醒的 `agent.inject` 送达，在下一个 pre-step 边界消费）、**concern**（继续之前值得权衡的重大风险或明显更优的方向；经唤醒的 `agent.steer` 送达，受 `immuneTurns` 冷却约束）、**blocker**（继续下去明显是在浪费工作——与显式用户指令矛盾、原地打转、根本性不可行；经 `agent.steer` 送达）。送达的消息携带 `[advisor:{severity}]` 前缀且为自我描述的 advisory 内容：
 
   ```
