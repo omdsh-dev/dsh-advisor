@@ -13,7 +13,7 @@
 *Avoid:* 自造第四档；把 blocker 当普通提醒使用
 
 ### advice delivery（建议投递）
-severity → 通道的路由：nit → `agent.inject`（非唤醒，下一个 step 边界消费）；concern/blocker → `agent.steer`（唤醒——空闲 driver 开跑、运行中的 driver 在下一 step 边界消费）。投递消息为 user-role、`source.kind === 'advisor'`（`MessageSourceMap` merge 扩展，见 `src/kinds.ts`）、内容自描述 `[advisor:{severity}] {note}`——主系统提示词不提 advisor，前缀是主模型判断「建议，不要盲从」的唯一提示。投递同步 fire-and-forget，throw 由 runtime 的包含 seam 兜住。
+severity → 通道的路由：nit → `agent.inject`（非唤醒，下一个 step 边界消费）；concern/blocker → `agent.steer`（唤醒——空闲 driver 开跑、运行中的 driver 在下一 step 边界消费）。投递消息为 user-role、`source` 走分类化的 first-party `plugin` arm（`kind: 'plugin'`、`plugin: 'advisor'`，`ADVISOR_PLUGIN_ID`，见 `src/kinds.ts`）、内容自描述 `[advisor:{severity}] {note}`——主系统提示词不提 advisor，前缀是主模型判断「建议，不要盲从」的唯一提示。投递同步 fire-and-forget，throw 由 runtime 的包含 seam 兜住。
 *Avoid:* 用 inject 承载 concern/blocker（破坏唤醒语义）；把建议当「已批准动作」注入
 
 ### immuneTurns cooldown（免疫回合冷却）
@@ -29,7 +29,7 @@ advisor 回复必须恰好是一个 JSON 对象 `{"note": "<text>", "severity": 
 *Avoid:* 让 advisor 自由文本回复（帧契约失效）；解析失败无限重试
 
 ### transcript delta / self-review exclusion（转录增量与自审排除）
-DeltaRenderer 用 cursor 在 `session.events` 序列上推进 + 已投递前缀的 fingerprint；检测到前缀重写（fingerprint 失配或 `surfaceOp replace`）→ 重置并全量重放。渲染为 role 标注的 markdown（`**user:**` / `**agent:**`，assistant 文本加 tool intent、tool 结果标 `[tool result]`、reasoning 排除）。`source.kind === 'advisor'` 的消息**永不**进入后续增量——advisor 不会读回自己的注入。`maxDeltaMessages`（默认 60，0 = 无界）约束重放窗口，超限保留最近 N 条并前置 `… <earlier messages omitted>` 标记。
+DeltaRenderer 用 cursor 在 `session.events` 序列上推进 + 已投递前缀的 fingerprint；检测到前缀重写（fingerprint 失配或 `surfaceOp replace`）→ 重置并全量重放。渲染为 role 标注的 markdown（`**user:**` / `**agent:**`，assistant 文本加 tool intent、tool 结果标 `[tool result]`、reasoning 排除）。`plugin` arm（`kind: 'plugin'` + `plugin: 'advisor'`，`isAdvisorMessage`）的消息**永不**进入后续增量——advisor 不会读回自己的注入。`maxDeltaMessages`（默认 60，0 = 无界）约束重放窗口，超限保留最近 N 条并前置 `… <earlier messages omitted>` 标记。
 *Avoid:* 把 advisor 自己的注入读回增量（自审污染）；长会话无界全量重放
 
 ### emission guard（发射守卫）
@@ -73,4 +73,4 @@ dsh-TUI（终端前端，profile `dsh-tui`）的插件扩展面：DSH command re
 - `immuneTurns` 只在**真实 steer** 后武装：仅注入（inject）不启动冷却。
 - advisor 命名空间在 apiproxy 白名单之外：web 配置读写只走 gateway RPC 通道（`/api/advisor/get|set`）；进程内 `ctx.settings.update` 无白名单检查，`exposedNamespaces()` 只管 apiproxy wire 路径。
 - 配置组合：schema defaults → 插件行基底 → settings 用户层；`resolveAdvisorConfig` 是硬门禁的 SSOT，所有读取（runtime / gateway / status）都过它。
-- `source.kind === 'advisor'` 消息的双重角色：投递时标记（会话流可见）与自审排除（不进后续 delta）——两者都 key 在同一 kind 上。
+- `plugin` arm（`kind: 'plugin'` + `plugin: 'advisor'`）消息的双重角色：投递时标记（会话流可见）与自审排除（不进后续 delta）——两者都 key 在同一 `source.plugin` 上。
