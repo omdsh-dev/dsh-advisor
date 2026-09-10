@@ -249,7 +249,7 @@ function deltaTextOf(options: GenerateOptions): string {
 // ---------------------------------------------------------------------------
 
 /** Synthetic replace op — dsh brands seqs (`SessionSeq`), compile-time only here. */
-type ReplaceSurfaceOp = { op: 'replace'; start: number; end: number }
+type ReplaceSurfaceOp = { op: 'replace'; startSeq: number; endSeq: number }
 
 interface EventSpec {
   type: string

@@ -34,7 +34,7 @@ Add an `advisor:` section to the global dsh settings document (default `$DSH_HOM
 advisor:
   enabled: true                # master switch (default false) — set explicitly to enable
   provider: deepseek-official  # REQUIRED when enabled
-  model: deepseek-v4-flash     # REQUIRED when enabled
+  model: deepseek-flash        # REQUIRED when enabled; fallback: deepseek-v4-flash (or another V4 id) until the gateway enables the V41 route
   systemPrompt: ""             # optional; "" = built-in reviewer prompt
   immuneTurns: 3               # int ≥ 0, default 3 — cooldown after a delivered steer
   maxDeltaMessages: 60         # int ≥ 0, default 60 — delta window; 0 = unbounded

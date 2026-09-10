@@ -164,7 +164,7 @@ export const ADVISOR_TUI_SETTINGS_SECTION: TuiSettingsSection = {
       descriptions: { zh: 'Model', en: 'Model' },
       hint: 'Model id; required (non-empty) when enabled.',
       hintDescriptions: { zh: '模型 ID；启用时必须非空。', en: 'Model id; required (non-empty) when enabled.' },
-      placeholder: 'e.g. deepseek-v4-flash',
+      placeholder: 'e.g. deepseek-flash',
     },
     {
       path: ['immuneTurns'],

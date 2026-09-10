@@ -34,7 +34,7 @@ dsh plugin --profile dsh-tui add dsh-advisor  # dsh-tui 终端 profile
 advisor:
   enabled: true                # 总开关（默认 false）——需显式打开后生效
   provider: deepseek-official  # enabled: true 时必填（非空）
-  model: deepseek-v4-flash     # enabled: true 时必填（非空）
+  model: deepseek-flash        # enabled: true 时必填（非空）；网关未开放 V41 路由时回退 deepseek-v4-flash（或其它 V4 id）
   systemPrompt: ""             # 可选；"" = 内置评审 prompt
   immuneTurns: 3               # 整数 ≥ 0，默认 3 —— 打断性送达后的冷却步数
   maxDeltaMessages: 60         # 整数 ≥ 0，默认 60 —— delta 窗口；0 = 无上限
