@@ -103,7 +103,8 @@ The MVP deliberately drops full omp parity. Accepted gaps (tracked in the harnes
 - **No quarantine of unsafe advisor output** — a misbehaving note can carry directive text; the JSON frame + validation + advisory-only framing are the only mitigation, and the note is delivered as-is (roadmap).
 - **No `syncBacklog` catch-up wait** — a far-behind advisor does not wait for the primary loop; its backlog is bounded and dropped, so notes may arrive after the next primary turn started (roadmap: context-maintenance batch).
 - **Bounded advisor context** — long-session full replays are truncated (`maxDeltaMessages`), so the advisor may lose early context after compaction (roadmap: next-next iteration).
-- **Sessions written before this change are not repaired by this plugin** — advisor notes in them carry the former custom `source.kind` (`kind: 'advisor'`), which the dsh V2→V3 session-format edge refuses, so those logs cannot be migrated (the raw file is intact, only unopenable). Repairing them is upstream work: a unified pass over this defect class is being developed in [`omdsh-dev/dsh-llm-fallbacks`](https://github.com/omdsh-dev/dsh-llm-fallbacks). Logs written from this version onward are unaffected.
+
+**Sessions written by earlier versions — pre-V3 logs are not repaired here.** Advisor notes in them carry the former custom `source.kind` (`kind: 'advisor'`), which the dsh V2→V3 session-format edge refuses, so those **pre-V3** logs cannot be migrated (the raw file is intact, only unopenable). Logs already at V3 still open — they are affected only by the self-review caveat above. Repairing the pre-V3 logs is upstream work: a unified pass over this defect class is being developed in [`omdsh-dev/dsh-llm-fallbacks`](https://github.com/omdsh-dev/dsh-llm-fallbacks) and is **not yet available**. Logs written from this version onward are unaffected.
 
 ## Documentation
 
