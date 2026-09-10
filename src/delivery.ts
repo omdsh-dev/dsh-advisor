@@ -22,10 +22,13 @@
  *   countdown and the KD-5 reset.
  *
  * Message shape (spec §6): a user-role message via `createUserMessage` whose
- * source carries the distinct `kind === 'advisor'` (the plugin's
- * `MessageSourceMap` merge extension, src/kinds.ts) and whose content is
+ * source is the classified first-party `plugin` arm
+ * (`kind: 'plugin'`, `plugin: 'advisor'`; src/kinds.ts) and whose content is
  * self-describing `[advisor:{severity}] {note}` — the only cue the primary
- * model gets about how to treat it ("weigh, don't blindly obey" spirit).
+ * model gets about how to treat it ("weigh, don't blindly obey" spirit). The
+ * plugin's identity rides `source.plugin`, never `source.kind`: `kind` is
+ * frozen per session-format generation, so a custom value there would make the
+ * whole log unreadable to a future format edge.
  *
  * Delivery is synchronous and fire-and-forget; the runtime path (T4 F1) is
  * what contains a throwing `inject`/`steer` — this module lets agent-method
@@ -36,7 +39,8 @@
 
 import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
-import { ADVISOR_SOURCE_KIND } from './kinds.js'
+import { ADVISOR_PLUGIN_ID } from './kinds.js'
+import type { AdvisorSource } from './kinds.js'
 import type { AdviceNote, AdviceSeverity } from './advisor-runtime.js'
 
 /** The channel one accepted note is delivered on (spec §6). */
@@ -73,8 +77,8 @@ export interface AdvisorDeliveryOptions {
 
 /**
  * Build the advisor message for one note (spec §6): a user-role message whose
- * source carries the distinct advisor kind and whose content is self-describing
- * `[advisor:{severity}] {note}`.
+ * source carries this plugin's identity on the `plugin` arm and whose content
+ * is self-describing `[advisor:{severity}] {note}`.
  *
  * Bounds (qc3 F-2 / qc2 S-1): the note itself is already capped at
  * `ADVISOR_NOTE_MAX_CHARS` by extraction; the collapsed-row summary is
@@ -89,17 +93,19 @@ export function buildAdvisorMessage(note: AdviceNote): UserMessage {
   // between the two — and note text mentioning "advisor:" cannot affect it.
   const text = `[advisor:${note.severity}] ${note.note}`
   const summary = `[${text.slice('[advisor:'.length)}`
-  return createUserMessage({
-    content: [{ type: 'text', text }],
+  const source: AdvisorSource = {
+    kind: 'plugin',
+    plugin: ADVISOR_PLUGIN_ID,
     // n4 (user direction): declare the notice form + a collapsed-row summary so
     // the web shell's ContextInjectionRow shows "… · advisor · [nit] <note>"
     // instead of a bare producer label. The severity tag is part of the summary
     // text; per-severity COLOR needs the shell UI (out of plugin reach).
-    source: {
-      kind: ADVISOR_SOURCE_KIND,
-      form: 'notice' as const,
-      summary: boundContextSummary(summary),
-    },
+    form: 'notice',
+    summary: boundContextSummary(summary),
+  }
+  return createUserMessage({
+    content: [{ type: 'text', text }],
+    source,
   })
 }
 

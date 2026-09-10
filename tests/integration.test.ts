@@ -17,7 +17,8 @@
  *    cycle: synthetic `session/event` events (user / assistant / tool
  *    messages) produce a rendered delta, the stub returns a JSON-framed
  *    `{"note","severity"}` reply, the guard passes it, and delivery calls
- *    `agent.steer` with a message whose `source.kind === 'advisor'`.
+ *    `agent.steer` with a message whose source is the `plugin` arm tagged
+ *    `plugin: 'advisor'`.
  * 2. A nit routes to `agent.inject`, never `steer`.
  * 3. The explicit model gate (S4): `enabled: true` without `provider`/`model`
  *    starts zero model calls.
@@ -45,7 +46,7 @@ import { CommandId } from '@deepseek-ai/dsh-commands'
 import * as advisorPlugin from '../src/index'
 import type { AdvisorConfig } from '../src/config'
 import { ADVISOR_MAX_TOKENS } from '../src/advisor-runtime'
-import { ADVISOR_SOURCE_KIND } from '../src/kinds'
+import { ADVISOR_PLUGIN_ID } from '../src/kinds'
 
 // n4 QC F-6: the single-reviewer guard is process-global; each test case
 // composes a fresh harness, so the flag must reset between cases (production
@@ -408,10 +409,11 @@ describe('integration — full advisor loop (spec §7)', () => {
     await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
     expect(inject).not.toHaveBeenCalled()
 
-    // The steered message carries the advisor source kind + self-describing content.
+    // The steered message carries the advisor plugin source + self-describing content.
     const message = steer.mock.calls[0]![0] as UserMessage
     expect(message.role).toBe('user')
-    expect(message.source.kind).toBe(ADVISOR_SOURCE_KIND)
+    expect(message.source.kind).toBe('plugin')
+    expect(message.source).toMatchObject({ plugin: ADVISOR_PLUGIN_ID })
     expect(message.content).toEqual([{ type: 'text', text: '[advisor:concern] extract the helper' }])
 
     // The model call carried the expected options and the rendered delta.
@@ -444,7 +446,8 @@ describe('integration — full advisor loop (spec §7)', () => {
     await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
     expect(steer).not.toHaveBeenCalled()
     const message = inject.mock.calls[0]![0] as UserMessage
-    expect(message.source.kind).toBe('advisor')
+    expect(message.source.kind).toBe('plugin')
+    expect(message.source).toMatchObject({ plugin: ADVISOR_PLUGIN_ID })
     expect(message.content).toEqual([{ type: 'text', text: '[advisor:nit] add a unit test' }])
     expect(adapter.requests).toHaveLength(1)
   })
@@ -578,9 +581,10 @@ describe('integration — agentic reply-complete gate drives the loop without tu
       [{ type: 'text', text: '[advisor:concern] concern three' }],
       [{ type: 'text', text: '[advisor:concern] concern five' }],
     ])
-    // Every delivered note carries the advisor source kind.
+    // Every delivered note carries the advisor plugin source.
     for (const call of [...steer.mock.calls, ...inject.mock.calls]) {
-      expect((call[0] as UserMessage).source.kind).toBe(ADVISOR_SOURCE_KIND)
+      expect((call[0] as UserMessage).source.kind).toBe('plugin')
+      expect((call[0] as UserMessage).source).toMatchObject({ plugin: ADVISOR_PLUGIN_ID })
     }
   })
 
@@ -602,7 +606,8 @@ describe('integration — agentic reply-complete gate drives the loop without tu
     await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
     expect(steer).not.toHaveBeenCalled()
     const message = inject.mock.calls[0]![0] as UserMessage
-    expect(message.source.kind).toBe(ADVISOR_SOURCE_KIND)
+    expect(message.source.kind).toBe('plugin')
+    expect(message.source).toMatchObject({ plugin: ADVISOR_PLUGIN_ID })
     expect(message.content).toEqual([{ type: 'text', text: '[advisor:nit] add a unit test' }])
     expect(adapter.requests).toHaveLength(1)
   })
@@ -655,7 +660,7 @@ describe('integration — advisor self-delivery never re-triggers the review gat
     const steer = vi.fn()
     // The fake agent mirrors the dsh host: inject/steer deliver through the
     // inbox, which re-emits `agent/inbox/spliced` carrying the advisor's own
-    // message (source.kind 'advisor' — NOT a user input). Without the C-1
+    // message (the advisor plugin arm — NOT a user input). Without the C-1
     // payload discrimination this splice would self-trigger a second review.
     const emitAdvisorSplice = (): void => {
       const event = {
@@ -669,7 +674,7 @@ describe('integration — advisor self-delivery never re-triggers the review gat
             id: MessageId(`advisor-${log.length}`),
             role: 'user',
             content: [text('[advisor:nit] delivered note')],
-            source: { kind: ADVISOR_SOURCE_KIND },
+            source: { kind: 'plugin', plugin: ADVISOR_PLUGIN_ID, form: 'notice', summary: '[nit] delivered note' },
           }],
         },
       } as unknown as SessionEvent
@@ -793,7 +798,7 @@ describe('integration — /advisor commands conditional activation (T7)', () => 
     expect(delta).not.toContain('history turn')
     expect(steer.mock.calls[0]![0]).toMatchObject({
       role: 'user',
-      source: { kind: ADVISOR_SOURCE_KIND },
+      source: { kind: 'plugin', plugin: ADVISOR_PLUGIN_ID },
     })
   })
 })
@@ -928,7 +933,7 @@ describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix w
     expect(adapter.requests).toHaveLength(2)
     expect(steer.mock.calls[0]![0]).toMatchObject({
       role: 'user',
-      source: { kind: ADVISOR_SOURCE_KIND },
+      source: { kind: 'plugin', plugin: ADVISOR_PLUGIN_ID },
     })
   })
 
@@ -962,7 +967,7 @@ describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix w
     expect(delta).not.toContain('first')
     expect(steer.mock.calls[0]![0]).toMatchObject({
       role: 'user',
-      source: { kind: ADVISOR_SOURCE_KIND },
+      source: { kind: 'plugin', plugin: ADVISOR_PLUGIN_ID },
     })
   })
 })
@@ -1012,7 +1017,8 @@ describe('integration — root-llm resolution from an isolated child scope (qc1 
     expect(adapter.requests[0]!.provider).toBe('stub')
     expect(adapter.requests[0]!.model).toBe('stub-model')
     const message = steer.mock.calls[0]![0] as UserMessage
-    expect(message.source.kind).toBe(ADVISOR_SOURCE_KIND)
+    expect(message.source.kind).toBe('plugin')
+    expect(message.source).toMatchObject({ plugin: ADVISOR_PLUGIN_ID })
     expect(message.content).toEqual([{ type: 'text', text: '[advisor:concern] root adapter reached' }])
   })
 })

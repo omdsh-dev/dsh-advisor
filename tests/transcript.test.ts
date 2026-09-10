@@ -9,8 +9,8 @@
  * - A prefix rewrite — `user/message` with `surfaceOp.op === 'replace'`,
  *   `compact/*` events (KD-5 triggers), or a fingerprint mismatch (defensive
  *   fallback) — resets the cursor and replays the full post-rewrite surface.
- * - Advisor-source messages (`source.kind === 'advisor'`) are excluded
- *   (self-review guard, spec §6).
+ * - Advisor-source messages (the `plugin` arm tagged `plugin: 'advisor'`) are
+ *   excluded (self-review guard, spec §6).
  * - The bounded window (`maxDeltaMessages`, default 60, 0 = unbounded) keeps
  *   the most recent N messages and prepends the truncation marker (KD-3).
  * - Role labels `**user:**` / `**agent:**`; assistant tool calls and tool
@@ -37,7 +37,15 @@ import {
   SessionTranscriptObserver,
   TRUNCATION_MARKER,
 } from '../src/transcript'
-import { ADVISOR_SOURCE_KIND } from '../src/kinds'
+import { ADVISOR_PLUGIN_ID } from '../src/kinds'
+
+/** The source the advisor writes: the classified first-party `plugin` arm. */
+const advisorSource = {
+  kind: 'plugin',
+  plugin: ADVISOR_PLUGIN_ID,
+  form: 'notice',
+  summary: 'advisor note',
+} as const
 
 // ---------------------------------------------------------------------------
 // Synthetic event builders (deterministic message ids so a rebuilt prefix has
@@ -318,7 +326,7 @@ describe('DeltaRenderer — own-message exclusion (self-review guard)', () => {
     const renderer = new DeltaRenderer()
     const events = buildEvents([
       turnStart(1),
-      userMessage('[advisor:nit] consider extracting a helper', { kind: ADVISOR_SOURCE_KIND }),
+      userMessage('[advisor:nit] consider extracting a helper', advisorSource),
       userMessage('continue the task'),
       stepStart(1, 1),
       assistantMessage('Working on it.'),
@@ -780,7 +788,8 @@ describe('SessionTranscriptObserver — agentic reply-complete gate (KD-N4-5)', 
 // SessionTranscriptObserver — inbox-spliced payload discrimination (C-1)
 //
 // `agent/inbox/spliced` fires on EVERY inbox mutation, including the advisor's
-// own inject/steer deliveries (source.kind 'advisor'), workspace-context sync
+// own inject/steer deliveries (the `plugin` arm tagged `plugin: 'advisor'`),
+// workspace-context sync
 // ('workspace-instructions'), tool-result splicing ('tool'), and claim/clear
 // (empty `inserted`). Only an inserted message with `source.kind === 'user'`
 // is a human input — anything else must not self-trigger the review gate.
@@ -800,11 +809,11 @@ describe('SessionTranscriptObserver — inbox-spliced payload discrimination (C-
   /** One completed agentic round with an unreviewed assistant increment in place. */
   const round = (): EventSpec[] => [userMessage('prompt one'), assistantMessage('reply one')]
 
-  it('the advisor\'s own note delivery (inserted source.kind advisor) never triggers', () => {
+  it('the advisor\'s own note delivery (inserted advisor plugin source) never triggers', () => {
     const { deltas, stepped, observer } = observe()
     feed(observer, 's1', [
       ...round(),
-      inboxSplicedWith('[advisor:nit] consider extracting a helper', { kind: ADVISOR_SOURCE_KIND }),
+      inboxSplicedWith('[advisor:nit] consider extracting a helper', advisorSource),
     ])
     expect(deltas).toHaveLength(0)
     expect(stepped).toHaveLength(0)
@@ -841,7 +850,7 @@ describe('SessionTranscriptObserver — inbox-spliced payload discrimination (C-
     const { deltas, stepped, observer } = observe()
     feed(observer, 's1', [
       ...round(),
-      inboxSplicedWith('[advisor:nit] a note', { kind: ADVISOR_SOURCE_KIND }),
+      inboxSplicedWith('[advisor:nit] a note', advisorSource),
       inboxSplicedWith('workspace sync', { kind: 'workspace-instructions' }),
       inboxSplicedWith('2 failed', { kind: 'tool', callId: ToolCallId('call-0') }),
       inboxClear(),

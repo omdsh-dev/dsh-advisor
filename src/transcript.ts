@@ -446,8 +446,8 @@ export function isReviewableTurnEnd(event: SessionEvent): boolean {
  *   the `compact/*` precedent). Payload-discriminated (C-1 fix): the event
  *   only triggers when `inserted` is non-empty and carries at least one
  *   message whose `source.kind === 'user'`. Every other inbox mutation is
- *   excluded — the advisor's OWN inject/steer deliveries (source.kind
- *   `advisor`), workspace-context sync (`workspace-instructions`),
+ *   excluded — the advisor's OWN inject/steer deliveries (the `plugin` arm
+ *   tagged `plugin: 'advisor'`), workspace-context sync (`workspace-instructions`),
  *   tool-result splicing (`tool`), and claim/clear splices (empty
  *   `inserted`) must not self-trigger the review gate.
  *

@@ -1,43 +1,46 @@
 /**
- * Advisor source kind + the `MessageSourceMap` merge extension (spec §6).
+ * Advisor source identity + the predicate every consumer keys off (spec §6).
  *
  * Advisor-injected messages enter the session as user-role messages carrying
- * `source.kind === 'advisor'` (via the plugin's `MessageSourceMap` merge
- * declaration, `declare module '@deepseek-ai/dsh-llm'`). The delta renderer
- * (T3) and the delivery router (T6) both key off this kind:
+ * the **classified first-party** `plugin` arm:
+ * `source = { kind: 'plugin', plugin: ADVISOR_PLUGIN_ID, ... }` (see
+ * {@link AdvisorSource}). The delta renderer (T3) and the delivery router (T6)
+ * both key off this shape via {@link isAdvisorMessage}:
  *
  * - **Self-review exclusion (spec §6):** every advisor-source message is
  *   excluded from subsequent advisor deltas, so the advisor never reads its
  *   own injected advice back.
- * - **Delivery tagging (T6):** `createUserMessage({ ..., source: { kind:
- *   ADVISOR_SOURCE_KIND } })` marks injected advice so it is visible in the
- *   session stream yet excluded from later deltas.
+ * - **Delivery tagging (T6):** `createUserMessage({ ..., source: ... })` marks
+ *   injected advice so it is visible in the session stream yet excluded from
+ *   later deltas.
+ *
+ * The plugin's identity must live in `source.plugin`, **never** in
+ * `source.kind`: `kind` is a first-party vocabulary frozen per session-format
+ * generation, and the V2→V3 edge refuses a whole log whose `kind` it cannot
+ * classify (`cannot safely transform unclassified message source`). A custom
+ * `kind` is therefore not a persistence extension point — only the `plugin`
+ * arm is cross-generation-safe.
  *
  * @module dsh-advisor/kinds
  */
 
 import type { ContextFormed, Message } from '@deepseek-ai/dsh-llm'
 
-declare module '@deepseek-ai/dsh-llm' {
-  interface MessageSourceMap {
-    /**
-     * An advisor-injected message (user-role, self-describing
-     * `[advisor:{severity}] {note}` content). Never derived into advisor
-     * deltas (self-review guard, spec §6). Extends {@link ContextFormed} so
-     * the plugin can declare the `notice` form + one-line `summary` the web
-     * shell renders on a collapsed context row.
-     */
-    advisor: { readonly kind: 'advisor' } & ContextFormed
-  }
-}
+/** The plugin identity carried by every advisor-injected message. */
+export const ADVISOR_PLUGIN_ID = 'advisor' as const
 
-/** The `source.kind` value carried by every advisor-injected message. */
-export const ADVISOR_SOURCE_KIND = 'advisor' as const
-
-/** Type of a message source carrying the advisor kind. */
-export type AdvisorSourceKind = typeof ADVISOR_SOURCE_KIND
+/**
+ * Source shape of an advisor-injected message: the classified first-party
+ * `plugin` arm, owned by this plugin. `ContextFormed` contributes the
+ * form-owned members (`form` + `summary` for the `notice` form the advisor
+ * declares); no plugin-owned payload is ever added beside them.
+ */
+export type AdvisorSource = {
+  readonly kind: 'plugin'
+  readonly plugin: typeof ADVISOR_PLUGIN_ID
+} & ContextFormed
 
 /** True when a message was injected by the advisor itself. */
 export function isAdvisorMessage(message: Message): boolean {
-  return message.source.kind === ADVISOR_SOURCE_KIND
+  return message.source.kind === 'plugin' && message.source.plugin === ADVISOR_PLUGIN_ID
 }
