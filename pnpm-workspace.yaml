@@ -73,14 +73,14 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-fs@0.1.5-rc.1'
   - '@deepseek-ai/dsh-sandbox@0.1.5-rc.1'
 
-# Published @deepseek-ai/dsh-client-ui-primitives@0.1.5-rc.1 lib/index.js still
-# statically imports these modules, but the published manifest moved them from
-# dependencies → devDependencies (packaging regression vs 0.1.2-rc.1). This
-# block repairs the metadata for THIS workspace only — it is not shipped with
-# the plugin. Without it the frozen install cannot resolve the package and the
-# Vitest card suite fails (Failed to resolve import "clsx"). Consumers
-# resolving the registry package need the host tree to supply the same modules
-# (or an upstream manifest fix).
+# The published @deepseek-ai/dsh-client-ui-primitives@0.1.5-rc.1 runtime/type
+# closure needs these modules, but the published manifest moved them from
+# dependencies to devDependencies (packaging regression vs 0.1.2-rc.1), so its
+# declared graph no longer provides them. This metadata repair is workspace-only
+# (not shipped with the plugin) and is what makes the closure resolvable here;
+# without it the Vitest card suite fails with Failed to resolve import "clsx".
+# A registry consumer needs compatible modules somewhere in its own resolved
+# dependency graph, pending an upstream manifest fix.
 packageExtensions:
   '@deepseek-ai/dsh-client-ui-primitives':
     dependencies:
