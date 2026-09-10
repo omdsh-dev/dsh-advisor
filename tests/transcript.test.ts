@@ -809,9 +809,12 @@ describe('SessionTranscriptObserver — inbox-spliced payload discrimination (C-
   /**
    * The workspace-context producer's REAL inbox source
    * (`@deepseek-ai/dsh-agent-instructions`): its own first-party
-   * `agent-instructions` kind carrying the `instructions` form — not a
-   * `plugin` arm, and not a `workspace-instructions` kind, which no released
-   * edge vocabulary (`dsh-session-format-v2-to-v3`'s `SOURCE_KINDS`) declares.
+   * `agent-instructions` kind carrying the `instructions` form —
+   * `{ kind: 'agent-instructions', form: 'instructions', changes }` — not a
+   * `plugin` arm. `workspace-instructions` is a real but different, custom kind
+   * introduced elsewhere: not a dsh first-party kind, and absent from the
+   * released edge vocabulary (`dsh-session-format-v2-to-v3`'s `SOURCE_KINDS`),
+   * which declares `agent-instructions` but not it.
    */
   const workspaceContextSource = {
     kind: 'agent-instructions',
