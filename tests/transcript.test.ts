@@ -45,7 +45,7 @@ import { ADVISOR_SOURCE_KIND } from '../src/kinds'
 // ---------------------------------------------------------------------------
 
 /** Synthetic replace op — dsh brands seqs (`SessionSeq`), compile-time only here. */
-type ReplaceSurfaceOp = { op: 'replace'; start: number; end: number }
+type ReplaceSurfaceOp = { op: 'replace'; startSeq: number; endSeq: number }
 
 interface EventSpec {
   type: string
@@ -268,7 +268,7 @@ describe('DeltaRenderer — prefix rewrite detection', () => {
     renderer.update(turn1)
     const replaced = buildEvents([
       ...simpleTurn(1, 'old prompt', 'old reply'),
-      userMessage('Summary of the earlier exchange.', { kind: 'user' }, { op: 'replace', start: 1, end: 3 }, [1, 3]),
+      userMessage('Summary of the earlier exchange.', { kind: 'user' }, { op: 'replace', startSeq: 1, endSeq: 3 }, [1, 3]),
       ...simpleTurn(2, 'continue', 'Continuing.'),
     ])
     const delta = renderer.update(replaced)
@@ -293,7 +293,7 @@ describe('DeltaRenderer — reset on compact events (KD-5)', () => {
       ...simpleTurn(1, 'original prompt', 'Original reply.'),
       compactStart(),
       compactSummary(),
-      userMessage('Summary of earlier work.', { kind: 'user' }, { op: 'replace', start: 1, end: 3 }, [1, 3]),
+      userMessage('Summary of earlier work.', { kind: 'user' }, { op: 'replace', startSeq: 1, endSeq: 3 }, [1, 3]),
       compactEnd(),
       ...simpleTurn(2, 'continue', 'Continuing.'),
     ])
@@ -666,7 +666,7 @@ describe('SessionTranscriptObserver — agentic reply-complete gate (KD-N4-5)', 
       assistantMessage('reply two'),                              // round 2 reply (unreviewed)
       compactStart(),
       compactSummary(),
-      userMessage('Summary of earlier work.', { kind: 'user' }, { op: 'replace', start: 0, end: 3 }, [0, 1, 2, 3]),
+      userMessage('Summary of earlier work.', { kind: 'user' }, { op: 'replace', startSeq: 0, endSeq: 3 }, [0, 1, 2, 3]),
       compactEnd(),
       userMessage('prompt three'),                                // no unreviewed assistant → no delta
       assistantMessage('reply three'),                            // round 3 reply
@@ -712,7 +712,7 @@ describe('SessionTranscriptObserver — agentic reply-complete gate (KD-N4-5)', 
       userMessage('prompt two'),                                  // input 2 → delta 1 (round 1)
       compactStart(),
       compactSummary(),
-      userMessage('Summary of earlier work.', { kind: 'user' }, { op: 'replace', start: 0, end: 1 }, [0, 1]),
+      userMessage('Summary of earlier work.', { kind: 'user' }, { op: 'replace', startSeq: 0, endSeq: 1 }, [0, 1]),
       compactEnd(),
       assistantMessage('reply two'),                              // round 2 reply
       userMessage('prompt three'),                                // input 3 → the ONE replay (delta 2)

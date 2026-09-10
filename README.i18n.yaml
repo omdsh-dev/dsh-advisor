@@ -3,5 +3,5 @@
 # editing either side, bring the other along and re-record with:
 #   git hash-object README.md
 #   git hash-object README.zh.md
-README.md: 5caf5c759a30682228bc562d914d801b64f94f08
-README.zh.md: 7913542a4f734da470b0f334a8a2870c9a2c06a3
+README.md: 9bf96e0fc6b477508f3d39c08528e2d12b8d7292
+README.zh.md: 7efd495773babb33a15420c1b9b62fa67890043e

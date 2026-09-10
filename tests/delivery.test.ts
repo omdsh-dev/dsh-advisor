@@ -317,7 +317,7 @@ describe('AdvisorDelivery — contained throw through the routing seam (T4 F1)',
 // ---------------------------------------------------------------------------
 
 /** Synthetic replace op — dsh brands seqs (`SessionSeq`), compile-time only here. */
-type ReplaceSurfaceOp = { op: 'replace'; start: number; end: number }
+type ReplaceSurfaceOp = { op: 'replace'; startSeq: number; endSeq: number }
 
 interface EventSpec {
   type: string
@@ -445,7 +445,7 @@ describe('SessionTranscriptObserver — delivery hooks (T6)', () => {
     feedAppend(observer, 's1', [], [
       ...simpleTurn(1, 'hi', 'hello'),                                      // appends only → no rewrite
       compactStart(),                                                        // compact/* → rewrite
-      userMessage('replaced prompt', { kind: 'user' }, { op: 'replace', start: 1, end: 3 }, [1, 3]), // surface replace → rewrite
+      userMessage('replaced prompt', { kind: 'user' }, { op: 'replace', startSeq: 1, endSeq: 3 }, [1, 3]), // surface replace → rewrite
       ...simpleTurn(2, 'next', 'reply'),                                     // appends → no rewrite
     ])
     expect(rewrites).toEqual(['s1', 's1'])
