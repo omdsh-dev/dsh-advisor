@@ -155,6 +155,21 @@ describe('AdvisorDelivery — advisor message construction (spec §6)', () => {
     expect(isAdvisorMessage(message)).toBe(true)
   })
 
+  it('rejects a plugin-arm message carrying a different plugin id (self-review guard)', () => {
+    // Counterpart of the positive case above, which proves the predicate
+    // accepts the advisor's own shape. Here the SAME message differs in exactly
+    // one member — `source.plugin` — so a predicate that degenerated to
+    // `source.kind === 'plugin'` passes the positive case while silently
+    // excluding every other plugin's injected message from advisor review;
+    // that regression must fail here instead of shipping.
+    const message: UserMessage = {
+      ...buildAdvisorMessage({ note: 'a sibling plugin note', severity: 'nit' }),
+      source: { kind: 'plugin', plugin: 'some-other-plugin' },
+    }
+
+    expect(isAdvisorMessage(message)).toBe(false)
+  })
+
   it('bounds the notice summary to CONTEXT_SUMMARY_MAX_CHARS with an ellipsis (qc3 F-2 / qc2 S-1)', () => {
     const message = buildAdvisorMessage({ note: 'n'.repeat(500), severity: 'concern' })
     const source = message.source as { kind: string; form?: string; summary?: string }
