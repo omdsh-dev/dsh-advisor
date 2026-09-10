@@ -73,7 +73,7 @@ dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-adv
 
 ## 能力一览
 
-- **每个会话一个独立评审者**：独立的模型调用观察主 transcript 并评审每个 stepped 主 turn；advisor 消息被排除在此后的 delta 之外，因此 advisor 永远不会读回自己的建议。
+- **每个会话一个独立评审者**：独立的模型调用观察主 transcript 并评审每个 stepped 主 turn；advisor 消息被排除在此后的 delta 之外，因此 advisor 不会读回自己的建议。一个例外，已接受且有界：迁移前写入、带旧自定义 kind（`kind: 'advisor'`）的 note 已不再被自审排除匹配，每次全量重放（如 compaction 之后）都会重新进入 delta 一次——无数据丢失，仅 advisor 侧自审污染。这一代价是有意接受的，而非被推迟：不刻意添加旧格式读取分支，因为兼容层被项目的「不保持向后兼容」不变量禁止。
 - **按严重度排序的建议 + inject/steer 语义**：每次评审至多发出一条 note——**nit**（轻微的样式、清晰度或质量建议；经非唤醒的 `agent.inject` 送达，在下一个 pre-step 边界消费）、**concern**（继续之前值得权衡的重大风险或明显更优的方向；经唤醒的 `agent.steer` 送达，受 `immuneTurns` 冷却约束）、**blocker**（继续下去明显是在浪费工作——与显式用户指令矛盾、原地打转、根本性不可行；经 `agent.steer` 送达）。送达的消息携带 `[advisor:{severity}]` 前缀且为自我描述的 advisory 内容：
 
   ```
@@ -103,6 +103,8 @@ MVP 有意放弃与 omp 的完整对等。已接受的差距（在 harness 迭�
 - **不隔离不安全的 advisor 输出**——行为异常的 note 可能携带指令性文本；JSON frame + 校验 + advisory-only 框架是仅有的缓解手段，且 note 会原样送达主 transcript（路线图）。
 - **无 `syncBacklog` 追赶等待**——落后很多的 advisor 不会等待主循环；其 backlog 有界且会被丢弃，因此 note 可能在下一次主 turn 开始之后才到达（路线图：context-maintenance batch）。
 - **advisor 上下文有界**——长会话的完整重放会被截断（`maxDeltaMessages`），因此 compaction 后 advisor 可能丢失早期上下文（路线图：下下迭代）。
+
+**旧版本写入的会话——pre-V3 日志不在此修复。** 其中的 advisor note 带有旧的自定义 `source.kind`（`kind: 'advisor'`），dsh 的 V2→V3 会话格式边会拒绝它，因此这些 **pre-V3** 日志无法迁移（原始文件完好，只是打不开）。已经是 V3 的日志仍可正常打开——它们只受上文的「自审例外」影响。修复这些 pre-V3 日志属于上游工作：针对这一类缺陷的统一修复正在 [`omdsh-dev/dsh-llm-fallbacks`](https://github.com/omdsh-dev/dsh-llm-fallbacks) 开发中，**尚未可用**。本版本及之后写入的日志不受影响。
 
 ## 文档
 

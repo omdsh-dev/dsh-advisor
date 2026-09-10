@@ -73,7 +73,7 @@ In a **dsh-tui** profile, `/advisor config` additionally reads back the composed
 
 ## Features
 
-- **Independent reviewer per session**: a separate model call observes the primary transcript and reviews each stepped primary turn; advisor messages are excluded from later deltas, so the advisor never reads its own advice back.
+- **Independent reviewer per session**: a separate model call observes the primary transcript and reviews each stepped primary turn; advisor messages are excluded from later deltas, so the advisor does not read its own advice back. One exception, accepted and bounded: notes persisted before the source-kind migration (legacy custom `kind: 'advisor'`) are no longer matched by the self-review exclusion and re-enter the delta once per full replay (e.g. after compaction) — no data loss, advisor-side self-review pollution only. This cost is accepted by design, not deferred: no legacy read arm is added deliberately, because a compatibility layer is forbidden by the project's no-backward-compatibility invariant.
 - **Severity-ranked advice with inject/steer semantics**: at most one note per review — **nit** (a minor style, clarity, or quality suggestion; delivered via non-waking `agent.inject`, consumed at the next pre-step boundary), **concern** (a material risk or clearly better direction to weigh before continuing; delivered via waking `agent.steer`, subject to the `immuneTurns` cooldown), **blocker** (continuing clearly wastes work — contradicts an explicit user instruction, going in circles, fundamentally unsound; delivered via `agent.steer`). Delivered messages carry the `[advisor:{severity}]` prefix and are self-described advisory content:
 
   ```
@@ -103,6 +103,8 @@ The MVP deliberately drops full omp parity. Accepted gaps (tracked in the harnes
 - **No quarantine of unsafe advisor output** — a misbehaving note can carry directive text; the JSON frame + validation + advisory-only framing are the only mitigation, and the note is delivered as-is (roadmap).
 - **No `syncBacklog` catch-up wait** — a far-behind advisor does not wait for the primary loop; its backlog is bounded and dropped, so notes may arrive after the next primary turn started (roadmap: context-maintenance batch).
 - **Bounded advisor context** — long-session full replays are truncated (`maxDeltaMessages`), so the advisor may lose early context after compaction (roadmap: next-next iteration).
+
+**Sessions written by earlier versions — pre-V3 logs are not repaired here.** Advisor notes in them carry the former custom `source.kind` (`kind: 'advisor'`), which the dsh V2→V3 session-format edge refuses, so those **pre-V3** logs cannot be migrated (the raw file is intact, only unopenable). Logs already at V3 still open — they are affected only by the self-review caveat above. Repairing the pre-V3 logs is upstream work: a unified pass over this defect class is being developed in [`omdsh-dev/dsh-llm-fallbacks`](https://github.com/omdsh-dev/dsh-llm-fallbacks) and is **not yet available**. Logs written from this version onward are unaffected.
 
 ## Documentation
 

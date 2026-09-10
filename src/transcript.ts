@@ -445,14 +445,21 @@ export function isReviewableTurnEnd(event: SessionEvent): boolean {
  *   (the merged `SessionEventMap` entry comes from the dsh-agent peer, per
  *   the `compact/*` precedent). Payload-discriminated (C-1 fix): the event
  *   only triggers when `inserted` is non-empty and carries at least one
- *   message whose `source.kind === 'user'`. Every other inbox mutation is
- *   excluded — the advisor's OWN inject/steer deliveries (source.kind
- *   `advisor`), workspace-context sync (`workspace-instructions`),
- *   tool-result splicing (`tool`), and claim/clear splices (empty
- *   `inserted`) must not self-trigger the review gate.
+ *   message whose `source.kind === 'user'`.
  *
- * Synthetic/injected user-role messages (tool results, advisor notes,
- * workspace context) carry other `source.kind` values and never trigger.
+ * `source.kind` is the ONLY discriminator, and every synthetic producer commits
+ * a non-`user` kind, so nothing injected can self-trigger the review gate:
+ *
+ * - the advisor's OWN inject/steer deliveries — the `plugin` arm tagged
+ *   `plugin: 'advisor'`. That arm is shared with the other plugin-owned
+ *   context producers (the time-context / tmux-context / agent-loop `snapshot`
+ *   forms, model-selection notices, tools-ptc, user-approval), which
+ *   `source.plugin` separates and `source.kind` does not;
+ * - workspace-context sync (AGENTS.md / CLAUDE.md), which does NOT ride the
+ *   `plugin` arm: `@deepseek-ai/dsh-agent-instructions` commits its own
+ *   first-party `kind: 'agent-instructions'` (`form: 'instructions'`);
+ * - tool-result splicing (`kind: 'tool'`);
+ * - claim/clear splices (empty `inserted`).
  */
 export function isHumanInputEvent(event: SessionEvent): boolean {
   if (event.type === 'user/message') return event.data.source.kind === 'user'
