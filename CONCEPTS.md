@@ -13,7 +13,7 @@
 *Avoid:* 自造第四档；把 blocker 当普通提醒使用
 
 ### advice delivery（建议投递）
-severity → 通道的路由：nit → `agent.inject`（非唤醒，下一个 step 边界消费）；concern/blocker → `agent.steer`（唤醒——空闲 driver 开跑、运行中的 driver 在下一 step 边界消费）。投递消息为 user-role、`source` 走分类化的 first-party `plugin` arm（`kind: 'plugin'`、`plugin: 'advisor'`，`ADVISOR_PLUGIN_ID`，见 `src/kinds.ts`）、内容自描述 `[advisor:{severity}] {note}`——主系统提示词不提 advisor，前缀是主模型判断「建议，不要盲从」的唯一提示。投递同步 fire-and-forget，throw 由 runtime 的包含 seam 兜住。
+severity → 通道的路由：nit → `agent.inject`（非唤醒，下一个 step 边界消费）；concern/blocker → `agent.steer`（唤醒——空闲 driver 开跑、运行中的 driver 在下一 step 边界消费）。投递消息为 user-role、`source` 走分类化的 first-party `plugin` arm（`kind: 'plugin'`、`plugin: 'advisor'`，`ADVISOR_PLUGIN_ID`，见 `src/kinds.ts`；form 固定为 `notice`，summary 有界）、内容自描述 `[advisor:{severity}] {note}`——主系统提示词不提 advisor，前缀是主模型判断「建议，不要盲从」的唯一提示。投递同步 fire-and-forget，throw 由 runtime 的包含 seam 兜住。
 *Avoid:* 用 inject 承载 concern/blocker（破坏唤醒语义）；把建议当「已批准动作」注入
 
 ### immuneTurns cooldown（免疫回合冷却）
@@ -29,7 +29,7 @@ advisor 回复必须恰好是一个 JSON 对象 `{"note": "<text>", "severity": 
 *Avoid:* 让 advisor 自由文本回复（帧契约失效）；解析失败无限重试
 
 ### transcript delta / self-review exclusion（转录增量与自审排除）
-DeltaRenderer 用 cursor 在 `session.events` 序列上推进 + 已投递前缀的 fingerprint；检测到前缀重写（fingerprint 失配或 `surfaceOp replace`）→ 重置并全量重放。渲染为 role 标注的 markdown（`**user:**` / `**agent:**`，assistant 文本加 tool intent、tool 结果标 `[tool result]`、reasoning 排除）。`plugin` arm（`kind: 'plugin'` + `plugin: 'advisor'`，`isAdvisorMessage`）的消息**永不**进入后续增量——advisor 不会读回自己的注入。`maxDeltaMessages`（默认 60，0 = 无界）约束重放窗口，超限保留最近 N 条并前置 `… <earlier messages omitted>` 标记。
+DeltaRenderer 用 cursor 在 `session.events` 序列上推进 + 已投递前缀的 fingerprint；检测到前缀重写（fingerprint 失配或 `surfaceOp replace`）→ 重置并全量重放。渲染为 role 标注的 markdown（`**user:**` / `**agent:**`，assistant 文本加 tool intent、tool 结果标 `[tool result]`、reasoning 排除）。`plugin` arm（`kind: 'plugin'` + `plugin: 'advisor'`，`isAdvisorMessage`）的消息被排除在后续增量之外——advisor 不会读回自己在该形状下投递的注入。**迁移代价**：该识别只覆盖 `plugin` arm；迁移前写入的 note 带旧的自定义 kind（`kind: 'advisor'`），已不再被谓词匹配，一次全量重放（compaction、非 append `surfaceOp`、或已投递前缀 fingerprint 失配 → `reset()` + `rebuild()` 自 0 重新折叠存活 surface）会把它重新呈现给 advisor，每次重放一次。这是把插件身份移出 `source.kind` 的已接受、有界代价（无数据丢失，仅 advisor 侧自审污染；受影响日志已登记为 residual R1），不是缺陷。`maxDeltaMessages`（默认 60，0 = 无界）约束重放窗口，超限保留最近 N 条并前置 `… <earlier messages omitted>` 标记。
 *Avoid:* 把 advisor 自己的注入读回增量（自审污染）；长会话无界全量重放
 
 ### emission guard（发射守卫）

@@ -92,7 +92,7 @@ schema 默认值 → 插件行 config（base）→ settings user layer（web 卡
 
 - **标准 stepped 会话**：每个正常结束（`reason.kind ∈ {completed, 'max-tokens', error}`）的 stepped 主 turn/end 之后评审增量 delta；跳过 `aborted` / `blocked` / `interrupted`（不评审被用户截断的 turn）；
 - **agentic / harness 会话**（从不发出 `turn/end`）：每个完成的 agent 回复轮次后 —— 当新的用户输入（含 `agent/inbox/spliced` 拼接的用户输入）在未评审的 assistant 增量之后到达时评审；非用户 inbox 拼接（advisor 自己的 inject/steer 送达等）永不触发（C-1 自触发修复）；
-- **自审排除**：advisor-source 消息永不被渲染进 advisor delta，advisor 不会读回自己的建议；
+- **自审排除**：带 advisor 分类化 `plugin` arm 的消息（`isAdvisorMessage`：`kind: 'plugin'` + `plugin: 'advisor'`）不被渲染进 advisor delta —— advisor 不会读回自己在该形状下投递的建议。**迁移代价（如实记录）**：该识别只覆盖 `plugin` arm；迁移前写入、带旧自定义 kind（`kind: 'advisor'`）的 note 已不再被谓词匹配，一次全量重放（compaction、非 append `surfaceOp`、或指纹失配 → `reset()` + `rebuild()` 自 0 重新折叠）会把它重新呈现给 advisor，每次重放一次 —— 无数据丢失、仅自审污染，受影响日志已登记为 residual R1，不是缺陷；
 - `maxDeltaMessages` 有界窗口（`DeltaRenderer`）；compaction / surface replace / 指纹不匹配 → 重置游标、全量重放（KD-5）。
 
 ### Live 重应用
