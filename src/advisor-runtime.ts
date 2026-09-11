@@ -675,7 +675,7 @@ export class AdvisorRuntime {
       // so the budget goes to the JSON frame, and raise it for headroom
       // (ADVISOR_MAX_TOKENS). The advisor's job is a short structured note —
       // reasoning is not needed. The same applies to any reasoning-capable
-      // model, including the 0.1.5-rc.1 default deepseek-flash. Capability-gated
+      // model, including the 0.1.5-rc.2 default deepseek-flash. Capability-gated
       // (qc2 W-1 / qc1 W-1 / qc3 F-3): `resolveReasoningEffort` passes the
       // branded 'off' ONLY when the resolved model declares it; otherwise the
       // option is omitted entirely (the dsh LlmRuntime would reject an explicit
