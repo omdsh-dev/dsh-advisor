@@ -183,7 +183,7 @@ function makeSession(id = 's1'): { session: Session; log: SessionEvent[] } {
  * live log, and emit the turn-end that triggers the standard review path.
  */
 function feedSteppedRound(ctx: Context, session: Session, log: SessionEvent[], agent: ReturnType<typeof makeFakeAgent>): void {
-  ctx.emit('agent/created', { agent: agent.agent })
+  ctx.emit('agent/created', { agent: agent.agent, source: 'startup' })
   log.push({ type: 'user/message', seq: 0, time: 0, data: { id: 'u0', role: 'user', content: [], source: { kind: 'user' } } } as never)
   log.push({ type: 'assistant/message', seq: 1, time: 0, data: { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'wrote a test' }], source: { kind: 'model', provider: 'stub', model: 'stub-model' } } }, surfaceOp: 'append' } as never)
   log.push({ type: 'step/start', seq: 2, time: 0, data: { turn: 1, step: 1 } } as never)
@@ -400,7 +400,7 @@ describe('integration — full advisor loop (spec §7)', () => {
       [[...textReply('{"note":"extract the helper","severity":"concern"}')]],
     )
     const { agent, steer, inject } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     feed(ctx, session, log, toolTurn(1, 'implement the feature', 'Done.'))
@@ -438,7 +438,7 @@ describe('integration — full advisor loop (spec §7)', () => {
       [[...textReply('{"note":"add a unit test","severity":"nit"}')]],
     )
     const { agent, steer, inject } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     feed(ctx, session, log, simpleTurn(1, 'do the thing', 'done'))
@@ -455,7 +455,7 @@ describe('integration — full advisor loop (spec §7)', () => {
   it('starts zero model calls when enabled without provider/model (explicit gate, S4)', async () => {
     const { ctx, adapter } = await composeHarness({ enabled: true }, [])
     const { agent } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     feed(ctx, session, log, toolTurn(1, 'do the thing', 'done'))
@@ -467,7 +467,7 @@ describe('integration — full advisor loop (spec §7)', () => {
   it('starts zero model calls when the config switch is off (enabled: false)', async () => {
     const { ctx, adapter } = await composeHarness({ enabled: false }, [])
     const { agent } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     feed(ctx, session, log, simpleTurn(1, 'do the thing', 'done'))
@@ -504,7 +504,7 @@ describe('integration — agentic reply-complete gate drives the loop without tu
       ],
     )
     const { agent, steer, inject } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     // Five completed agentic rounds, each input entering the inbox and then
@@ -594,7 +594,7 @@ describe('integration — agentic reply-complete gate drives the loop without tu
       [[...textReply('{"note":"add a unit test","severity":"nit"}')]],
     )
     const { agent, steer, inject } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     feed(ctx, session, log, [
@@ -618,7 +618,7 @@ describe('integration — agentic reply-complete gate drives the loop without tu
       [[...textReply('{"note":"extract the helper","severity":"concern"}')]],
     )
     const { agent, steer } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     // A standard turn-driven session completes one turn → reviewed via turn/end.
@@ -684,7 +684,7 @@ describe('integration — advisor self-delivery never re-triggers the review gat
     inject.mockImplementation(emitAdvisorSplice)
     steer.mockImplementation(emitAdvisorSplice)
     const agent = { id: 's1', inject, steer } as unknown as Agent
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
 
     // Round 1 completes.
     feed(ctx, session, log, [
@@ -726,7 +726,7 @@ describe('integration — /advisor commands conditional activation (T7)', () => 
       [[...textReply('{"note":"watch the loop bound","severity":"concern"}')]],
     )
     const { agent, steer } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     // No commands service anywhere: the plugin must still run the full loop —
@@ -756,7 +756,7 @@ describe('integration — /advisor commands conditional activation (T7)', () => 
       [[...textReply('{"note":"after enabling","severity":"concern"}')]],
     )
     const { agent, steer } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     // Register the commands registry and capture the real handler (bound to
@@ -817,7 +817,7 @@ describe('integration — compact / surface-replace reset the composed observer 
       ],
     )
     const { agent, steer } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     // Turn 1 completes → delta 1 → note accepted → steered (fence arms).
@@ -855,7 +855,7 @@ describe('integration — compact / surface-replace reset the composed observer 
       ],
     )
     const { agent, inject } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     feed(ctx, session, log, simpleTurn(1, 'original prompt', 'Original reply.'))
@@ -887,7 +887,7 @@ describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix w
   it('config-enabled-but-gate-blocked: status shows the S4 reason and /advisor on says no model call can start (qc3 I-1/I-2)', async () => {
     const { ctx, adapter } = await composeHarness({ enabled: true }, [])
     const { agent } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
     const handler = await registerCommands(ctx)
 
@@ -918,7 +918,7 @@ describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix w
       ],
     )
     const { agent, steer } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
     const handler = await registerCommands(ctx)
 
@@ -946,7 +946,7 @@ describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix w
       ],
     )
     const { agent, steer } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
     const handler = await registerCommands(ctx)
 
@@ -1006,7 +1006,7 @@ describe('integration — root-llm resolution from an isolated child scope (qc1 
     await child.plugin(advisorPlugin, fullConfig({ enabled: true, provider: 'stub', model: 'stub-model' }))
 
     const { agent, steer } = makeFakeAgent('s1')
-    child.emit('agent/created', { agent })
+    child.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
     feed(child, session, log, simpleTurn(1, 'do the thing', 'done'))
 
@@ -1036,7 +1036,7 @@ describe('single-reviewer guard (n4 QC F-6)', () => {
     )
     const { session, log } = makeSession()
     const fake = makeFakeAgent()
-    first.ctx.emit('agent/created', { agent: fake.agent })
+    first.ctx.emit('agent/created', { agent: fake.agent, source: 'startup' })
     first.ctx.emit('session/event', session, {
       type: 'user/message', seq: 0, time: 0, data: { id: 'u0', role: 'user', content: [], source: { kind: 'user' } },
     } as never)
@@ -1056,7 +1056,7 @@ describe('single-reviewer guard (n4 QC F-6)', () => {
     // reviewer role. Feed the same round shape through the second harness.
     const session2 = makeSession()
     const fake2 = makeFakeAgent('s2')
-    second.ctx.emit('agent/created', { agent: fake2.agent })
+    second.ctx.emit('agent/created', { agent: fake2.agent, source: 'startup' })
     session2.log.push({ type: 'user/message', seq: 0, time: 0, data: { id: 'u0', role: 'user', content: [], source: { kind: 'user' } } } as never)
     session2.log.push({ type: 'assistant/message', seq: 1, time: 0, data: { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'wrote a test' }], source: { kind: 'model', provider: 'stub', model: 'stub-model' } } }, surfaceOp: 'append' } as never)
     session2.log.push({ type: 'step/start', seq: 2, time: 0, data: { turn: 1, step: 1 } } as never)

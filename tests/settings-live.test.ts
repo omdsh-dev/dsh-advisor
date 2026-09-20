@@ -383,7 +383,7 @@ describe('settings live re-apply — latched config + runtime rebuild (Important
       ],
     )
     const { agent, steer, inject } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     // Pre-edit: the session runtime exists and calls go out with the ENTRY
@@ -455,7 +455,7 @@ describe('settings live re-apply — observer maxDeltaMessages (Important-1)', (
       ],
     )
     const { agent } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     // The session's renderer exists BEFORE the edit (bound = the entry 60), so
@@ -506,7 +506,7 @@ describe('settings live re-apply — hard gate through the live source (Importan
       [[...textReply('{"note":"first nit","severity":"nit"}')]],
     )
     const { agent } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     // The runtime exists before the edit.
@@ -548,7 +548,7 @@ describe('settings live re-apply — conditional runtime rebuild (qc3 W-1 / qc1 
       gated,
     )
     const { agent, inject, steer } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     // Turn 1: the first advisor call hangs mid-flight (gated).
@@ -584,7 +584,7 @@ describe('settings live re-apply — conditional runtime rebuild (qc3 W-1 / qc1 
       ],
     )
     const { agent, inject } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     feed(ctx, session, log, simpleTurn(1, 'first request', 'first reply'))
@@ -614,7 +614,7 @@ describe('settings live re-apply — unknown-key user layer containment (qc2 W-1
     )
     const handler = await registerCommands(ctx)
     const { agent } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     // The settings user layer gains an unknown key — resolveAdvisorConfig
@@ -651,7 +651,7 @@ describe('settings live re-apply — attach ordering + detach fallback (qc1 S-1 
       { enabled: true, provider: 'stub', model: 'stub-model' },
     )
     const { agent, inject } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     // No settings edit at all: the attach-time onChange re-applied
@@ -674,7 +674,7 @@ describe('settings live re-apply — attach ordering + detach fallback (qc1 S-1 
       ]),
     )
     const { agent, steer, inject } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
     await ctx.settings.update(ADVISOR_SETTINGS_NAMESPACE, { immuneTurns: 4 })
@@ -729,7 +729,7 @@ describe('/advisor config — session-less composed readback (T2)', () => {
     )
     const handler = await registerCommands(ctx)
     const { agent } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent })
+    ctx.emit('agent/created', { agent, source: 'startup' })
     const { session } = makeSession('s1')
 
     // A settings user-layer edit composes over the plugin-row base — the

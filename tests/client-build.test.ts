@@ -83,7 +83,7 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     expect(offenders, 'no @deepseek-ai value import outside the frozen externals table').toEqual([])
     // The type-only packages must never surface as runtime requires.
     for (const forbidden of [
-      'dsh-client-connection', 'dsh-client-locale', 'dsh-client-ui-settings', 'dsh-client-ui-settings-plugins',
+      'dsh-client-connection', 'dsh-client-locale', 'dsh-client-ui-settings', 'dsh-client-ui-plugin-manager',
     ]) {
       expect(bundle, `no require of @deepseek-ai/${forbidden}`).not.toContain(`require("@deepseek-ai/${forbidden}`)
     }
@@ -164,10 +164,25 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     expect(pkg.dsh?.client?.inject).toEqual(
       expect.arrayContaining([
         '@deepseek-ai/dsh-client-store',
-        '@deepseek-ai/dsh-client-ui-settings-plugins',
+        '@deepseek-ai/dsh-client-ui-plugin-manager',
         '@deepseek-ai/dsh-client-locale',
       ]),
     )
     expect(pkg.dshClient, 'legacy top-level dshClient field is gone').toBeUndefined()
+  })
+
+  it('registers into the Plugins-page card slot the host actually declares', () => {
+    // 0.1.6-alpha.2 seam: the 0.1.5-rc.2 `settings.plugin.item` keyed slot is
+    // gone from the shell (ui-plugin-config → ui-plugin-manager), and
+    // `ctx.slots.inject` waits for a declaration that never lands — so a
+    // registration into the dead seat is a SILENT no-op and the card simply
+    // never mounts (no error anywhere). Pin the emitted artifact to the seat
+    // the host declares, and keep the dead key out of it: a future seat move
+    // must fail this test rather than disappear at runtime.
+    const bundle = readFileSync(resolve(repo, 'lib/client.js'), 'utf8')
+    expect(bundle, 'registers into plugins.bundle.config').toContain('plugins.bundle.config')
+    expect(bundle, 'keyed by the bundle package name the page dispatches').toContain('"dsh-advisor"')
+    expect(bundle, 'no registration into the removed settings.plugin.item seat')
+      .not.toContain('settings.plugin.item')
   })
 })

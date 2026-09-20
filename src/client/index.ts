@@ -1,11 +1,11 @@
 /**
- * Advisor settings plugin, browser half. Registers the `advisor` card into
- * the shell-declared `settings.plugin.item` keyed slot (the "插件配置"
- * settings page — key `advisor`, the settings namespace the card edits,
- * appearing after the upstream bash / agent-loop / web-search cards in
- * registration order). The card's store joins the settings namespaces and the
- * provider directory through the connection wire, and keeps fresh on pushed
- * invalidations. Export discipline: the client half value-imports ONLY the
+ * Advisor settings plugin, browser half. Registers the Advisor card into the
+ * shell-declared `plugins.bundle.config` keyed slot (the Plugins page's
+ * per-bundle configuration seat — key `dsh-advisor`, the bundle's package name
+ * the page dispatches, rendered on the bundle's own page between its
+ * description and its rows). The card's store joins the settings namespaces
+ * and the provider directory through the connection wire, and keeps fresh on
+ * pushed invalidations. Export discipline: the client half value-imports ONLY the
  * frozen platform module table (CLIENT_EXTERNALS: react /
  * `@deepseek-ai/cordis` / ui-slots / ui-primitives / the documented
  * `@deepseek-ai/dsh-client-store` exemption); every other
@@ -15,12 +15,12 @@
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
-// Type-only: pulls the plugin-config card slot's SlotMap merge (the
-// 'settings.plugin.item' entry — this half's registration target). Same empty
-// type-only import pattern as the old ui-settings one: it loads the module's
-// types (the ./client entry re-exports the slot-contract merge) without any
-// value import.
-import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
+// Type-only: pulls the Plugins page's config card slot SlotMap merge (the
+// 'plugins.bundle.config' entry — this half's registration target, declared by
+// ui-plugin-manager). Same empty type-only import pattern as the old
+// ui-settings one: it loads the module's types (the ./client entry re-exports
+// the slot-contract merge) without any value import.
+import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls ui-settings' Context merge (ctx.settingsSchema — the
@@ -63,6 +63,15 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** Dictionary namespace owned by this plugin. */
 const NS = 'settings.advisor'
 
+/**
+ * The bundle's package name — the key the Plugins page dispatches
+ * `plugins.bundle.config` with (ui-plugin-manager's `PackageDetail` renders the
+ * entry with `entryKey = pkg.name`). Spelled as a literal for the same reason
+ * the settings namespace is: `package.json` sits outside the client bundle's
+ * module graph.
+ */
+const BUNDLE_NAME = 'dsh-advisor'
+
 // `refreshIfLoaded` lives next to the store (pure controller helper): refetch
 // the page snapshot only after its first load — an unopened Advisor card must
 // not fetch on background invalidations. Re-exported here to keep the client
@@ -71,8 +80,9 @@ export { refreshIfLoaded } from './advisor-store.ts'
 
 /**
  * Required services (cordis fiber inject). The target slot is declared by
- * ui-plugin-config's apply, whose activation order relative to this one is
- * NOT constrained; registration depends on the slot through `slots.inject()`.
+ * ui-plugin-manager's apply (its `plugins` main-panel entry), whose activation
+ * order relative to this one is NOT constrained; registration depends on the
+ * slot through `slots.inject()`.
  *
  * rc.1 dotted-namespace contract: each client Remote namespace is a
  * child-fiber service named `remote.<ns>` (upstream `remoteServiceKey`), and
@@ -86,7 +96,7 @@ export { refreshIfLoaded } from './advisor-store.ts'
 export const inject = ['slots', 'locale', 'connection', 'settingsSchema', 'remote', 'remote.llm', 'remote.settings', 'remote.session']
 
 /**
- * Register the Advisor card once the `settings.plugin.item` declaration is on
+ * Register the Advisor card once the `plugins.bundle.config` declaration is on
  * the ledger, wire its store to the connection, and keep it fresh on every
  * pushed invalidation (settings or provider topology).
  * @param ctx - client root context.
@@ -148,23 +158,27 @@ export function apply(ctx: ClientContext): void {
     return () => { for (const dispose of disposers) dispose() }
   }, 'advisor: pushed invalidations')
 
-  // KD-1: the card registers into the plugin-config page's card slot with the
-  // upstream card shape — generator + `yield`, `locale: NS`, and an inject
-  // face carrying ONLY the business surface (controller + useSnapshot). The
-  // typed `t` seat is synthesized by the renderer from `locale: NS`
-  // (PropsLocale<'settings.advisor'>), exactly like the upstream three cards;
-  // the old `settings.section` registration (the side-bar "Advisor" nav) is
-  // removed — deleting the section registration deletes the nav entry.
-  ctx.slots.inject('settings.plugin.item', function* () {
+  // KD-1: the card registers into the Plugins page's bundle-config seat with
+  // the upstream config-entry shape — generator + `yield`, `locale: NS`, and
+  // an inject face carrying ONLY the business surface (controller +
+  // useSnapshot). The typed `t` seat is synthesized by the renderer from
+  // `locale: NS` (PropsLocale<'settings.advisor'>), exactly like the upstream
+  // cards. The seat moved in the 0.1.6-alpha.2 line: the 0.1.5-rc.2
+  // `settings.plugin.item` keyed slot (key = the settings namespace the card
+  // edits) is gone, and the Plugins page (ui-plugin-manager) now declares
+  // `plugins.bundle.config` (key = the bundle's package name) plus
+  // `plugins.row.config` (key = `<package name>#<row id>`). A bundle's own
+  // configuration belongs in one of those two; this bundle ships one row, and
+  // its card edits the whole bundle's `advisor` configuration, so the
+  // bundle-level seat is the faithful migration. The old `settings.section`
+  // registration (the side-bar "Advisor" nav) stays removed.
+  ctx.slots.inject('plugins.bundle.config', function* () {
     yield ctx.slots.register({
-      name: 'settings.plugin.item',
-      // Keyed slot: the key is the settings namespace the card edits —
-      // the already-installed `advisor` namespace (ADVISOR_SETTINGS_NAMESPACE
-      // in src/settings.ts; spelled as a literal here because the host-half
-      // settings module is outside the client bundle's externals). Keyed
-      // entries declare no `id`/`order` — appearance order is registration
-      // order, which still places this card after the upstream three.
-      key: 'advisor',
+      name: 'plugins.bundle.config',
+      // Keyed slot: the key is the bundle package name the page dispatches
+      // (`entryKey = pkg.name` in ui-plugin-manager's PackageDetail). Keyed
+      // entries declare no `id`/`order` — there is one entry per bundle page.
+      key: BUNDLE_NAME,
       locale: NS,
       // Hooks compartment: the renderer binds `hooks.snapshot` to the
       // component's `useSnapshot` selector hook (the old web-react

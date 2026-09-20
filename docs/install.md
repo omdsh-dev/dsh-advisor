@@ -109,10 +109,10 @@ dsh --profile dsh-tui --dump-config   # confirm the dsh-advisor layer is gone
 
 ## 5. Web Settings exposure
 
-The dsh web Settings page's **"插件配置" (Plugin Configuration)** page renders
-one card per plugin that registers into the `settings.plugin.item` card slot.
-The Advisor card (namespace key `advisor`, rendered after the upstream bash / agent-loop /
-web-search cards in registration order) reads the provider directory through the dsh host's apiproxy
+The dsh web **Plugins** page renders a bundle's own configuration on that
+bundle's page, contributed through the `plugins.bundle.config` card slot (keyed
+by the bundle's package name). The Advisor card (key `dsh-advisor`) reads the
+provider directory through the dsh host's apiproxy
 `describe` (the exposed `llm-*` namespaces), but reads and writes the advisor
 config EXCLUSIVELY through the **official `GatewayService` RPC channel** — it
 does not depend on the apiproxy allowlist, which exposes only an allowlist of
@@ -136,8 +136,8 @@ dsh --profile web --dump-config   # shows a "# == dsh-advisor" layer with the ad
 dsh --profile web
 ```
 
-After booting, the web Settings page's "插件配置" page renders the Advisor
-card; it reads and writes the `advisor` namespace live through
+After booting, the web Plugins page renders the Advisor card on the dsh-advisor
+bundle's page; it reads and writes the `advisor` namespace live through
 `/api/advisor/get` + `/api/advisor/set` — saving applies to new sessions
 immediately.
 
