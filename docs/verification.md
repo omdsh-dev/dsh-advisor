@@ -12,7 +12,7 @@
 
 | 测试文件 | 用例数 | 覆盖契约 |
 |---|---|---|
-| `advisor-card.spec.tsx` | 30 | Advisor 卡片：`settings.plugin.item` 注册（不污染 `settings.section`）；上游 PluginCard chrome（默认折叠 / aria-expanded / unsaved pill / Save-Discard 启停）；网关通道读写（`advisor/get` 读配置、`advisor/set` 保存、wire 失败提示、重试）；enabled 开关 + 必填 provider/model 门禁文案；只列已配置 provider；存储值不再可用时的警告；read-only provider 提示；网关不可达时不提供 Save；zh/en 文案 |
+| `advisor-card.spec.tsx` | 30 | Advisor 卡片：`plugins.bundle.config` 注册（key `dsh-advisor`；不污染 `settings.section`）；上游 PluginCard chrome（默认折叠 / aria-expanded / unsaved pill / Save-Discard 启停）；网关通道读写（`advisor/get` 读配置、`advisor/set` 保存、wire 失败提示、重试）；enabled 开关 + 必填 provider/model 门禁文案；只列已配置 provider；存储值不再可用时的警告；read-only provider 提示；网关不可达时不提供 Save；zh/en 文案 |
 | `advisor-runtime.test.ts` | 27 | 每 delta 一次 `llm.stream` 调用与选项；`extractAdviceNote` JSON-frame 解析（KD-2，容忍 prose/fence、severity 缺省 nit）；failure policy（KD-5：transient 1 次重试→drop、连续 3 次 drop 冲刷 backlog、quota→暂停保留批次、permanent→halt）；60s 调用 deadline 超时；dispose 中止在途调用；对真实 `LlmRuntime` + 注册 adapter 的选项下发；`reasoningEffort` 能力门控（无推理元数据的 adapter 不发送） |
 | `advisor-store.test.ts` | 51 | store：providers join（KD-S2 configured 判定）；model options（profile 优先、catalog 回退）；apply gate（KD-S4 enabled 必填）；apply patch + seed（只写变更键、清空字段存显式 `''`）；invalidations（`refreshIfLoaded`）；gateway availability（KD-G5 `advisorPresent`）；post-apply reload 失败保留反馈（qc3 N-1）；discard 回滚草稿；dirty 派生（KD-U2）；read-only apply guard（qc2 W-1）；卡片场景（load → edit → apply → discard 往返） |
 | `client-build.test.ts` | 7 | 客户端 bundle 契约（`scripts/build-client.mjs`）：构建 `lib/client.js` + `lib/client.d.ts`；closure-factory load handoff；classic-script 安全（无 `import.meta` / 顶层 ESM）；`CLIENT_EXTERNALS` 纯度边界；automatic JSX runtime；CSS Modules 内联；`dsh.client` 声明 |
@@ -55,9 +55,9 @@ dsh --profile web                  # 重启 dsh 会话使宿主半与客户端�
 
 **预期**：`dsh.profile.bundles` 追加本插件（`add` 默认追加到末尾）；`--dump-config` 输出含 `# == dsh-advisor` 层与 `id: advisor` 行（`name: dsh-advisor`）。
 
-### 2. web 插件配置卡片验证
+### 2. web 组合包配置卡片验证
 
-1. 打开 web Settings → **"插件配置"**页，确认 **Advisor 卡片**出现（与 bash / agent-loop / web-search 卡片同列，位于其后）。
+1. 打开 web 侧边栏 → **「插件」**页 → 打开 **dsh-advisor** 组合包页面，确认 **Advisor 卡片**出现在该包描述与其插件行之间的配置区。
 2. **首次打开（无 `advisor` 配置）**：卡片渲染头部 + enabled 开关（默认 **OFF**）+ 表单（enabled 关闭时表单体隐藏、显示提示）。
 3. 打开 `enabled` 开关 → 出现 provider / model 选择框（**只列出已配置的 provider** 及其模型）、`systemPrompt` 文本框（placeholder 提示空 = 默认）与 `immuneTurns` / `maxDeltaMessages` 数字输入。
 4. 选择 provider/model 并保存 → **预期**：保存成功（经 `/api/advisor/set`）；`$DSH_HOME/settings.yaml`（或该 profile 的 settings 路径）写入 `advisor:` 段（含 `enabled: true` 与所选 provider/model）；重进页面显示已保存值。

@@ -42,7 +42,7 @@ import type { AdvisorConfig, ResolvedAdvisorConfig } from 'dsh-advisor'
 
 ## 客户端入口（`dsh-advisor/client`）
 
-`src/client/index.ts` 是浏览器半，把 Advisor 卡片注册进宿主声明的 `settings.plugin.item` 卡片 slot（"插件配置"页，namespace key `advisor`，按注册顺序位于上游 bash / agent-loop / web-search 卡片之后）：
+`src/client/index.ts` 是浏览器半，把 Advisor 卡片注册进宿主声明的 `plugins.bundle.config` 卡片 slot（web「插件」页上 dsh-advisor 组合包自己的页面，bundle key `dsh-advisor`）：
 
 ```ts
 import type { AdvisorCardProps, AdvisorSettingsStore, ModelOption, ProviderOption } from 'dsh-advisor/client'
@@ -51,7 +51,7 @@ import type { AdvisorCardProps, AdvisorSettingsStore, ModelOption, ProviderOptio
 - **`inject`**：`['slots', 'locale', 'connection', 'settingsSchema']`（cordis fiber 注入；`settingsSchema` 为 ui-settings 提供的不可变路径写入服务）；locale 字典命名空间 `settings.advisor`（zh / en）；
 - **类型导出**：`AdvisorCardInjected`、`AdvisorCardProps`、`AdvisorKey`、`AdvisorDraft`、`AdvisorSettingsState`、`AdvisorSettingsStore`、`ApplyFailure`、`ApplyState`、`ModelOption`、`ModelsEmptyReason`、`ProviderOption`；
 - **value 导出**：`refreshIfLoaded`（纯 controller 辅助：仅在卡片首次加载后重取页面快照；未打开的卡片不在后台失效时发起 fetch）；
-- **web 注入声明**（`package.json` `dsh.client`）：`@deepseek-ai/dsh-client-store` + `@deepseek-ai/dsh-client-ui-settings-plugins` + `@deepseek-ai/dsh-client-locale`，平台 `web`；
+- **web 注入声明**（`package.json` `dsh.client`）：`@deepseek-ai/dsh-client-store` + `@deepseek-ai/dsh-client-ui-plugin-manager` + `@deepseek-ai/dsh-client-locale`，平台 `web`；
 - **导入纯度边界**：客户端 half 只 value-import 冻结的平台模块表（`CLIENT_EXTERNALS`：react / `@deepseek-ai/cordis` / ui-slots / ui-primitives / `@deepseek-ai/dsh-client-store`）；其余 `@deepseek-ai/*` 全部 type-only（构建期擦除），值经 cordis 注入到达（含 `settingsSchema` 服务）。
 
 卡片的数据面（`src/client/advisor-store.ts`）：

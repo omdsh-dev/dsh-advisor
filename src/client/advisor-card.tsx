@@ -1,7 +1,7 @@
 /**
  * Advisor settings card (plan dsh-advisor-plugin-config-card-ux, task 1): the
- * card registered into the "插件配置" settings page's `settings.plugin.item`
- * keyed slot (key `advisor` — the settings namespace the card edits). It keeps
+ * card registered into the Plugins page's `plugins.bundle.config` keyed slot
+ * (key `dsh-advisor` — the bundle's package name the page dispatches). It keeps
  * the n5 gateway channel — the store
  * reads/writes the advisor config through `/api/advisor/get` +
  * `/api/advisor/set` (KD-G3) — while the card chrome is rebuilt to replicate
@@ -82,13 +82,15 @@ export interface AdvisorCardInjected {
 }
 
 /**
- * Props the renderer binds for the card: the `settings.plugin.item` runtime
- * share (empty owner props), the framework-synthesized `t` seat for the
- * declared `settings.advisor` namespace (KD-1 — `t` is NOT part of the inject
- * face), and the registrant's business face.
+ * Props the renderer binds for the card: the `plugins.bundle.config` runtime
+ * share (the owner passes the `view` the page asks for — this seat is
+ * `page`-only, so the self-chromed card needs no branch for it), the
+ * framework-synthesized `t` seat for the declared `settings.advisor` namespace
+ * (KD-1 — `t` is NOT part of the inject face), and the registrant's business
+ * face.
  */
 export type AdvisorCardProps =
-  PropsRuntime<'settings.plugin.item'>
+  PropsRuntime<'plugins.bundle.config'>
   & PropsLocale<'settings.advisor'>
   & InjectFace<AdvisorCardInjected>
 
@@ -101,11 +103,11 @@ function failureCopy(failure: ApplyFailure, t: AdvisorCardProps['t']): string | 
 }
 
 /**
- * Render the advisor card inside the plugin-config section, replicating the
- * upstream PluginCard chrome (KD-U1): a collapsible `<li>` with a header
- * button (name over description, dirty pill, rotating chevron, aria) and,
- * when open, a divided body holding the readOnly notice, the form, and the
- * footer (failed message + Discard/Save).
+ * Render the advisor card inside its bundle's configuration section on the
+ * Plugins page, replicating the upstream PluginCard chrome (KD-U1): a
+ * collapsible block with a header button (name over description, dirty pill,
+ * rotating chevron, aria) and, when open, a divided body holding the readOnly
+ * notice, the form, and the footer (failed message + Discard/Save).
  * @param props - slot-delivered injected dependencies and the synthesized t seat.
  * @returns the card.
  */
@@ -131,9 +133,9 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
   const degraded = state.status === 'ready' ? !state.advisorPresent : state.degraded
   const open = userOpen || state.status === 'error' || degraded
 
-  // Load-on-mount (KD-3): the plugin-config page mounts the card lazily when
-  // the user opens the settings panel, so the first mount triggers the first
-  // gateway load — same idle→load() pattern the section used.
+  // Load-on-mount (KD-3): the Plugins page mounts the card lazily when the
+  // user opens the bundle's page, so the first mount triggers the first
+  // gateway load — same idle→load() pattern the settings section used.
   // Loop-guard invariant (qc3 N-1): load() synchronously flips status
   // idle→loading BEFORE its first await (advisor-store.ts load() — the first
   // store.update, no await in between), which is what terminates this mount
@@ -387,9 +389,9 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
   }
 
   return (
-    <li className={open ? `${styles['card']} ${styles['cardOpen']}` : styles['card']}>
+    <div className={open ? `${styles['card']} ${styles['cardOpen']}` : styles['card']}>
       {header}
       {open ? body : null}
-    </li>
+    </div>
   )
 }

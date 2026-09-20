@@ -6,15 +6,15 @@
  * in this app defines, would render the light-mode literals written as their
  * fallbacks and stay light under the dark theme.
  *
- * The card is one <li> in the plugin-config section's card list (the section
- * owns the column width); the chrome is the upstream contract: a bordered
- * box whose header is a button (name over description, dirty pill, rotating
- * chevron) and whose open state shows a divided body — divider, readOnly /
- * form content, footer divider with the failed message + Discard/Save. */
+ * The card is the whole body of its bundle's configuration section on the
+ * Plugins page (`plugins.bundle.config`; the owner owns the column width); the
+ * chrome is the upstream contract: a bordered box whose header is a button
+ * (name over description, dirty pill, rotating chevron) and whose open state
+ * shows a divided body — divider, readOnly / form content, footer divider with
+ * the failed message + Discard/Save. */
 
 /* The card box. */
 .card {
-  list-style: none;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);

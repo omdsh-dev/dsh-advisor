@@ -383,9 +383,25 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // creates the runtime eagerly (plan T4) when the session is enabled and
   // registers the agent in the KD-4 delivery map (T6); the observer fallback
   // covers pre-existing agents (KD-4-style robustness).
+  //
+  // 0.1.6-alpha.2 seam: `agent/created` became a SERIAL event — its listeners
+  // run in order and are AWAITED before creation resolves, and a throw or
+  // rejection FAILS creation and skips later listeners (0.1.5-rc.2 dispatched
+  // it fire-and-forget). Two obligations follow for this handler:
+  //   - return `undefined`: the listener contract is
+  //     `undefined | Promise<undefined>`, so a bare `void` body no longer
+  //     typechecks against the host Events table;
+  //   - never throw: an advisory-only plugin must not be able to fail the
+  //     primary agent's creation, so setup failures are contained and logged
+  //     here rather than crossing the event boundary.
   ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
-    ensureRuntime(agent.id)
-    delivery.registerAgent(agent)
+    try {
+      ensureRuntime(agent.id)
+      delivery.registerAgent(agent)
+    } catch (error) {
+      ctx.logger('advisor').warn('advisor: agent/created setup failed — contained', { error, sessionId: agent.id })
+    }
+    return undefined
   }, { global: true })
   ctx.on('agent/disposed', ({ agent }: { agent: Agent }) => {
     observer.disposeSession(agent.id)
