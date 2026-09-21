@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, delimiter, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -95,9 +95,12 @@ function fixtureVersion(): string {
 
 function runScript(args: string[], existingTags: string[]): { status: number; stdout: string; stderr: string } {
   writeFileSync(join(fixture, 'existing-tags.txt'), existingTags.length ? `${existingTags.join('\n')}\n` : '', 'utf8')
+  // path.delimiter, not ':': on Windows the latter glues the shim directory onto
+  // the first real PATH entry instead of adding it as a separate one.
+  const shimPath = [join(fixture, 'bin'), process.env.PATH ?? ''].join(delimiter)
   const result = spawnSync(process.execPath, [join(fixture, 'scripts', 'prepare-release.mjs'), ...args], {
     cwd: fixture,
-    env: { ...process.env, PATH: `${join(fixture, 'bin')}:${process.env.PATH ?? ''}` },
+    env: { ...process.env, PATH: shimPath },
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -108,7 +111,17 @@ function runScript(args: string[], existingTags: string[]): { status: number; st
   }
 }
 
-describe('scripts/prepare-release.mjs', () => {
+// The fixture controls git by putting an extensionless `#!/bin/sh` shim on PATH,
+// the only way to stub rev-parse/describe/log without a real repository.
+// Windows cannot execute that shim (CreateProcess needs a PATHEXT extension, so
+// Node's PATH search skips it), and the extensionless file has no `sh`, `grep`
+// or `cat` either; spawnSync therefore falls through to the real git.exe, which
+// exits 128 inside the non-repository fixture. Every git-dependent case then
+// fails on the observed process status rather than on the behaviour under test,
+// so skip them there instead of reporting 17 bogus failures. Restoring Windows
+// coverage needs a non-PATH seam, e.g. an environment override for the git
+// command in scripts/prepare-release.mjs.
+describe.skipIf(process.platform === 'win32')('scripts/prepare-release.mjs', () => {
   it('auto patch bump: 0.1.0 -> 0.1.1, prints VERSION=0.1.1, exits 0', () => {
     makeFixture('0.1.0')
     // A real release has commits since the previous release: without a
