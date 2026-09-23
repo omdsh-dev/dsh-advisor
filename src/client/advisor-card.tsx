@@ -8,8 +8,10 @@
  * the upstream `PluginCard` contract (self-drawn: the upstream client value
  * face exports no reusable card). The chrome: a collapsible box whose header
  * is a button stacking the plugin name over its description, with a dirty
- * "unsaved" pill and a rotating chevron (`IconChevronDownOutline14` from
- * ui-primitives), `aria-expanded`/`aria-label` like the upstream header; a
+ * "unsaved" pill and a rotating chevron (`IconChevronDownOutlineRegular` from
+ * ui-primitives — 0.1.7-rc.1 moved the rendered size out of the icon name
+ * into the `size` prop; the chevron's drawn size is still 14),
+ * `aria-expanded`/`aria-label` like the upstream header; a
  * divider under the header; then the form content; then a footer with the
  * failed message + Discard/Save carrying the upstream disabled semantics —
  * save = `!dirty || invalid || saving`, discard = `!dirty || saving` (KD-U1,
@@ -63,7 +65,7 @@
  */
 
 import { useState, type ReactNode } from 'react'
-import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconChevronDownOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ApplyFailure, AdvisorSettingsState, AdvisorSettingsStore } from './advisor-store.ts'
@@ -166,7 +168,7 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
         <span className={styles['description']}>{t('intro')}</span>
       </span>
       {state.dirty ? <span className={styles['pending']}>{t('unsaved')}</span> : null}
-      <IconChevronDownOutline14
+      <IconChevronDownOutlineRegular
         className={open ? `${styles['chevron']} ${styles['chevronOpen']}` : styles['chevron']}
       />
     </button>
