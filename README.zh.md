@@ -5,7 +5,7 @@
 [![npm](https://img.shields.io/npm/dt/dsh-advisor)](https://www.npmjs.com/package/dsh-advisor)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933.svg)
-![dsh](https://img.shields.io/badge/dsh-0.1.6--alpha.2-4B32C3.svg)
+![dsh](https://img.shields.io/badge/dsh-0.1.7--rc.1-4B32C3.svg)
 ![dsh tui](https://img.shields.io/badge/dsh%20tui-compatible-4B32C3.svg)
 [![dshfind](https://dshfind.com/api/badge/omdsh-dev/dsh-advisor?lang=zh)](https://dshfind.com/zh/plugins/omdsh-dev/dsh-advisor?ref=badge)
 
@@ -45,7 +45,7 @@ advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabl
 同一组键在**三个配置面**之间合成（后一层覆盖前一层；各处使用同一组键与同一个硬门禁，宿主侧门禁始终是所有路径上的最后防线）：
 
 1. **插件行 config** —— profile 补丁层（`$DSH_HOME/profiles/<profile>/cordis.patch.yml`）。这是合成 base。
-2. **dsh web 的「插件」页 —— dsh-advisor 组合包自己的页面** —— Advisor **卡片**（bundle key `dsh-advisor`），含 enabled 开关、只列出系统内已配置 provider 及其模型的 provider/model 选择框与可选字段。保存写入 `advisor` settings namespace，新会话立即生效，无需重启。卡片要求 dsh web 构建的 shell 声明了 `plugins.bundle.config` 卡片 slot（dsh ≥ 0.1.6-alpha.2）并能加载 `dsh.client` 声明包；它通过官方 `GatewayService` RPC 通道读写该命名空间（`/api/advisor/get` + `/api/advisor/set`），不受 settings 暴露白名单门控。卡片还会在 enabled 且必填字段为空时阻止保存。
+2. **dsh web 的「插件」页 —— dsh-advisor 组合包自己的页面** —— Advisor **卡片**（bundle key `dsh-advisor`），含 enabled 开关、只列出系统内已配置 provider 及其模型的 provider/model 选择框与可选字段。保存写入 `advisor` settings namespace，新会话立即生效，无需重启。卡片要求 dsh web 构建的 shell 声明了 `plugins.bundle.config` 卡片 slot（dsh ≥ 0.1.7-rc.1）并能加载 `dsh.client` 声明包；它通过官方 `GatewayService` RPC 通道读写该命名空间（`/api/advisor/get` + `/api/advisor/set`），不受 settings 暴露白名单门控。卡片还会在 enabled 且必填字段为空时阻止保存。
 3. **`/advisor` 指令** —— 按会话且临时：翻转的是会话级 override，从不修改持久化配置（见[验证](#验证)）。
 
 在 **dsh-tui** profile 中，同样的五个键可在 TUI `/settings` 屏幕编辑：运行 `dsh --profile dsh-tui`、打开 `/settings`，编辑 **Advisor** 分节（`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`，每项均带中英文标签与提示）。编辑先暂存，保存时经 revision 栅栏保护的 `settings.mutate` 写入 web 卡片所写的同一个 `advisor` 命名空间 user layer，并 live 重应用、无需重启。`systemPrompt` **不是** TUI 字段（TUI text 控件为单行；多行 prompt 会被截断）——请经 web 卡片或 `$DSH_HOME/settings.yaml` 编辑。该分节要求 dsh-tui ≥ v0.8.0（随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供）；旧版 dsh-tui 会干净地 no-op，仍以两个文件路径——profile 补丁层 + 全局 `$DSH_HOME/settings.yaml`——作为编辑路径。`/advisor config` 仍是只读回读，seam 挂载时其编辑提示指向 `/settings` 屏幕。保存行为与 web 卡片不同：TUI seam 没有跨字段校验，一次保存可能把 `enabled: true` 与空 `provider`/`model` 一起写入——显式模型门禁会在运行时把它解析为 disabled-with-reason（可见于 `/advisor status` 与 `/advisor config`）；web 卡片则会直接阻止这样的保存。完整参考 → [docs/configuration.md](docs/configuration.md)。
