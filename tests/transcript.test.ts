@@ -9,8 +9,9 @@
  * - A prefix rewrite — `user/message` with `surfaceOp.op === 'replace'`,
  *   `compact/*` events (KD-5 triggers), or a fingerprint mismatch (defensive
  *   fallback) — resets the cursor and replays the full post-rewrite surface.
- * - Advisor-source messages (the `plugin` arm tagged `plugin: 'advisor'`) are
- *   excluded (self-review guard, spec §6).
+ * - Advisor-source messages (the advisor's own `advisor` producer kind, plus
+ *   the migrated `plugin:advisor` shape of 0.1.6-era notes) are excluded
+ *   (self-review guard, spec §6).
  * - The bounded window (`maxDeltaMessages`, default 60, 0 = unbounded) keeps
  *   the most recent N messages and prepends the truncation marker (KD-3).
  * - Role labels `**user:**` / `**agent:**`; assistant tool calls and tool
@@ -37,15 +38,24 @@ import {
   SessionTranscriptObserver,
   TRUNCATION_MARKER,
 } from '../src/transcript'
-import { ADVISOR_PLUGIN_ID } from '../src/kinds'
 
-/** The source the advisor writes: the classified first-party `plugin` arm. */
+/** The source the advisor writes: its own producer kind, notice form. */
 const advisorSource = {
-  kind: 'plugin',
-  plugin: ADVISOR_PLUGIN_ID,
+  kind: 'advisor',
   form: 'notice',
   summary: 'advisor note',
 } as const
+
+/** The 0.1.6-era advisor note after the V3→V4 in-memory migration: the
+ * retired `{ kind: 'plugin', plugin: 'advisor' }` arm becomes the producer
+ * kind `plugin:advisor` (the `plugin` member is dropped, the rest kept). A
+ * LOG reality the compile-time MessageSource union intentionally has no arm
+ * for — the cast is the point, not a shortcut. */
+const migratedAdvisorSource = {
+  kind: 'plugin:advisor',
+  form: 'notice',
+  summary: 'advisor note',
+} as unknown as MessageSource
 
 // ---------------------------------------------------------------------------
 // Synthetic event builders (deterministic message ids so a rebuilt prefix has
@@ -120,6 +130,9 @@ function assistantMessage(value: string, toolCalls: Array<{ name: string; args: 
   }
 }
 
+/** V4 tool result: a first-class tool-role message (the V3 shape folded the
+ * result into a user-role message carrying a `tool-result` content block —
+ * that arm no longer exists). */
 function toolResultMessage(value: string): EventSpec {
   return {
     type: 'tool/result',
@@ -128,8 +141,10 @@ function toolResultMessage(value: string): EventSpec {
       step: 1,
       message: {
         id: MessageId(`tool-${value}`),
-        role: 'user',
-        content: [{ type: 'tool-result', toolCallId: ToolCallId('call-0'), content: [text(value)], isError: false }],
+        role: 'tool',
+        toolCallId: ToolCallId('call-0'),
+        content: [text(value)],
+        isError: false,
         source: { kind: 'tool', callId: ToolCallId('call-0') },
       },
     },
@@ -337,6 +352,28 @@ describe('DeltaRenderer — own-message exclusion (self-review guard)', () => {
     expect(delta).toBeDefined()
     expect(delta!.markdown).toContain('**user**: continue the task')
     expect(delta!.markdown).toContain('**agent**: Working on it.')
+    expect(delta!.markdown).not.toContain('advisor')
+  })
+
+  it('also excludes a migrated 0.1.6-era note (plugin:advisor after the V3→V4 migration)', () => {
+    // The old `{ kind: 'plugin', plugin: 'advisor' }` note is migrated IN
+    // MEMORY on read (V3 logs are never rewritten) to the producer kind
+    // `plugin:advisor`; the predicate must keep matching it or a full-surface
+    // replay feeds the advisor its own pre-migration advice exactly once per
+    // replay.
+    const renderer = new DeltaRenderer()
+    const events = buildEvents([
+      turnStart(1),
+      userMessage('[advisor:nit] consider extracting a helper', migratedAdvisorSource),
+      userMessage('continue the task'),
+      stepStart(1, 1),
+      assistantMessage('Working on it.'),
+      stepEnd(1, 1),
+      turnEnd(1),
+    ])
+    const delta = renderer.update(events)
+    expect(delta).toBeDefined()
+    expect(delta!.markdown).toContain('**user**: continue the task')
     expect(delta!.markdown).not.toContain('advisor')
   })
 })
@@ -788,7 +825,7 @@ describe('SessionTranscriptObserver — agentic reply-complete gate (KD-N4-5)', 
 // SessionTranscriptObserver — inbox-spliced payload discrimination (C-1)
 //
 // `agent/inbox/spliced` fires on EVERY inbox mutation, including the advisor's
-// own inject/steer deliveries (the `plugin` arm tagged `plugin: 'advisor'`),
+// own inject/steer deliveries (the advisor's own `advisor` producer kind),
 // workspace-context sync (the `agent-instructions` kind its own producer
 // commits), tool-result splicing ('tool'), and claim/clear (empty `inserted`).
 // Only an inserted message with `source.kind === 'user'` is a human input —

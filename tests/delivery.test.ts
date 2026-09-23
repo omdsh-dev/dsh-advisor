@@ -12,9 +12,9 @@
  *     running driver consumes at the next step boundary);
  *   - missing agent → drop the note + log (never throw, never stall).
  * - Advisor message shape (spec §6): a user-role message via `createUserMessage`
- *   whose source is the classified first-party `plugin` arm (`kind: 'plugin'`,
- *   `plugin: 'advisor'` — src/kinds.ts) and whose content is self-describing
- *   `[advisor:{severity}] {note}`.
+ *   whose source is this plugin's own producer kind (`kind: 'advisor'`,
+ *   pinned to the `notice` form — src/kinds.ts) and whose content is
+ *   self-describing `[advisor:{severity}] {note}`.
  * - immuneTurns (spec §6): after a concern/blocker is actually steered, the
  *   next `immuneTurns` stepped primary turns must complete before another
  *   interrupting note may steer; interrupting notes inside the window downgrade
@@ -122,32 +122,30 @@ describe('AdvisorDelivery — severity → channel routing (spec §6)', () => {
 // ---------------------------------------------------------------------------
 
 describe('AdvisorDelivery — advisor message construction (spec §6)', () => {
-  it('builds a user-role message with the advisor plugin source and self-describing content', () => {
+  it('builds a user-role message with the advisor source kind and self-describing content', () => {
     const message = buildAdvisorMessage({ note: 'extract the helper', severity: 'concern' })
     expect(message.role).toBe('user')
-    expect(message.source.kind).toBe('plugin')
+    expect(message.source.kind).toBe('advisor')
     expect(message.source).toMatchObject({
-      plugin: ADVISOR_PLUGIN_ID,
       form: 'notice',
       summary: '[concern] extract the helper',
     })
     expect(message.content).toEqual([{ type: 'text', text: '[advisor:concern] extract the helper' }])
   })
 
-  it('pins the source to the classified first-party plugin arm (cross-generation-safe)', () => {
+  it('pins the source to the advisor producer kind (cross-generation-safe)', () => {
     const message = buildAdvisorMessage({ note: 'extract the helper', severity: 'concern' })
-    // The whole log is refused by the V2→V3 edge (`assertSource()`) when
-    // `source.kind` is not in the frozen first-party vocabulary, so the
-    // advisor must never carry a plugin-owned kind: its identity lives in
-    // `source.plugin` instead.
-    expect(message.source.kind).toBe('plugin')
-    // The member set is locked exactly: `kind` + `plugin` plus the form-owned
-    // `form`/`summary` are the only members all three historical edges admit,
-    // so any extra member must fail here rather than in a refused session log.
-    expect(Object.keys(message.source).sort()).toEqual(['form', 'kind', 'plugin', 'summary'])
+    // The 0.1.7-rc.1 V3→V4 format edge PRESERVES direct source kinds (and V4
+    // refuses the retired bare `plugin` arm outright), so a producer-owned
+    // kind is the persistence-safe identity — the property the borrowed
+    // `plugin` arm used to be relied on for.
+    expect(message.source.kind).toBe('advisor')
+    // The member set is locked exactly: `kind` plus the form-owned `form`/
+    // `summary` are the only members all format edges admit, so any extra
+    // member must fail here rather than in a refused session log.
+    expect(Object.keys(message.source).sort()).toEqual(['form', 'kind', 'summary'])
     expect(message.source).toMatchObject({
-      kind: 'plugin',
-      plugin: ADVISOR_PLUGIN_ID,
+      kind: 'advisor',
       form: 'notice',
       summary: '[concern] extract the helper',
     })
@@ -155,30 +153,35 @@ describe('AdvisorDelivery — advisor message construction (spec §6)', () => {
     expect(isAdvisorMessage(message)).toBe(true)
   })
 
-  it('pins the persisted plugin id to the literal "advisor" (durable-log identity)', () => {
-    // QC1-F-003: every other assertion in this suite — and `isAdvisorMessage`
-    // itself — reaches the persisted key only THROUGH `ADVISOR_PLUGIN_ID`, so
-    // revaluing that constant would keep the whole suite green while the notes
-    // already written into session logs silently fell out of the self-review
-    // exclusion (a replay trigger resets the renderer cursor and `rebuild()`
-    // re-filters the log through `isAdvisorMessage`). This is the one assertion
-    // that reads the persisted literal, so a rename fails here — where the
-    // author has to confront the already-written logs — instead of in a session
-    // that quietly starts reviewing the advisor's own advice.
+  it('pins the persisted source kind to the literal "advisor" (durable-log identity)', () => {
+    // QC1-F-003, restated for the 0.1.7-rc.1 identity: every other assertion
+    // in this suite — and `isAdvisorMessage` itself — reaches the persisted
+    // key only THROUGH `ADVISOR_PLUGIN_ID`, so revaluing that constant would
+    // keep the whole suite green while the notes already written into session
+    // logs silently fell out of the self-review exclusion (a replay trigger
+    // resets the renderer cursor and `rebuild()` re-filters the log through
+    // `isAdvisorMessage`). This is the one assertion that reads the persisted
+    // literal, so a rename fails here — where the author has to confront the
+    // already-written logs — instead of in a session that quietly starts
+    // reviewing the advisor's own advice.
     const message = buildAdvisorMessage({ note: 'extract the helper', severity: 'concern' })
-    expect(message.source).toMatchObject({ plugin: 'advisor' })
+    expect(message.source.kind).toBe('advisor')
   })
 
-  it('rejects a plugin-arm message carrying a different plugin id (self-review guard)', () => {
+  it('rejects a migrated sibling-plugin note (self-review guard)', () => {
     // Counterpart of the positive case above, which proves the predicate
-    // accepts the advisor's own shape. Here the SAME message differs in exactly
-    // one member — `source.plugin` — so a predicate that degenerated to
-    // `source.kind === 'plugin'` passes the positive case while silently
-    // excluding every other plugin's injected message from advisor review;
-    // that regression must fail here instead of shipping.
+    // accepts the advisor's own shape. The source here is the 0.1.7-rc.1
+    // V3→V4 migration of a sibling plugin's 0.1.6 note — `plugin:some-other-
+    // plugin`, the same `plugin:<id>` shape the advisor's own migrated notes
+    // carry — so a predicate that degenerated to a `plugin:`-prefix match
+    // would silently exclude every sibling's note from advisor review; that
+    // regression must fail here instead of shipping.
+    // The migrated shape is a LOG reality the compile-time MessageSource
+    // union intentionally has no arm for (the retired `plugin` family is not
+    // writable), hence the cast through unknown.
     const message: UserMessage = {
       ...buildAdvisorMessage({ note: 'a sibling plugin note', severity: 'nit' }),
-      source: { kind: 'plugin', plugin: 'some-other-plugin' },
+      source: { kind: 'plugin:some-other-plugin' } as unknown as UserMessage['source'],
     }
 
     expect(isAdvisorMessage(message)).toBe(false)
@@ -202,8 +205,8 @@ describe('AdvisorDelivery — advisor message construction (spec §6)', () => {
     delivery.route('s1', { note: 'slow down and re-read the task', severity: 'nit' })
     const message = inject.mock.calls[0]![0] as UserMessage
     expect(message.role).toBe('user')
-    expect(message.source.kind).toBe('plugin')
-    expect(message.source).toMatchObject({ plugin: ADVISOR_PLUGIN_ID })
+    expect(message.source.kind).toBe(ADVISOR_PLUGIN_ID)
+    expect(message.source).toMatchObject({ kind: 'advisor', form: 'notice' })
     expect(message.content).toEqual([{ type: 'text', text: '[advisor:nit] slow down and re-read the task' }])
   })
 })

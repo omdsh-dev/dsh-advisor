@@ -46,7 +46,6 @@ import { CommandId } from '@deepseek-ai/dsh-commands'
 import * as advisorPlugin from '../src/index'
 import type { AdvisorConfig } from '../src/config'
 import { ADVISOR_MAX_TOKENS } from '../src/advisor-runtime'
-import { ADVISOR_PLUGIN_ID } from '../src/kinds'
 
 // n4 QC F-6: the single-reviewer guard is process-global; each test case
 // composes a fresh harness, so the flag must reset between cases (production
@@ -265,6 +264,8 @@ function assistantMessage(value: string, toolCalls: Array<{ name: string; args: 
 }
 
 function toolResultMessage(value: string): EventSpec {
+  // V4: tool results are first-class tool-role messages (the V3 user-role +
+  // `tool-result` block shape is retired).
   return {
     type: 'tool/result',
     data: {
@@ -272,8 +273,10 @@ function toolResultMessage(value: string): EventSpec {
       step: 1,
       message: {
         id: MessageId(`tool-${value}`),
-        role: 'user',
-        content: [{ type: 'tool-result', toolCallId: ToolCallId('call-0'), content: [text(value)], isError: false }],
+        role: 'tool',
+        toolCallId: ToolCallId('call-0'),
+        content: [text(value)],
+        isError: false,
         source: { kind: 'tool', callId: ToolCallId('call-0') },
       },
     },
@@ -409,11 +412,10 @@ describe('integration — full advisor loop (spec §7)', () => {
     await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
     expect(inject).not.toHaveBeenCalled()
 
-    // The steered message carries the advisor plugin source + self-describing content.
+    // The steered message carries the advisor source kind + self-describing content.
     const message = steer.mock.calls[0]![0] as UserMessage
     expect(message.role).toBe('user')
-    expect(message.source.kind).toBe('plugin')
-    expect(message.source).toMatchObject({ plugin: ADVISOR_PLUGIN_ID })
+    expect(message.source.kind).toBe('advisor')
     expect(message.content).toEqual([{ type: 'text', text: '[advisor:concern] extract the helper' }])
 
     // The model call carried the expected options and the rendered delta.
@@ -446,8 +448,7 @@ describe('integration — full advisor loop (spec §7)', () => {
     await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
     expect(steer).not.toHaveBeenCalled()
     const message = inject.mock.calls[0]![0] as UserMessage
-    expect(message.source.kind).toBe('plugin')
-    expect(message.source).toMatchObject({ plugin: ADVISOR_PLUGIN_ID })
+    expect(message.source.kind).toBe('advisor')
     expect(message.content).toEqual([{ type: 'text', text: '[advisor:nit] add a unit test' }])
     expect(adapter.requests).toHaveLength(1)
   })
@@ -581,10 +582,9 @@ describe('integration — agentic reply-complete gate drives the loop without tu
       [{ type: 'text', text: '[advisor:concern] concern three' }],
       [{ type: 'text', text: '[advisor:concern] concern five' }],
     ])
-    // Every delivered note carries the advisor plugin source.
+    // Every delivered note carries the advisor source kind.
     for (const call of [...steer.mock.calls, ...inject.mock.calls]) {
-      expect((call[0] as UserMessage).source.kind).toBe('plugin')
-      expect((call[0] as UserMessage).source).toMatchObject({ plugin: ADVISOR_PLUGIN_ID })
+      expect((call[0] as UserMessage).source.kind).toBe('advisor')
     }
   })
 
@@ -606,8 +606,7 @@ describe('integration — agentic reply-complete gate drives the loop without tu
     await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
     expect(steer).not.toHaveBeenCalled()
     const message = inject.mock.calls[0]![0] as UserMessage
-    expect(message.source.kind).toBe('plugin')
-    expect(message.source).toMatchObject({ plugin: ADVISOR_PLUGIN_ID })
+    expect(message.source.kind).toBe('advisor')
     expect(message.content).toEqual([{ type: 'text', text: '[advisor:nit] add a unit test' }])
     expect(adapter.requests).toHaveLength(1)
   })
@@ -674,7 +673,7 @@ describe('integration — advisor self-delivery never re-triggers the review gat
             id: MessageId(`advisor-${log.length}`),
             role: 'user',
             content: [text('[advisor:nit] delivered note')],
-            source: { kind: 'plugin', plugin: ADVISOR_PLUGIN_ID, form: 'notice', summary: '[nit] delivered note' },
+            source: { kind: 'advisor', form: 'notice', summary: '[nit] delivered note' },
           }],
         },
       } as unknown as SessionEvent
@@ -798,7 +797,7 @@ describe('integration — /advisor commands conditional activation (T7)', () => 
     expect(delta).not.toContain('history turn')
     expect(steer.mock.calls[0]![0]).toMatchObject({
       role: 'user',
-      source: { kind: 'plugin', plugin: ADVISOR_PLUGIN_ID },
+      source: { kind: 'advisor' },
     })
   })
 })
@@ -933,7 +932,7 @@ describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix w
     expect(adapter.requests).toHaveLength(2)
     expect(steer.mock.calls[0]![0]).toMatchObject({
       role: 'user',
-      source: { kind: 'plugin', plugin: ADVISOR_PLUGIN_ID },
+      source: { kind: 'advisor' },
     })
   })
 
@@ -967,7 +966,7 @@ describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix w
     expect(delta).not.toContain('first')
     expect(steer.mock.calls[0]![0]).toMatchObject({
       role: 'user',
-      source: { kind: 'plugin', plugin: ADVISOR_PLUGIN_ID },
+      source: { kind: 'advisor' },
     })
   })
 })
@@ -1017,8 +1016,7 @@ describe('integration — root-llm resolution from an isolated child scope (qc1 
     expect(adapter.requests[0]!.provider).toBe('stub')
     expect(adapter.requests[0]!.model).toBe('stub-model')
     const message = steer.mock.calls[0]![0] as UserMessage
-    expect(message.source.kind).toBe('plugin')
-    expect(message.source).toMatchObject({ plugin: ADVISOR_PLUGIN_ID })
+    expect(message.source.kind).toBe('advisor')
     expect(message.content).toEqual([{ type: 'text', text: '[advisor:concern] root adapter reached' }])
   })
 })

@@ -22,13 +22,13 @@
  *   countdown and the KD-5 reset.
  *
  * Message shape (spec §6): a user-role message via `createUserMessage` whose
- * source is the classified first-party `plugin` arm
- * (`kind: 'plugin'`, `plugin: 'advisor'`; src/kinds.ts) and whose content is
- * self-describing `[advisor:{severity}] {note}` — the only cue the primary
- * model gets about how to treat it ("weigh, don't blindly obey" spirit). The
- * plugin's identity rides `source.plugin`, never `source.kind`: `kind` is
- * frozen per session-format generation, so a custom value there would make the
- * whole log unreadable to a future format edge.
+ * source is this plugin's own producer kind (`kind: 'advisor'`, pinned to the
+ * `notice` form; src/kinds.ts) and whose content is self-describing
+ * `[advisor:{severity}] {note}` — the only cue the primary model gets about
+ * how to treat it ("weigh, don't blindly obey" spirit). The kind is claimed by
+ * declaration-merging `MessageSourceMap` in dsh-llm, and the V3→V4 format edge
+ * preserves direct source kinds, so this identity is cross-generation-safe —
+ * the property the retired `plugin` arm used to be borrowed for.
  *
  * Delivery is synchronous and fire-and-forget; the runtime path (T4 F1) is
  * what contains a throwing `inject`/`steer` — this module lets agent-method
@@ -39,7 +39,6 @@
 
 import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
-import { ADVISOR_PLUGIN_ID } from './kinds.js'
 import type { AdvisorSource } from './kinds.js'
 import type { AdviceNote, AdviceSeverity } from './advisor-runtime.js'
 
@@ -77,8 +76,8 @@ export interface AdvisorDeliveryOptions {
 
 /**
  * Build the advisor message for one note (spec §6): a user-role message whose
- * source carries this plugin's identity on the `plugin` arm and whose content
- * is self-describing `[advisor:{severity}] {note}`.
+ * source carries this plugin's own producer kind and whose content is
+ * self-describing `[advisor:{severity}] {note}`.
  *
  * Bounds (qc3 F-2 / qc2 S-1): the note itself is already capped at
  * `ADVISOR_NOTE_MAX_CHARS` by extraction; the collapsed-row summary is
@@ -94,8 +93,7 @@ export function buildAdvisorMessage(note: AdviceNote): UserMessage {
   const text = `[advisor:${note.severity}] ${note.note}`
   const summary = `[${text.slice('[advisor:'.length)}`
   const source: AdvisorSource = {
-    kind: 'plugin',
-    plugin: ADVISOR_PLUGIN_ID,
+    kind: 'advisor',
     // n4 (user direction): declare the notice form + a collapsed-row summary so
     // the web shell's ContextInjectionRow shows "… · advisor · [nit] <note>"
     // instead of a bare producer label. The severity tag is part of the summary

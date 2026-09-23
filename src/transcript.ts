@@ -143,15 +143,15 @@ function fingerprintOf(events: readonly SessionEvent[], length: number): string 
   return hash.toString(36)
 }
 
-/** Visible text of one content block (tool-result content is unwrapped). */
+/** Visible text of one content block (V4 ContentBlock has no tool-result arm —
+ * tool results are first-class tool-role messages now). */
 function blockText(block: ContentBlock): string {
   switch (block.type) {
     case 'text':
       return block.text
-    case 'tool-result':
-      return block.content.map(blockText).join('\n')
     default:
-      // reasoning / tool-call / unknown extensions carry no rendered text here.
+      // reasoning / tool-call / tool-addition / tool-removal / unknown
+      // extensions carry no rendered text here.
       return ''
   }
 }
@@ -162,11 +162,18 @@ function blockText(block: ContentBlock): string {
  * tool results tagged `[tool result]`, reasoning excluded (MVP).
  */
 function renderMessage(message: Message): string {
+  // V4: tool results are first-class `role: 'tool'` messages (the V3 shape
+  // folded them into user-role messages carrying a `tool-result` block — that
+  // arm no longer exists). Keep the `[tool result]` prefix the reviewer model
+  // is prompt-shaped around, and tag a failed invocation so the delta carries
+  // the failure signal (`isError` is the message-level flag in V4).
+  if (message.role === 'tool') {
+    const value = message.content.map(blockText).filter((part) => part.length > 0).join('\n')
+    const prefix = message.isError === true ? '**user**: [tool result] (failed)' : '**user**: [tool result]'
+    return value.length > 0 ? `${prefix} ${value}` : `${prefix} <empty>`
+  }
   if (message.role === 'user') {
     const value = message.content.map(blockText).filter((part) => part.length > 0).join('\n')
-    if (message.source.kind === 'tool') {
-      return value.length > 0 ? `**user**: [tool result] ${value}` : '**user**: [tool result] <empty>'
-    }
     return value.length > 0 ? `**user**: ${value}` : '**user**: <empty>'
   }
   const parts: string[] = []
@@ -450,15 +457,17 @@ export function isReviewableTurnEnd(event: SessionEvent): boolean {
  * `source.kind` is the ONLY discriminator, and every synthetic producer commits
  * a non-`user` kind, so nothing injected can self-trigger the review gate:
  *
- * - the advisor's OWN inject/steer deliveries — the `plugin` arm tagged
- *   `plugin: 'advisor'`. That arm is shared with the other plugin-owned
- *   context producers (the time-context / tmux-context / agent-loop `snapshot`
- *   forms, model-selection notices, tools-ptc, user-approval), which
- *   `source.plugin` separates and `source.kind` does not;
- * - workspace-context sync (AGENTS.md / CLAUDE.md), which does NOT ride the
- *   `plugin` arm: `@deepseek-ai/dsh-agent-instructions` commits its own
- *   first-party `kind: 'agent-instructions'` (`form: 'instructions'`);
- * - tool-result splicing (`kind: 'tool'`);
+ * - the advisor's OWN inject/steer deliveries — the producer-owned `advisor`
+ *   kind (`form: 'notice'`);
+ * - the other named producer kinds: model-selection notices, the
+ *   time-context / tmux-context snapshots, tools-ptc (`ptc-mode`),
+ *   user-approval, tool-registry availability rows — each a `kind` of its own
+ *   in `MessageSourceMap`, which is what separates them now that no shared
+ *   `plugin` arm exists;
+ * - workspace-context sync (AGENTS.md / CLAUDE.md), whose producer commits its
+ *   own first-party `kind: 'agent-instructions'` (`form: 'instructions'`);
+ * - tool results, which in V4 are `role: 'tool'` messages (`kind: 'tool'`),
+ *   never user-role;
  * - claim/clear splices (empty `inserted`).
  */
 export function isHumanInputEvent(event: SessionEvent): boolean {
