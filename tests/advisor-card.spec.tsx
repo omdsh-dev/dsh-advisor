@@ -120,7 +120,7 @@ const ZOMBIE: LlmConfigurableProvider = {
 
 function deepseekNs(): SettingsNamespaceView {
   return {
-    ns: 'llm-deepseek', schema: {}, applies: 'live', secrets: [], revision: 0,
+    ns: 'llm-deepseek', autoGenerate: true, schema: {}, applies: 'live', secrets: [], revision: 0,
     value: {
       apiKeyEnv: 'DEEPSEEK_API_KEY',
       models: [{ id: 'ds-a', name: 'DeepSeek A' }, { id: 'ds-b', name: 'DeepSeek B' }],
@@ -130,7 +130,7 @@ function deepseekNs(): SettingsNamespaceView {
 
 function piAiNs(): SettingsNamespaceView {
   return {
-    ns: 'llm-pi-ai', schema: {}, applies: 'live', secrets: [], revision: 0,
+    ns: 'llm-pi-ai', autoGenerate: true, schema: {}, applies: 'live', secrets: [], revision: 0,
     value: { providers: { openai: { apiKeyEnv: 'OPENAI_API_KEY' } } },
   }
 }

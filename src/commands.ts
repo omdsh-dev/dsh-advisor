@@ -157,10 +157,10 @@ export function advisorStatusText(status: AdvisorSessionStatus): string {
 /**
  * Composed-config surface consumed by `/advisor config`. **Session-less by
  * design**: the wiring builds it from the same resolved config the web card
- * reads (`/api/advisor/get` — schema defaults → plugin-row base → settings
- * user layer, with the hard gate applied), so a per-session `/advisor off`
- * override can never misreport settings.yaml. Runtime state stays owned by
- * the status surface (`AdvisorSessionStatus`); config and status are separate.
+ * reads (`/api/advisor/get` — the live entry config, with the hard gate
+ * applied), so a per-session `/advisor off` override can never misreport the
+ * persisted config. Runtime state stays owned by the status surface
+ * (`AdvisorSessionStatus`); config and status are separate.
  */
 export interface AdvisorComposedConfig {
   /** Config-level composed switch — NOT the per-session override. */
@@ -189,8 +189,7 @@ export interface AdvisorComposedConfig {
    * dsh-advisor-tui-settings-n9 T2). An environment signal, never derived
    * from the per-session override; it does not change the resolved-config
    * read. When true the hint lists the TUI `/settings` screen as a write
-   * path; when false the n8 hint (profile patch layer + settings.yaml) is
-   * shown unchanged.
+   * path; when false the profile patch layer hint is shown unchanged.
    */
   readonly tuiSettingsAvailable: boolean
 }
@@ -213,9 +212,9 @@ export function summarizeSystemPrompt(prompt: string): string {
  * Render the composed config surface. Mirrors the status renderer's minimal
  * line style; the edit hint points at the operator edit paths — when the TUI
  * `tuiSettingsSections` seam is mounted (dsh-tui ≥ v0.8.0) the TUI `/settings`
- * Advisor section is listed FIRST, followed by the profile patch layer + the
- * shared `$DSH_HOME/settings.yaml` `advisor:` section the web card writes;
- * otherwise only the two file paths (n8 text, byte-identical).
+ * Advisor section is listed FIRST, followed by the profile patch layer
+ * (`cordis.patch.yml`, whose `advisor` plugin row carries the volatile live
+ * fields); otherwise only the file path.
  */
 export function advisorConfigText(config: AdvisorComposedConfig): string {
   const lines: string[] = []
@@ -244,8 +243,8 @@ export function advisorConfigText(config: AdvisorComposedConfig): string {
   // absent-seam text is the n8 line, byte-identical.
   lines.push(
     config.tuiSettingsAvailable
-      ? 'Edit: TUI /settings screen (Advisor section, dsh-tui ≥ v0.8.0) or ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)'
-      : 'Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)',
+      ? 'Edit: TUI /settings screen (Advisor section, dsh-tui ≥ v0.8.0) or ~/.dsh/profiles/<profile>/cordis.patch.yml (advisor plugin row)'
+      : 'Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (advisor plugin row)',
   )
   return lines.join('\n')
 }

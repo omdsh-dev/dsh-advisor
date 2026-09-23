@@ -31,11 +31,11 @@
  * (`ctx.get('tuiSettingsSections') !== undefined`), so the hint names the TUI
  * `/settings` Advisor section as a write path exactly while the seam is
  * mounted; the readback itself stays session-less and read-only.
- * Settings (plan dsh-advisor-settings-n2): the plugin-row config is the
- * composition base of the `advisor` settings namespace (`src/settings.ts`),
- * read live through the bridge source; committed settings edits re-apply
- * derived state (immuneTurns / maxDeltaMessages / per-session runtimes)
- * without a restart.
+ * Settings (plan dsh-advisor-settings-n2): the plugin-row entry config's six
+ * live fields are schema-volatile (`src/config.ts`), read live through the
+ * bridge source (`src/settings.ts`); committed volatile edits (Loader
+ * `loader/volatile-update`) re-apply derived state (immuneTurns /
+ * maxDeltaMessages / per-session runtimes) without a restart.
  * Config gateway (plan dsh-advisor-settings-gateway-n5): `apply` also
  * registers the host-side `AdvisorConfigGateway` (`src/gateway.ts`) — the
  * `/api/advisor/get` + `/api/advisor/set` endpoints (explicit
@@ -81,15 +81,13 @@ export type { AdvisorConfig, ResolvedAdvisorConfig } from './config.js'
  * fibers (observed: 3 active); with the global session/event subscription every
  * instance would observe every session and N×-review/N×-call per round. The
  * FIRST apply to claim the reviewer role wires the observer/runtime/delivery
- * and the /advisor commands; later instances attempt the settings registration
- * only (qc1 W-5: it is NOT idempotent — dsh-settings register throws on a
- * duplicate; installAdvisorSettings dedupes it and falls back to the entry
- * source, so the first registration owns the live namespace) and stay inert
- * otherwise. The claim is taken only AFTER the construction-time config gate
- * (qc1 W-4: a rejected first row never leaves the flag claimed) and is
- * released when the claiming fiber is disposed, so a later re-apply/re-mount
- * can take over. The flag rides globalThis so it survives even module-copy
- * divergence. */
+ * and the /advisor commands; later instances keep only their settings bridge
+ * (each fiber's bridge listens on its own fiber's `loader/volatile-update` —
+ * the owning-filter keeps them independent) and stay inert otherwise. The
+ * claim is taken only AFTER the construction-time config gate (qc1 W-4: a
+ * rejected first row never leaves the flag claimed) and is released when the
+ * claiming fiber is disposed, so a later re-apply/re-mount can take over. The
+ * flag rides globalThis so it survives even module-copy divergence. */
 const REVIEWER_KEY = '__dshAdvisorReviewer__'
 function claimReviewer(): boolean {
   const g = globalThis as Record<string, unknown>
@@ -103,11 +101,11 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // (spec §5.2). Unknown keys / malformed config throw here, rejecting the
   // plugin row at load; the gate resolves to disabled-with-reason instead.
   //
-  // T1-settings (plan dsh-advisor-settings-n2): the plugin-row config is the
-  // composition BASE of the `advisor` settings namespace. The runtime reads
-  // the LIVE composed value through the bridge source (schema defaults →
-  // base → settings user layer); with no settings service the source is
-  // exactly `config` — behavior identical to today. The hard gate is applied
+  // T1-settings (plan dsh-advisor-settings-n2): the plugin-row entry config's
+  // six live fields are schema-volatile (0.1.7-rc.1). The runtime reads the
+  // LIVE values through the bridge source (per-field volatile reference
+  // unwrap); the Loader commits edits into those references without a remount
+  // and announces them via `loader/volatile-update`. The hard gate is applied
   // to every read: `resolveAdvisorConfig` stays the SSOT for the
   // disabled-with-reason resolution.
   const bridge = installAdvisorSettings(ctx, config)
@@ -152,18 +150,18 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   })
   const sourceConfig = (): AdvisorConfig => bridge.source()
   const resolved = (): ResolvedAdvisorConfig => resolveAdvisorConfig(sourceConfig())
-  // qc2 W-1 containment: a settings user layer the resolver rejects (e.g. an
-  // unknown key survives the non-strict settings schema) must never wedge the
-  // live hot path — every read that can run inside an event handler goes
-  // through the safe wrappers, which catch resolver throws and return
-  // disabled-with-reason carrying the message, so gate semantics hold (no
-  // model call can start) and handlers stay functional. The LOAD-TIME
+  // qc2 W-1 containment: an entry config the resolver rejects (e.g. an
+  // unknown key that survived the non-strict schemastery object merge) must
+  // never wedge the live hot path — every read that can run inside an event
+  // handler goes through the safe wrappers, which catch resolver throws and
+  // return disabled-with-reason carrying the message, so gate semantics hold
+  // (no model call can start) and handlers stay functional. The LOAD-TIME
   // plugin-row throw contract is unchanged: construction-time reads below
   // (delivery/observer latches) still use the throwing `resolved()`, so a bad
   // entry rejects the plugin row at load (config.test.ts ⑤).
   const safeFallback = (reason: string): ResolvedAdvisorConfig => {
     // S1 (gateway readConfig parity): when the raw source is still readable,
-    // seed the scalar latches from it — an invalid user layer only drops the
+    // seed the scalar latches from it — an invalid config only drops the
     // offending keys, so /advisor config (and /advisor status) never
     // misreport immuneTurns / maxDeltaMessages / systemPrompt vs the web
     // card's /api/advisor/get readback.
@@ -205,12 +203,14 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // commands start/stop per-session runtimes WITHOUT touching the persisted
   // config (spec §4 mapping — omp `/advisor` semantics). Ephemeral: entries
   // are cleared on `agent/disposed` / `session/disposed` below. Seeded with
-  // the RAW config switch (not the post-gate `resolved.enabled`): a config-
-  // enabled-but-gate-blocked session (enabled without provider/model) then
-  // re-derives the disabled-with-reason through the resolver, so `/advisor
-  // status` shows the reason (spec §5.2; qc3 I-1) — the gate itself still
-  // blocks every runtime (the resolver is the SSOT for the gate).
-  const overrides = new AdvisorSessionOverrides(config.enabled)
+  // the LIVE config switch read through the bridge (the raw `config` fields
+  // are volatile references on a Loader composition — an unwrapped snapshot
+  // shares the source with `safeResolved`): a config-enabled-but-gate-blocked
+  // session (enabled without provider/model) then re-derives the
+  // disabled-with-reason through the resolver, so `/advisor status` shows the
+  // reason (spec §5.2; qc3 I-1) — the gate itself still blocks every runtime
+  // (the resolver is the SSOT for the gate).
+  const overrides = new AdvisorSessionOverrides(bridge.source().enabled)
   const effectiveEnabled = (sessionId: string): boolean => overrides.effective(sessionId)
   // Live-path alias: every consumer reads the effective config through the
   // safe wrapper (qc2 W-1 — a throwing resolver must not break the
@@ -313,9 +313,10 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // config and can throw on a rejected row), so a first fiber whose config
   // fails the gate never leaves the flag claimed (qc1 W-4). Non-reviewer
   // instances stop here — observer/runtime/delivery and the /advisor commands
-  // are wired only by the single claimed reviewer. The settings registration
-  // (installAdvisorSettings above) already ran deduped (qc1 W-5): the first
-  // registration owns the live namespace on every composition.
+  // are wired only by the single claimed reviewer. Their own settings bridge
+  // (installAdvisorSettings above) stays live: it is per-fiber by
+  // construction, nothing to dedupe (qc1 W-5's registration is gone with the
+  // 0.1.7-rc.1 namespace model).
   const reviewer = claimReviewer()
   if (!reviewer) {
     ctx.logger('advisor').debug('non-reviewer instance — observer/runtime/commands skipped (single-reviewer guard)')
@@ -419,17 +420,18 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // T1-settings live re-apply: construction-time latches (immuneTurns on the
   // delivery, maxDeltaMessages on the observer, systemPrompt + provider/model
   // on each per-session runtime) are re-derived from the NEW source on every
-  // committed settings change and re-applied — delivery/observer update in
-  // place, per-session runtimes rebuild only when their runtime-affecting
-  // signature actually changed (qc3 W-1 / qc1 W-2: an immuneTurns/
-  // maxDeltaMessages-only edit must not abort in-flight advisor calls or drop
-  // backlogs). The S4 gate is re-applied by the resolver on every read, so a
-  // settings edit can never start a gated model call (SSOT unchanged); the
-  // config-level fallback switch follows the live source so new sessions pick
-  // up a Settings-page `enabled` edit immediately. A settings user layer the
-  // resolver rejects (qc2 W-1 — unknown key) stops the advisor without
-  // wedging the re-apply path, and the last-good latches stay until the
-  // config is repaired.
+  // committed volatile edit — the Loader's `loader/volatile-update` event,
+  // dispatched to this fiber only after the committed values are readable —
+  // and re-applied: delivery/observer update in place, per-session runtimes
+  // rebuild only when their runtime-affecting signature actually changed
+  // (qc3 W-1 / qc1 W-2: an immuneTurns/maxDeltaMessages-only edit must not
+  // abort in-flight advisor calls or drop backlogs). The S4 gate is
+  // re-applied by the resolver on every read, so a config edit can never
+  // start a gated model call (SSOT unchanged); the config-level fallback
+  // switch follows the live source so new sessions pick up an enabled edit
+  // immediately. An entry config the resolver rejects (qc2 W-1 — unknown
+  // key) stops the advisor without wedging the re-apply path, and the
+  // last-good latches stay until the config is repaired.
   bridge.onChange(() => {
     let next: ResolvedAdvisorConfig
     try {
@@ -519,16 +521,16 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       }
     },
     // T2 (plan dsh-advisor-tui-client-n8): the composed-config readback.
-    // Session-less BY DESIGN — reads `safeResolved()` (schema defaults →
-    // plugin-row base → settings user layer, with the hard gate applied),
-    // the SAME bridge source the web card reads through `resolveAdvisorConfig`
-    // (`/api/advisor/get` has no session either). NEVER `effectiveConfig`/
-    // `safeEffective` here: those bake the per-session `/advisor` override
-    // into `enabled`, and a `/advisor off` session toggle must never make
-    // the settings readback misreport settings.yaml. Runtime state stays
-    // owned by `status`; this read reports config only. Every field comes
-    // from that one resolved value; the systemPrompt summary is the first
-    // line (≤ 80 chars) of `resolved.systemPrompt`, '' → unset.
+    // Session-less BY DESIGN — reads `safeResolved()` (the live entry config
+    // with the hard gate applied), the SAME bridge source the web card reads
+    // through `resolveAdvisorConfig` (`/api/advisor/get` has no session
+    // either). NEVER `effectiveConfig`/`safeEffective` here: those bake the
+    // per-session `/advisor` override into `enabled`, and a `/advisor off`
+    // session toggle must never make the config readback misreport the
+    // persisted config. Runtime state stays owned by `status`; this read
+    // reports config only. Every field comes from that one resolved value;
+    // the systemPrompt summary is the first line (≤ 80 chars) of
+    // `resolved.systemPrompt`, '' → unset.
     getConfig() {
       const resolved = safeResolved()
       return {
