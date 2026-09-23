@@ -1,69 +1,67 @@
 /**
- * T1 (plan dsh-advisor-settings-n2) — host-side `advisor` settings namespace
- * + live source wiring.
+ * T1 (plan dsh-advisor-settings-n2) — live source wiring over the plugin
+ * entry's volatile config fields.
  *
- * The plugin-row config (the `entry` passed to the plugin's `apply`) is the
- * composition BASE of the `advisor` settings namespace: when a dsh settings
- * service is mounted, its user layer is layered on top (schema defaults →
- * base → user layer) and the runtime reads the live resolved value through
- * the bridge's `source` thunk — the same source-thunk pattern as dsh's
- * `agent-default-model`. Without a settings service the conditional
- * `ctx.inject(['settings'], ...)` child never activates and the source is
- * exactly the entry: behavior identical to today.
+ * dsh 0.1.7-rc.1 retired the settings user layer (`settings.yaml` is imported
+ * into the profile and renamed `.imported`; dsh-settings became the form
+ * service `SettingsForms` over profile entries). A plugin's editable config is
+ * now its OWN entry config: the fields the schema declares `.volatile()` are
+ * committed by the cordis Loader into the running fiber's references WITHOUT a
+ * remount (`src/config.ts` marks all six live fields volatile).
  *
- * Registration rides the dsh 0.1.2-alpha.2 `SettingsProvider.installSection`
- * service method (plan dsh-advisor-alpha2-install-section-n10): the library
- * owns the register call, the source-thunk swap, the `onChange` timing, and
- * the detach fallback (source back to the entry + `onChange`), including the
- * unload guard — nothing upstream is mirrored here anymore.
+ * This module is the read side of that pipeline. `apply` receives the entry
+ * config with each volatile field as a `{ get() }` reference; the bridge
+ * snapshots it through `unwrapAdvisorConfig` (per-field `.get()`, plain
+ * values tolerated), so `source()` always returns the RAW plain-valued config
+ * the hard gate reads. `onChange` rides the Loader's `loader/volatile-update`
+ * event — emitted to the OWNING fiber only, after the committed values are
+ * readable through the references — so every committed edit re-applies derived
+ * state exactly when the new values are visible.
  *
- * The hard gate is untouched: the source returns the RAW composed config and
- * every consumer passes it through `resolveAdvisorConfig` — the SSOT for the
+ * There is no registration step anymore: with ≥ 1 volatile field the entry
+ * appears in `settings.describe()` automatically (`autoGenerate` defaults to
+ * true), so the old `ctx.inject(['settings'])` registration child, its
+ * `installSection` contract, and the multi-fiber 'already registered' dedupe
+ * are all gone — every fiber builds its own bridge, and the owning-fiber event
+ * filter keeps each bridge pointed at its own entry's edits.
+ *
+ * The hard gate is untouched: the source returns the RAW config and every
+ * consumer passes it through `resolveAdvisorConfig` — the SSOT for the
  * enabled-without-pair disabled-with-reason resolution (no model call).
  *
- * The namespace does NOT join the apiproxy configuration-client boundary on
- * current upstream dsh builds: the host's `exposedNamespaces()` unions only
- * model-provider namespaces plus its own product namespaces (locale /
- * permission / ui-conversation / ui-theme / ui-onboarding / agent-presets) —
- * there is no registration-level opt-in in upstream dsh (verified against the
- * pristine 20da39e snapshot; `SettingsRegisterOptions` has no
- * `exposeToWebClients` key, and alpha.2's `installSection` takes no
- * registration options at all). The advisor namespace is therefore always
- * absent from `settings.describe` on the web configuration boundary — but the
- * web card reaches the config through the TypertRemoteService channel instead
- * (plan dsh-advisor-settings-gateway-n5: `AdvisorConfigGateway` claims
- * `/api/advisor/get` + `/api/advisor/set`, and the client calls
- * `connection.rpc.call('/api', …)`; the in-process `ctx.settings.update`
- * behind `set` carries no exposed-namespace check — the allowlist gate exists
- * only in the apiproxy wire layer). The unexposed-namespace notice is now
- * only the KD-G5 fallback (gateway unreachable). No host patch is applied or
- * required for the plugin to function — the runtime reads the entry config
- * exactly as before.
+ * The write side rides the same entry id: the gateway (`src/gateway.ts`)
+ * writes through `settings.update(ADVISOR_SETTINGS_NAMESPACE, ...)` — the
+ * entry id IS the bundle row id `advisor` (`cordis.patch.yml`) — which lands
+ * in the profile via the config editor, commits through the Loader, and closes
+ * the loop back into this bridge's `onChange`.
  *
  * @module dsh-advisor/settings
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
-import { Config } from './config.js'
-import type { AdvisorConfig } from './config.js'
+import { unwrapAdvisorConfig } from './config.js'
+import type { AdvisorConfig, VolatileAdvisorConfig } from './config.js'
 
-/** The `advisor` settings namespace (registered when a settings service exists). */
-export const ADVISOR_SETTINGS_NAMESPACE = 'advisor' as SettingsNamespace
+/**
+ * The advisor settings entry id — the bundle row id (`cordis.patch.yml:5`),
+ * which is also the `settings.update` / `settings.describe` key and the
+ * gateway service key. (Pre-0.1.7 this constant was a registered settings
+ * namespace; it now names the plugin's own profile entry.)
+ */
+export const ADVISOR_SETTINGS_NAMESPACE = 'advisor'
 
 /**
  * The live configuration source for the runtime.
  *
- * `source()` returns the RAW composed config (schema defaults → plugin-row
- * base → settings user layer); consumers pass it through
+ * `source()` returns the RAW entry config snapshot (volatile references
+ * unwrapped, `null` normalized to `undefined`); consumers pass it through
  * `resolveAdvisorConfig` — the hard gate stays the SSOT. `onChange` registers
- * a callback that re-applies derived state whenever the composed value changes
- * (attach, committed change, or detach back to the entry). The contract is
- * `(cb) => void` per the plan: the listener set is owned by the consumer's
- * plugin closure for its lifetime, and the detach path is owned by
- * `installSection` itself (its detach effect calls `setSource(entry)` +
- * `onChange` when the settings service goes away), so no per-listener
- * disposer is returned (qc1 S-3 — a discarded disposer would invite misuse).
+ * a callback that re-applies derived state whenever the Loader commits a
+ * volatile edit to this entry (`loader/volatile-update`, owning-fiber
+ * filtered). The contract is `(cb) => void` per the plan: the listener set is
+ * owned by the consumer's plugin closure for its lifetime, and the event
+ * subscription lives and dies with the fiber, so no per-listener disposer is
+ * returned (qc1 S-3 — a discarded disposer would invite misuse).
  */
 export interface AdvisorSettingsBridge {
   source(): AdvisorConfig
@@ -71,66 +69,38 @@ export interface AdvisorSettingsBridge {
 }
 
 /**
- * Install the `advisor` settings namespace and wire the live source.
- *
- * Delegates to the dsh 0.1.2-alpha.2 `SettingsProvider.installSection`
- * contract (the dsh `agent-default-model` pattern, now a library service
- * method): the registration rides a conditional
- * `ctx.inject(['settings'], ...)` child, so with no settings service the
- * source stays the entry config. The library calls `setSource` with the
- * authoritative thunk (the settings scope's resolved value while attached,
- * the entry again at detach) and fires `onChange` at attach, on committed
- * changes, and at detach — the same timing this module used to mirror by
- * hand, now owned by `lib/index.js` (`installSection`), unload guard
- * included. The namespace carries NO `exposeToWebClients` opt-in — upstream
- * dsh (pristine 20da39e, and alpha.2's installed types alike) has no such
- * registration-level option (`installSection` takes no options;
- * `SettingsRegisterOptions` is `base` / effect-timing / `validate` only), so
- * the advisor namespace stays off the apiproxy web configuration boundary on
- * every current dsh build. Web clients reach the config through the
- * TypertRemoteService channel instead (plan dsh-advisor-settings-gateway-n5 —
- * `/api/advisor/get` + `/api/advisor/set`); the in-process settings service
- * is the write target behind the gateway's `set`. (A previous iteration
- * believed the opt-in existed upstream and declared it here; that conclusion
- * was a circular verification against a locally-modified staging tree — the
- * option does not exist in upstream types and has been removed.)
- *
- * qc1 W-5 (multi-fiber dedupe): the host composes several dsh-advisor fibers,
- * and this runs on EVERY instance — but `Settings.register` fails loud on a
- * duplicate namespace (`settings namespace "advisor" is already registered`).
- * With alpha.2, `installSection` executes SYNCHRONOUSLY inside the inject
- * child, so the try/catch below wraps the call directly and catches the
- * duplicate error (under the old free-function contract the registration
- * error surfaced asynchronously and an outer try/catch could not see it).
- * A deduped instance logs (debug) and keeps the entry-source fallback: its
- * `source` thunk is only ever swapped by a SUCCESSFUL registration's
- * setSource hook, so the ALREADY-REGISTERED instance owns the live namespace.
- * The reviewer's settings wiring (the `bridge.onChange` live re-apply in
- * `index.ts`) is the concern — it only re-applies when the reviewer's own
- * bridge attached to the live scope; in practice the reviewer is the first
- * apply, whose inject child registers first.
+ * Structural mirror of the cordis-plugin-loader event declaration
+ * (`loader/volatile-update`) — the loader is not (and must not become) a peer
+ * dependency, so the subscription goes through a local structural cast, the
+ * same pattern as the `tuiSettingsSections` seam. Drift window: a host rename
+ * of the event would silently stop delivering updates (the entry config would
+ * freeze at its load-time values); re-verify against the loader types when
+ * bumping the dsh line.
  */
-export function installAdvisorSettings(ctx: Context, entry: AdvisorConfig): AdvisorSettingsBridge {
+interface VolatileUpdateContext {
+  on(event: 'loader/volatile-update', listener: (paths: readonly (readonly string[])[]) => void): unknown
+}
+
+/**
+ * Wire the live source over the entry config's volatile references.
+ *
+ * `entry` is the config object `apply` received — on a Loader composition the
+ * six schema-declared fields are `{ get() }` references; plain-object entries
+ * (integration harnesses) work identically. The bridge holds the ENTRY, not a
+ * snapshot, so every `source()` call reads the references' CURRENT values and
+ * the returned config is live from the first read. `onChange` fires on every
+ * `loader/volatile-update` dispatched to this fiber — the Loader emits it only
+ * after the new values are committed, so a listener reading `source()` sees
+ * the committed state (no follow-up read needed).
+ */
+export function installAdvisorSettings(ctx: Context, entry: VolatileAdvisorConfig): AdvisorSettingsBridge {
   const listeners = new Set<() => void>()
-  let source = (): AdvisorConfig => entry
   const notify = (): void => {
     for (const listener of [...listeners]) listener()
   }
-  ctx.inject(['settings'], (sctx) => {
-    try {
-      sctx.settings.installSection(ctx, ADVISOR_SETTINGS_NAMESPACE, Config, entry, {
-        setSource: (current): void => {
-          source = current
-        },
-        onChange: notify,
-      })
-    } catch (error) {
-      if (!(error instanceof Error) || !error.message.includes('already registered')) throw error
-      ctx.logger('advisor').debug('settings namespace already registered — entry-source fallback (multi-fiber dedupe)')
-    }
-  })
+  ;(ctx as unknown as VolatileUpdateContext).on('loader/volatile-update', () => notify())
   return {
-    source: (): AdvisorConfig => source(),
+    source: (): AdvisorConfig => unwrapAdvisorConfig(entry),
     onChange: (callback: () => void): void => {
       listeners.add(callback)
     },

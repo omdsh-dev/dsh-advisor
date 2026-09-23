@@ -11,23 +11,24 @@
  * exactly one plain-object `args` field whose keys are the method parameter
  * names (`get()` → `{ args: {} }`; `set(patch)` → `{ args: { patch } }`).
  *
- * Data: `get` reads the `AdvisorSettingsBridge` source — the same live
- * composed config the runtime reads (schema defaults → plugin-row base →
- * settings user layer), resolved through the `resolveAdvisorConfig` hard gate
- * (the SSOT for enabled-without-pair disabled-with-reason). `set` validates
- * the patch against the `Config` schema first (unknown-key rejection
- * unchanged — the settings service itself is non-strict and would accept the
- * unknown key), then writes the USER layer in-process via
- * `ctx.settings.update` (no exposed-namespace gate on the in-process write —
- * the wire-level `exposedNamespaces()` check only guards the apiproxy path),
- * and returns the new composed value.
+ * Data: `get` reads the `AdvisorSettingsBridge` source — the same live entry
+ * config the runtime reads (volatile references unwrapped), resolved through
+ * the `resolveAdvisorConfig` hard gate (the SSOT for enabled-without-pair
+ * disabled-with-reason). `set` validates the patch against the `Config`
+ * schema first (unknown-key rejection unchanged — the settings service itself
+ * is non-strict and would accept the unknown key), then writes the advisor
+ * ENTRY config in-process via `settings.update(ADVISOR_SETTINGS_NAMESPACE, ...)`
+ * (dsh 0.1.7-rc.1: the namespace key IS the profile entry id — the bundle row
+ * id `advisor` — and the write lands through the config editor into the
+ * Loader, which commits the volatile fields and emits `loader/volatile-update`,
+ * re-applying the runtime through the bridge with no restart), and returns
+ * the new composed value.
  *
  * The settings service is OPTIONAL (no settings service → the bridge source
  * stays the entry, `get` still works; `set` fails with a clear error — KD-G5
  * fallback). The gateway captures the service through a conditional
- * `ctx.inject(['settings'], ...)` child (the same activation pattern as
- * `installAdvisorSettings`), because `ctx.settings` is only resolvable from a
- * fiber that declares it.
+ * `ctx.inject(['settings'], ...)` child, because `ctx.settings` is only
+ * resolvable from a fiber that declares it.
  *
  * The returned config is normalized to the typertGateway JSON wire boundary:
  * absent keys (provider/model/disabledReason) are OMITTED, never
@@ -38,7 +39,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { SettingsProvider } from '@deepseek-ai/dsh-settings'
+import type SettingsForms from '@deepseek-ai/dsh-settings'
 import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
 import { RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { ADVISOR_SETTINGS_NAMESPACE } from './settings.js'
@@ -69,7 +70,7 @@ export type AdvisorConfigPatch = Partial<AdvisorConfig>
 export class AdvisorConfigGateway extends TypertRemoteService {
   private readonly bridge: AdvisorSettingsBridge
   /** The live settings service once the optional inject child activates. */
-  private settings: SettingsProvider | undefined
+  private settings: SettingsForms | undefined
 
   /**
    * @param ctx - owning context (the plugin fiber's ctx inside `apply`).
@@ -103,8 +104,9 @@ export class AdvisorConfigGateway extends TypertRemoteService {
   }
 
   /**
-   * Validate a config patch and write it to the settings USER layer (live —
-   * the runtime re-applies through the bridge `onChange`; no restart needed).
+   * Validate a config patch and write it to the advisor ENTRY config (live —
+   * the Loader commits the volatile fields and the runtime re-applies through
+   * the bridge `onChange`; no restart needed).
    * @param patch - any subset of the config keys; unknown keys are rejected
    *   by the `Config` schema before anything is written.
    * @returns the NEW composed config after the write.
@@ -128,26 +130,32 @@ export class AdvisorConfigGateway extends TypertRemoteService {
     }
     // Wire normalization (QC tri M-2): JSON cannot carry undefined, so a
     // null-valued key is a third-party client's way of saying "absent" — the
-    // resolver already treats null as missing on read, but the raw user layer
-    // must not store it. Drop null values before the write (an all-null patch
-    // is a no-op, like the empty patch above).
+    // resolver already treats null as missing on read, but the raw entry
+    // config must not store it. Drop null values before the write (an
+    // all-null patch is a no-op, like the empty patch above).
     const normalized = Object.fromEntries(
       Object.entries(patch).filter(([, value]) => value !== null),
     )
     if (Object.keys(normalized).length === 0) return { config: this.readConfig() }
+    // The `ns` argument is the PROFILE ENTRY id — the advisor bundle row id
+    // (`cordis.patch.yml`), not a registered namespace (0.1.7-rc.1 has no
+    // registration; entries with volatile fields surface automatically). The
+    // write goes through the config editor into the Loader, which commits the
+    // volatile references and emits `loader/volatile-update` — the bridge
+    // onChange re-apply closes the loop before this promise settles.
     await settings.update(ADVISOR_SETTINGS_NAMESPACE, normalized)
     return { config: this.readConfig() }
   }
 
   /**
-   * Resolve the live composed config through the hard gate. Containment
-   * (qc2 W-1): a user layer the resolver rejects (e.g. an unknown key that
-   * survived the non-strict settings schema) resolves to disabled-with-reason
-   * carrying the message — the gateway never fails the RPC on a bad user
-   * layer, and gate semantics hold (no model call can start). S1: when the
-   * raw source is still readable, the fallback seeds its scalar latches
-   * (systemPrompt / immuneTurns / maxDeltaMessages) instead of hardcoded
-   * defaults, so an invalid layer only drops the offending keys.
+   * Resolve the live entry config through the hard gate. Containment
+   * (qc2 W-1): an entry config the resolver rejects (e.g. an unknown key
+   * that survived the non-strict schemastery object merge) resolves to
+   * disabled-with-reason carrying the message — the gateway never fails the
+   * RPC on a bad config, and gate semantics hold (no model call can start).
+   * S1: when the raw source is still readable, the fallback seeds its scalar
+   * latches (systemPrompt / immuneTurns / maxDeltaMessages) instead of
+   * hardcoded defaults, so an invalid config only drops the offending keys.
    */
   private readConfig(): ResolvedAdvisorConfig {
     let config: ResolvedAdvisorConfig

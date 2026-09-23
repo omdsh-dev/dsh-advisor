@@ -20,7 +20,7 @@ import type { AdvisorConfig, ResolvedAdvisorConfig } from 'dsh-advisor'
 | `Config` | schemastery schema（value） | Loader schema（严格：默认值 + 类型/边界校验），由 cordis Loader 校验插件行 config。见 [配置指南](configuration.md#配置字段)。 |
 | `AdvisorConfig` | type | 插件行 config 契约（`enabled` / `provider` / `model` / `systemPrompt` / `immuneTurns` / `maxDeltaMessages`）。 |
 | `ResolvedAdvisorConfig` | type | 显式模型门禁（S4）之后的运行时契约（含可选的 `disabledReason`）。 |
-| `apply(ctx, config)` | function | 插件 apply：安装 `advisor` settings 命名空间（条件 `ctx.inject(['settings'], ...)`）、注册 `AdvisorConfigGateway` 与 typert 端点（条件 `ctx.inject(['typert'], ...)`）、组合 observer / runtime / delivery、在组合 command registry 时注册 `/advisor` 指令（条件 `ctx.inject(['commands'], ...)`）。 |
+| `apply(ctx, config)` | function | 插件 apply：为 entry 的 volatile live 字段建立 settings bridge（`loader/volatile-update` 驱动）、注册 `AdvisorConfigGateway` 与 typert 端点（条件 `ctx.inject(['typert'], ...)`）、组合 observer / runtime / delivery、在组合 command registry 时注册 `/advisor` 指令（条件 `ctx.inject(['commands'], ...)`）。 |
 
 > 包根**没有**按函数粒度重导出内部运行函数（如 `resolveAdvisorConfig` 不在包根导出面内 —— 它由 `src/config.ts` 内部使用；包根的运行时导出面就是 `name` / `inject` / `Config` / `apply`，类型面是 `AdvisorConfig` / `ResolvedAdvisorConfig`）。这与按「纯函数库」设计的插件不同 —— `dsh-advisor` 是组合包（bundle），不是函数库；内部模块（`src/advisor-runtime.ts`、`src/delivery.ts`、`src/commands.ts` 等）是 cordis-free 的实现单元，通过 `apply` 的 wiring 消费，不在包根暴露。
 
@@ -38,11 +38,11 @@ import type { AdvisorConfig, ResolvedAdvisorConfig } from 'dsh-advisor'
 
 `apply` 在 try/catch 中构造 `AdvisorConfigGateway`（`src/gateway.ts`），它以 cordis 服务键 **`'advisor'`** 注册（`TypertRemoteService` 基类）。这是 `/api/advisor/*` RPC 端点的**调度目标**（typertGateway 经 `ctx.get('advisor')` 分发）—— **不是**面向消费者的公共 API：它不暴露可调用的纯函数面，也没有稳定对象契约可依赖。跨插件需要读取 advisor 状态时，应使用文档化的面（`/api/advisor/get`、`/advisor status`），而不是读取该服务对象的内部。
 
-多 fiber 去重：宿主会组合多个 `dsh-advisor` fiber（观察到的典型情况是 3 个）。settings 命名空间与 `advisor` 服务键的注册都是「先注册者拥有」，后续 fiber 静默回退（不报错、不重复 wiring）；typert 端点注册同理（重复注册失败时该 fiber 不提供端点）。首个获得 reviewer 角色的 apply 负责 observer / runtime / delivery 与 `/advisor` 指令的 wiring（单评审者守卫，`src/index.ts` `claimReviewer`），后续实例仅做 settings 注册尝试。**生命周期**：所有注册都是 fiber 作用域 effect —— fiber dispose 后端点 / 命名空间 / reviewer 声明随之撤销，后续 re-apply / re-mount 可接管。
+多 fiber 去重：宿主会组合多个 `dsh-advisor` fiber（观察到的典型情况是 3 个）。`advisor` 服务键的注册是「先注册者拥有」，后续 fiber 静默回退（不报错、不重复 wiring；settings bridge 无注册动作——每个 fiber 自己的 bridge 由 `loader/volatile-update` 的 owning-fiber 过滤天然隔离）；typert 端点注册同理（重复注册失败时该 fiber 不提供端点）。首个获得 reviewer 角色的 apply 负责 observer / runtime / delivery 与 `/advisor` 指令的 wiring（单评审者守卫，`src/index.ts` `claimReviewer`）。**生命周期**：所有注册都是 fiber 作用域 effect —— fiber dispose 后端点 / reviewer 声明随之撤销，后续 re-apply / re-mount 可接管。
 
 ## 客户端入口（`dsh-advisor/client`）
 
-`src/client/index.ts` 是浏览器半，把 Advisor 卡片注册进宿主声明的 `settings.plugin.item` 卡片 slot（"插件配置"页，namespace key `advisor`，按注册顺序位于上游 bash / agent-loop / web-search 卡片之后）：
+`src/client/index.ts` 是浏览器半，把 Advisor 卡片注册进宿主声明的 `plugins.bundle.config` 卡片 slot（web「插件」页上 dsh-advisor 组合包自己的页面，bundle key `dsh-advisor`）：
 
 ```ts
 import type { AdvisorCardProps, AdvisorSettingsStore, ModelOption, ProviderOption } from 'dsh-advisor/client'
@@ -51,7 +51,7 @@ import type { AdvisorCardProps, AdvisorSettingsStore, ModelOption, ProviderOptio
 - **`inject`**：`['slots', 'locale', 'connection', 'settingsSchema']`（cordis fiber 注入；`settingsSchema` 为 ui-settings 提供的不可变路径写入服务）；locale 字典命名空间 `settings.advisor`（zh / en）；
 - **类型导出**：`AdvisorCardInjected`、`AdvisorCardProps`、`AdvisorKey`、`AdvisorDraft`、`AdvisorSettingsState`、`AdvisorSettingsStore`、`ApplyFailure`、`ApplyState`、`ModelOption`、`ModelsEmptyReason`、`ProviderOption`；
 - **value 导出**：`refreshIfLoaded`（纯 controller 辅助：仅在卡片首次加载后重取页面快照；未打开的卡片不在后台失效时发起 fetch）；
-- **web 注入声明**（`package.json` `dsh.client`）：`@deepseek-ai/dsh-client-store` + `@deepseek-ai/dsh-client-ui-settings-plugins` + `@deepseek-ai/dsh-client-locale`，平台 `web`；
+- **web 注入声明**（`package.json` `dsh.client`）：`@deepseek-ai/dsh-client-store` + `@deepseek-ai/dsh-client-ui-plugin-manager` + `@deepseek-ai/dsh-client-locale`，平台 `web`；
 - **导入纯度边界**：客户端 half 只 value-import 冻结的平台模块表（`CLIENT_EXTERNALS`：react / `@deepseek-ai/cordis` / ui-slots / ui-primitives / `@deepseek-ai/dsh-client-store`）；其余 `@deepseek-ai/*` 全部 type-only（构建期擦除），值经 cordis 注入到达（含 `settingsSchema` 服务）。
 
 卡片的数据面（`src/client/advisor-store.ts`）：
@@ -80,5 +80,5 @@ import type { AdvisorCardProps, AdvisorSettingsStore, ModelOption, ProviderOptio
 
 - [安装指南](install.zh.md) — registry / 本地目录 / tarball 三种安装方式、web Settings 暴露、`--dump-config` 验证、卸载；
 - [发布指南](release.md) — PR 驱动的 npm 发布与 GitHub Release 流程、版本策略、回滚；
-- [配置指南](configuration.md) — `advisor` 命名空间字段、显式模型门禁、行为要点；
+- [配置指南](configuration.md) — advisor entry config 字段、显式模型门禁、行为要点；
 - [README](../README.zh.md) — 概览、配置示例、`/advisor` 用法、工作原理、限制与路线图。

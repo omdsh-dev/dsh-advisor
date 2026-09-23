@@ -5,7 +5,7 @@
 [![npm](https://img.shields.io/npm/dt/dsh-advisor)](https://www.npmjs.com/package/dsh-advisor)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933.svg)
-![dsh](https://img.shields.io/badge/dsh-0.1.5--rc.1-4B32C3.svg)
+![dsh](https://img.shields.io/badge/dsh-0.1.7--rc.1-4B32C3.svg)
 ![dsh tui](https://img.shields.io/badge/dsh%20tui-compatible-4B32C3.svg)
 [![dshfind](https://dshfind.com/api/badge/omdsh-dev/dsh-advisor?lang=zh)](https://dshfind.com/zh/plugins/omdsh-dev/dsh-advisor?ref=badge)
 
@@ -13,7 +13,7 @@
 
 **仅作建议。** advisor 从不批准或否决主 agent 的动作，也绝不会像主 agent 那样发出命令。每条送达的消息都是自我描述的 advisory 内容；一个行为异常的评审者会被端到端约束（emission guard、immuneTurns 冷却、failure policy），因此它永远不会卡住或污染主循环。
 
-两个 dsh 前端均可用：**web** profile（设置 → 插件配置 → Advisor 卡片）与 **dsh-tui** 终端 profile（`/advisor` + `/advisor config`）。
+两个 dsh 前端均可用：**web** profile（侧边栏 → 插件 → dsh-advisor → Advisor 卡片）与 **dsh-tui** 终端 profile（`/advisor` + `/advisor config`）。
 
 ## 快速开始
 
@@ -28,29 +28,31 @@ dsh plugin --profile dsh-tui add dsh-advisor  # dsh-tui 终端 profile
 
 ### 配置
 
-在全局 dsh 设置文档（默认 `$DSH_HOME/settings.yaml`——跨 profile 共享；web Settings 卡片也写入这个文件）中添加 `advisor:` 分节：
+编辑 profile 补丁层（`~/.dsh/profiles/<profile>/cordis.patch.yml`）里 `advisor` 行的 `config`。六个字段全部是 schema-volatile 的 live 字段（dsh ≥ 0.1.7-rc.1）：web 卡片与 TUI `/settings` 屏幕写入的就是这同一份 entry config——持久化在 profile 补丁层，无需重挂载即生效。（pre-0.1.7 的 `$DSH_HOME/settings.yaml` `advisor:` 分节已不存在：dsh 会在首次启动时把它导入活跃 profile 一次，并将该文件改名为 `.imported`。）
 
 ```yaml
-advisor:
-  enabled: true                # 总开关（默认 false）——需显式打开后生效
-  provider: deepseek-official  # enabled: true 时必填（非空）
-  model: deepseek-flash        # enabled: true 时必填（非空）；网关未开放 V41 路由时回退 deepseek-v4-flash（或其它 V4 id）
-  systemPrompt: ""             # 可选；"" = 内置评审 prompt
-  immuneTurns: 3               # 整数 ≥ 0，默认 3 —— 打断性送达后的冷却步数
-  maxDeltaMessages: 60         # 整数 ≥ 0，默认 60 —— delta 窗口；0 = 无上限
+# ~/.dsh/profiles/<profile>/cordis.patch.yml —— advisor 行的 config
+- id: advisor
+  config:
+    enabled: true                # 总开关（默认 false）——需显式打开后生效
+    provider: deepseek-official  # enabled: true 时必填（非空）
+    model: deepseek-flash        # enabled: true 时必填（非空）；网关未开放 V41 路由时回退 deepseek-v4-flash（或其它 V4 id）
+    systemPrompt: ""             # 可选；"" = 内置评审 prompt
+    immuneTurns: 3               # 整数 ≥ 0，默认 3 —— 打断性送达后的冷却步数
+    maxDeltaMessages: 60         # 整数 ≥ 0，默认 60 —— delta 窗口；0 = 无上限
 ```
 
 advisor 默认关闭。启用后，`provider` 与 `model` 为**必填**：`enabled: true` 而缺少两者之一是一个硬门禁——advisor 不会发起任何模型调用，并报告带原因的禁用状态（disabled-with-reason）；未知配置键会被拒绝。
 
-同一组键在**三个配置面**之间合成（后一层覆盖前一层；各处使用同一组键与同一个硬门禁，宿主侧门禁始终是所有路径上的最后防线）：
+同一组键可在**三个配置面**读取与编辑（只有一份存储——上面的 advisor entry config；各处使用同一组键与同一个硬门禁，宿主侧门禁始终是所有路径上的最后防线）：
 
-1. **插件行 config** —— profile 补丁层（`$DSH_HOME/profiles/<profile>/cordis.patch.yml`）。这是合成 base。
-2. **dsh web Settings 页 —— "插件配置"页** —— Advisor **卡片**（namespace key `advisor`），含 enabled 开关、只列出系统内已配置 provider 及其模型的 provider/model 选择框与可选字段。保存写入 `advisor` settings namespace，新会话立即生效，无需重启。卡片要求当前版本的 dsh web 构建（其 web shell 声明了 `settings.plugin.item` 卡片 slot 并能加载 `dsh.client` 声明包）；它通过官方 `GatewayService` RPC 通道读写该命名空间（`/api/advisor/get` + `/api/advisor/set`），不受 settings 暴露白名单门控。卡片还会在 enabled 且必填字段为空时阻止保存。
+1. **插件行 config** —— profile 补丁层（`~/.dsh/profiles/<profile>/cordis.patch.yml`）。配置就存放在这里。
+2. **dsh web 的「插件」页 —— dsh-advisor 组合包自己的页面** —— Advisor **卡片**（bundle key `dsh-advisor`），含 enabled 开关、只列出系统内已配置 provider 及其模型的 provider/model 选择框与可选字段。保存写入 advisor entry 的 config（经 config editor 落入 profile 补丁层），运行中的会话立即生效，无需重启。卡片要求 dsh web 构建的 shell 声明了 `plugins.bundle.config` 卡片 slot（dsh ≥ 0.1.7-rc.1）并能加载 `dsh.client` 声明包；它通过官方 `GatewayService` RPC 通道读写该配置（`/api/advisor/get` + `/api/advisor/set`），不受 settings 暴露白名单门控。卡片还会在 enabled 且必填字段为空时阻止保存。
 3. **`/advisor` 指令** —— 按会话且临时：翻转的是会话级 override，从不修改持久化配置（见[验证](#验证)）。
 
-在 **dsh-tui** profile 中，同样的五个键可在 TUI `/settings` 屏幕编辑：运行 `dsh --profile dsh-tui`、打开 `/settings`，编辑 **Advisor** 分节（`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`，每项均带中英文标签与提示）。编辑先暂存，保存时经 revision 栅栏保护的 `settings.mutate` 写入 web 卡片所写的同一个 `advisor` 命名空间 user layer，并 live 重应用、无需重启。`systemPrompt` **不是** TUI 字段（TUI text 控件为单行；多行 prompt 会被截断）——请经 web 卡片或 `$DSH_HOME/settings.yaml` 编辑。该分节要求 dsh-tui ≥ v0.8.0（随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供）；旧版 dsh-tui 会干净地 no-op，仍以两个文件路径——profile 补丁层 + 全局 `$DSH_HOME/settings.yaml`——作为编辑路径。`/advisor config` 仍是只读回读，seam 挂载时其编辑提示指向 `/settings` 屏幕。保存行为与 web 卡片不同：TUI seam 没有跨字段校验，一次保存可能把 `enabled: true` 与空 `provider`/`model` 一起写入——显式模型门禁会在运行时把它解析为 disabled-with-reason（可见于 `/advisor status` 与 `/advisor config`）；web 卡片则会直接阻止这样的保存。完整参考 → [docs/configuration.md](docs/configuration.md)。
+在 **dsh-tui** profile 中，同样的五个键可在 TUI `/settings` 屏幕编辑：运行 `dsh --profile dsh-tui`、打开 `/settings`，编辑 **Advisor** 分节（`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`，每项均带中英文标签与提示）。编辑先暂存，保存时经 revision 栅栏保护的 `settings.mutate` 写入 web 卡片所写的同一份 advisor entry config，并 live 重应用、无需重启。`systemPrompt` **不是** TUI 字段（TUI text 控件为单行；多行 prompt 会被截断）——请经 web 卡片或 profile 补丁层编辑。该分节要求 dsh-tui ≥ v0.8.0（随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供）；旧版 dsh-tui 会干净地 no-op，profile 补丁层仍是编辑路径。`/advisor config` 仍是只读回读，seam 挂载时其编辑提示指向 `/settings` 屏幕。保存行为与 web 卡片不同：TUI seam 没有跨字段校验，一次保存可能把 `enabled: true` 与空 `provider`/`model` 一起写入——显式模型门禁会在运行时把它解析为 disabled-with-reason（可见于 `/advisor status` 与 `/advisor config`）；web 卡片则会直接阻止这样的保存。完整参考 → [docs/configuration.md](docs/configuration.md)。
 
-![dsh web Settings（"插件配置"）页上的 Advisor 卡片](docs/screenshots/advisor-settings-card.webp)
+![dsh web「插件」页（dsh-advisor 组合包页面）上的 Advisor 卡片](docs/screenshots/advisor-settings-card.webp)
 
 ### 验证
 
@@ -69,11 +71,11 @@ dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-adv
 
 `/advisor on|off|toggle` 是会话级且临时的：它们翻转的是按会话的 override，从不修改持久化配置。启用一个 config 缺少 `provider`/`model` 的会话不会发起模型调用——`/advisor status`（以及 `/advisor on` 的回复）会显示门禁原因：advisor 只有在启用**且**两者均已配置时才运行。`/advisor on` 也是手动恢复路径：被 quota/rate-limit 暂停的会话 advisor（`quota_exhausted`——无自动恢复定时器）会在原地恢复；被终止的 advisor（永久性模型错误，如凭据无效）会为该会话全新重建。
 
-在 **dsh-tui** profile 中，`/advisor config` 额外回读组合配置——只读，编辑提示指向真实的写路径：TUI `/settings` 屏幕（Advisor 分节，dsh-tui ≥ v0.8.0）、profile 补丁层与共享的 `$DSH_HOME/settings.yaml` 的 `advisor:` 分节。`/advisor` / `on|off|status|config` 指令出现在 TUI 的 `/` 菜单中并带子命令补全（指令发现要求 `dsh-tui-command-trees` 行——随附的 dsh-tui 组合包自带）。
+在 **dsh-tui** profile 中，`/advisor config` 额外回读组合配置——只读，编辑提示指向真实的写路径：TUI `/settings` 屏幕（Advisor 分节，dsh-tui ≥ v0.8.0）与 profile 补丁层。`/advisor` / `on|off|status|config` 指令出现在 TUI 的 `/` 菜单中并带子命令补全（指令发现要求 `dsh-tui-command-trees` 行——随附的 dsh-tui 组合包自带）。
 
 ## 能力一览
 
-- **每个会话一个独立评审者**：独立的模型调用观察主 transcript 并评审每个 stepped 主 turn；advisor 消息被排除在此后的 delta 之外，因此 advisor 不会读回自己的建议。一个例外，已接受且有界：迁移前写入、带旧自定义 kind（`kind: 'advisor'`）的 note 已不再被自审排除匹配，每次全量重放（如 compaction 之后）都会重新进入 delta 一次——无数据丢失，仅 advisor 侧自审污染。这一代价是有意接受的，而非被推迟：不刻意添加旧格式读取分支，因为兼容层被项目的「不保持向后兼容」不变量禁止。
+- **每个会话一个独立评审者**：独立的模型调用观察主 transcript 并评审每个 stepped 主 turn；advisor 消息被排除在此后的 delta 之外，因此 advisor 不会读回自己的建议。自审排除同时识别 advisor 当前的 producer kind（`advisor`）与仍可打开日志中可能出现的两种历史形状：史前直接 `{ kind: 'advisor' }` 的 note，以及 0.1.6 时代的 note 经 V3→V4 内存迁移后的形状（`kind: 'plugin:advisor'`）——身份迁移不会孤儿化任何一代已持久化的 note。
 - **按严重度排序的建议 + inject/steer 语义**：每次评审至多发出一条 note——**nit**（轻微的样式、清晰度或质量建议；经非唤醒的 `agent.inject` 送达，在下一个 pre-step 边界消费）、**concern**（继续之前值得权衡的重大风险或明显更优的方向；经唤醒的 `agent.steer` 送达，受 `immuneTurns` 冷却约束）、**blocker**（继续下去明显是在浪费工作——与显式用户指令矛盾、原地打转、根本性不可行；经 `agent.steer` 送达）。送达的消息携带 `[advisor:{severity}]` 前缀且为自我描述的 advisory 内容：
 
   ```
@@ -89,7 +91,7 @@ dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-adv
 
 ## 纯挂载（零 dsh 修改）
 
-插件以**纯挂载**方式安装：bundle 插入 + 客户端卡片（web Settings "插件配置"）+ 自有 gateway 通道（`/api/advisor/get|set`，由宿主 typertGateway 认领——与 dsh 内建 `goals` 服务同一机制，不受 settings 暴露白名单门控）+ `/advisor` 指令——无 dsh 补丁、无 postinstall 步骤，dsh 升级永不需重打。
+插件以**纯挂载**方式安装：bundle 插入 + 客户端卡片（web「插件」页）+ 自有 gateway 通道（`/api/advisor/get|set`，由宿主 typertGateway 认领——与 dsh 内建 `goals` 服务同一机制，不受 settings 暴露白名单门控）+ `/advisor` 指令——无 dsh 补丁、无 postinstall 步骤，dsh 升级永不需重打。
 
 ## 限制与路线图
 
@@ -111,7 +113,7 @@ MVP 有意放弃与 omp 的完整对等。已接受的差距（在 harness 迭�
 | 文档 | 内容 |
 |---|---|
 | [docs/install.zh.md](docs/install.zh.md) | profile 安装（web + dsh-tui）/ registry / git / tarball / 本地目录变体 / web Settings 暴露 / 卸载 / `--dump-config` 验证 |
-| [docs/configuration.md](docs/configuration.md) | `advisor` 命名空间全字段：键与默认值、显式模型门禁（S4）、配置面（web 卡片 / 补丁层 / 全局 settings.yaml）、示例 YAML、live 重应用行为 |
+| [docs/configuration.md](docs/configuration.md) | advisor 配置全字段：键与默认值、显式模型门禁（S4）、配置面（web 卡片 / TUI `/settings` / 补丁层）、示例 YAML、live 重应用行为 |
 | [docs/consumer-api.md](docs/consumer-api.md) | 开发者消费契约：包根库 API、`dsh-advisor/client` 入口、`/advisor` 指令面、导出清单、生命周期 |
 | [docs/verification.md](docs/verification.md) | 验证记录：测试矩阵（16 文件 / 319 用例）、typecheck/build、CI 契约、真实环境步骤 |
 | [docs/release.md](docs/release.md) | 发布流程：PR 驱动的 Release prep + Release 工作流、OIDC trusted publishing、版本策略、回滚 |

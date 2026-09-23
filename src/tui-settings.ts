@@ -3,15 +3,15 @@
  * `tuiSettingsSections` Advisor section.
  *
  * dsh-tui ≥ v0.8.0 ships a `/settings` screen; optional plugins declare what
- * is editable there by registering a SECTION over their settings namespace on
+ * is editable there by registering a SECTION over their settings entry on
  * the optional `tuiSettingsSections` host service
  * (`src/dsh-adapter/settings-sections.ts` in dsh-TUI — a small host-only
  * registry; storage + validation stay with the dsh settings service). The
  * screen then renders the section's fields, stages edits, and writes them on
- * save through the revision-fenced `settings.mutate` into the section's
- * namespace user layer — for the advisor that is the already-registered
- * `advisor` namespace (`src/settings.ts` `installAdvisorSettings`), so the
- * section is fully writable.
+ * save through the revision-fenced `settings.mutate` into the entry's
+ * volatile fields — for the advisor that is the entry id `advisor` (the
+ * bundle row id, `src/settings.ts` `ADVISOR_SETTINGS_NAMESPACE`), committed
+ * by the Loader without a remount, so the section is fully writable.
  *
  * This module is the advisor's settings-seam surface:
  * `installTuiSettingsSection` conditionally injects `tuiSettingsSections` and
@@ -34,8 +34,8 @@
  * (`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`).
  * `systemPrompt` is intentionally NOT a field — the TUI `text` control is
  * single-line, and editing a multi-line prompt there would truncate/replace
- * it (data loss). It stays editable via the web card or
- * `$DSH_HOME/settings.yaml`. The TUI seam has no cross-field validation
+ * it (data loss). It stays editable via the web card or the profile's
+ * `cordis.patch.yml`. The TUI seam has no cross-field validation
  * (upstream behavior, recorded): a save may set `enabled: true` with empty
  * `provider`/`model`, which the S4 explicit model gate (spec §5.2) resolves
  * to disabled-with-reason at runtime; the settings-service schema
@@ -121,11 +121,11 @@ export interface TuiSettingsSection {
  * apart (S-001, plan QC fix wave). */
 export const TUI_SETTINGS_SECTIONS = 'tuiSettingsSections'
 
-/** Test-friendly alias for the section namespace (`'advisor'`). The section
- * itself reuses the shared {@link ADVISOR_SETTINGS_NAMESPACE} brand — a
+/** Test-friendly alias for the section entry id (`'advisor'`). The section
+ * itself reuses the shared {@link ADVISOR_SETTINGS_NAMESPACE} entry id — a
  * mismatched ns would silently render the section "unavailable" in the host
  * screen (the alias exists so tests can pin the value without importing the
- * settings module's brand). */
+ * settings module's constant). */
 export const ADVISOR_TUI_SETTINGS_NS = 'advisor'
 
 /** The declared "Advisor" section for the dsh-tui `/settings` screen: the

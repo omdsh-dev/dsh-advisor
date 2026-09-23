@@ -4,7 +4,11 @@
  * Contract under test:
  * - The exported schemastery `Config` schema (the cordis Loader path) applies
  *   defaults (`enabled` false, `immuneTurns` 3, `maxDeltaMessages` 60,
- *   `systemPrompt` "") and enforces types/bounds (int ≥ 0).
+ *   `systemPrompt` "") and enforces types/bounds (int ≥ 0). All six live
+ *   fields are `.volatile()`: `Config(raw)` resolves them to `{ get() }`
+ *   references (the loader's no-remount edit channel), and the reads below go
+ *   through `unwrapAdvisorConfig` — the same unwrapping the runtime does
+ *   before the gate.
  * - `resolveAdvisorConfig(raw)` never throws for the gate scenario: when
  *   `enabled` is true but `provider`/`model` is missing or empty it resolves
  *   to a disabled-with-reason config (no model call).
@@ -12,11 +16,21 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { Config, resolveAdvisorConfig } from '../src/config'
+import { Config, resolveAdvisorConfig, unwrapAdvisorConfig } from '../src/config'
 
 describe('schema defaults (cordis Loader path, spec §5.1)', () => {
+  it('resolves every live field to a volatile reference (the no-remount edit channel)', () => {
+    // 0.1.7-rc.1: `.volatile()` makes the loader commit edits into the running
+    // fiber's references. A resolved field must duck-type as `{ get() }` —
+    // every runtime read (unwrapAdvisorConfig → the gate) depends on it.
+    const resolved: Record<string, unknown> = Config({})
+    for (const key of ['enabled', 'provider', 'model', 'systemPrompt', 'immuneTurns', 'maxDeltaMessages']) {
+      expect(typeof (resolved[key] as { get?: unknown }).get, key).toBe('function')
+    }
+  })
+
   it('applies defaults for an empty config', () => {
-    expect(Config({})).toEqual({
+    expect(unwrapAdvisorConfig(Config({}))).toEqual({
       enabled: false,
       systemPrompt: '',
       immuneTurns: 3,
@@ -25,14 +39,14 @@ describe('schema defaults (cordis Loader path, spec §5.1)', () => {
   })
 
   it('keeps explicit values over defaults', () => {
-    expect(Config({
+    expect(unwrapAdvisorConfig(Config({
       enabled: true,
       provider: 'deepseek',
       model: 'deepseek-chat',
       systemPrompt: 'custom reviewer prompt',
       immuneTurns: 5,
       maxDeltaMessages: 10,
-    })).toEqual({
+    }))).toEqual({
       enabled: true,
       provider: 'deepseek',
       model: 'deepseek-chat',
@@ -51,8 +65,8 @@ describe('schema defaults (cordis Loader path, spec §5.1)', () => {
   })
 
   it('treats null as absent (schemastery nullable input → default)', () => {
-    expect(Config({ maxDeltaMessages: null }).maxDeltaMessages).toBe(60)
-    expect(Config({ enabled: null }).enabled).toBe(false)
+    expect(unwrapAdvisorConfig(Config({ maxDeltaMessages: null })).maxDeltaMessages).toBe(60)
+    expect(unwrapAdvisorConfig(Config({ enabled: null })).enabled).toBe(false)
   })
 
   it('enforces integer ≥ 0 bounds; 0 = unbounded is allowed', () => {
@@ -60,8 +74,8 @@ describe('schema defaults (cordis Loader path, spec §5.1)', () => {
     expect(() => Config({ immuneTurns: 2.5 })).toThrow()
     expect(() => Config({ maxDeltaMessages: -1 })).toThrow()
     expect(() => Config({ maxDeltaMessages: 1.5 })).toThrow()
-    expect(Config({ maxDeltaMessages: 0 }).maxDeltaMessages).toBe(0)
-    expect(Config({ immuneTurns: 0 }).immuneTurns).toBe(0)
+    expect(unwrapAdvisorConfig(Config({ maxDeltaMessages: 0 })).maxDeltaMessages).toBe(0)
+    expect(unwrapAdvisorConfig(Config({ immuneTurns: 0 })).immuneTurns).toBe(0)
   })
 })
 

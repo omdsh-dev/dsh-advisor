@@ -436,7 +436,7 @@ describe('advisorConfigText (the /advisor config surface, composed session-less 
     expect(text).toContain('immuneTurns: 3')
     expect(text).toContain('maxDeltaMessages: 60')
     expect(text).toContain('systemPrompt: "You are a terse reviewer."')
-    expect(text).toContain('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)')
+    expect(text).toContain('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (advisor plugin row)')
   })
 
   it('renders maxDeltaMessages 0 as unbounded', () => {
@@ -484,20 +484,20 @@ describe('advisorConfigText (the /advisor config surface, composed session-less 
 
   it('always ends with the edit hint (both edit paths)', () => {
     const text = advisorConfigText(baseConfig())
-    expect(text).toContain('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row)')
-    expect(text).toContain('or $DSH_HOME/settings.yaml (advisor: section)')
+    expect(text).toContain('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (advisor plugin row)')
   })
 
-  it('keeps the n8 edit-hint line when the TUI settings seam is unavailable (tuiSettingsAvailable: false)', () => {
-    // Byte-identical to the n8 hint: profile patch layer + settings.yaml only.
+  it('keeps the edit-hint line when the TUI settings seam is unavailable (tuiSettingsAvailable: false)', () => {
+    // Profile patch layer only — the 0.1.7-rc.1 settings.yaml section is gone
+    // (imported into the profile and renamed .imported).
     const text = advisorConfigText(baseConfig({ tuiSettingsAvailable: false }))
-    expect(text).toContain('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)')
+    expect(text).toContain('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (advisor plugin row)')
     expect(text).not.toContain('TUI /settings')
   })
 
   it('lists the TUI /settings screen first when the seam is available (tuiSettingsAvailable: true)', () => {
     const text = advisorConfigText(baseConfig({ tuiSettingsAvailable: true }))
-    expect(text).toContain('Edit: TUI /settings screen (Advisor section, dsh-tui ≥ v0.8.0) or ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)')
+    expect(text).toContain('Edit: TUI /settings screen (Advisor section, dsh-tui ≥ v0.8.0) or ~/.dsh/profiles/<profile>/cordis.patch.yml (advisor plugin row)')
   })
 
   it('all other render lines are unchanged across both hint branches', () => {
@@ -691,7 +691,7 @@ describe('apply wiring — /advisor config tuiSettingsAvailable reflects the tui
     const result = invoke(registry.definitions[0]!.handler, 'config')
     expect(result.kind).toBe('success')
     if (result.kind === 'success') {
-      expect(result.text).toContain('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)')
+      expect(result.text).toContain('Edit: ~/.dsh/profiles/<profile>/cordis.patch.yml (advisor plugin row)')
       expect(result.text).not.toContain('TUI /settings')
     }
   })
@@ -703,7 +703,7 @@ describe('apply wiring — /advisor config tuiSettingsAvailable reflects the tui
     const result = invoke(registry.definitions[0]!.handler, 'config')
     expect(result.kind).toBe('success')
     if (result.kind === 'success') {
-      expect(result.text).toContain('Edit: TUI /settings screen (Advisor section, dsh-tui ≥ v0.8.0) or ~/.dsh/profiles/<profile>/cordis.patch.yml (plugin row) or $DSH_HOME/settings.yaml (advisor: section)')
+      expect(result.text).toContain('Edit: TUI /settings screen (Advisor section, dsh-tui ≥ v0.8.0) or ~/.dsh/profiles/<profile>/cordis.patch.yml (advisor plugin row)')
     }
   })
 })

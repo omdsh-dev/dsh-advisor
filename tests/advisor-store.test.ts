@@ -107,6 +107,7 @@ const EMPTYLIST: LlmConfigurableProvider = {
 function deepseekNs(): SettingsNamespaceView {
   return {
     ns: 'llm-deepseek',
+    autoGenerate: true,
     schema: {},
     value: {
       apiKeyEnv: 'DEEPSEEK_API_KEY',
@@ -125,6 +126,7 @@ function deepseekNs(): SettingsNamespaceView {
 function piAiNs(): SettingsNamespaceView {
   return {
     ns: 'llm-pi-ai',
+    autoGenerate: true,
     schema: {},
     value: { providers: { openai: { apiKeyEnv: 'OPENAI_API_KEY' } } },
     applies: 'live',
@@ -135,12 +137,12 @@ function piAiNs(): SettingsNamespaceView {
 
 /** llm-empty: whole-section profile resolving to an empty section (no models anywhere). */
 function emptyNs(): SettingsNamespaceView {
-  return { ns: 'llm-empty', schema: {}, value: {}, applies: 'live', secrets: [], revision: 0 }
+  return { ns: 'llm-empty', autoGenerate: true, schema: {}, value: {}, applies: 'live', secrets: [], revision: 0 }
 }
 
 /** llm-emptylist: whole-section profile declaring an EMPTY models list (profile wins, no fallback). */
 function emptylistNs(): SettingsNamespaceView {
-  return { ns: 'llm-emptylist', schema: {}, value: { models: [] }, applies: 'live', secrets: [], revision: 0 }
+  return { ns: 'llm-emptylist', autoGenerate: true, schema: {}, value: { models: [] }, applies: 'live', secrets: [], revision: 0 }
 }
 
 const CATALOG: ModelCatalog['groups'] = [

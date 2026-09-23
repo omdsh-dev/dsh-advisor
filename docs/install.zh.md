@@ -49,7 +49,7 @@ dsh plugin --profile dsh-tui add dsh-advisor   # <name> = 你的 profile 名
 dsh plugin --profile dsh-tui add .
 ```
 
-组合包把同样的 `- insert: id: advisor` 行插入 dsh-tui profile 的补丁层（`~/.dsh/profiles/dsh-tui/cordis.patch.yml`）。`advisor` settings namespace 经全局 `$DSH_HOME/settings.yaml` 的 `advisor:` 段跨 profile 共享（web Settings 卡片也写入该文件）。dsh-tui ≥ v0.8.0 时，TUI `/settings` 屏幕同样可编辑这五个键（`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`）——在 Advisor 分节中暂存编辑，保存时经 revision 栅栏保护的 `settings.mutate` 写入同一个命名空间 user layer，live 重应用、无需重启。该分节随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供；旧版 dsh-tui 干净地 no-op，仍以补丁层 / settings.yaml 为编辑路径。`systemPrompt` 不是 TUI 字段（单行输入）——请经 web 卡片或 `$DSH_HOME/settings.yaml` 编辑。`/advisor config` 是回读手段（只读，seam 挂载时编辑提示指向 `/settings` 屏幕），`/advisor` / `on|off|status|config` 则出现在 TUI 的 `/` 菜单中并带子命令补全（要求 `dsh-tui-command-trees` 行，随附的 dsh-tui 组合包自带）。
+组合包把同样的 `- insert: id: advisor` 行插入 dsh-tui profile 的补丁层（`~/.dsh/profiles/dsh-tui/cordis.patch.yml`）。每个 profile 在补丁层里持有自己的 advisor entry config——该行的 `config` 字段是 schema-volatile 的 live 字段（dsh ≥ 0.1.7-rc.1），由 Loader 免重挂载提交；全局 settings.yaml 分节已不存在（pre-0.1.7 的旧文件会在首次启动时被导入活跃 profile 并改名 `.imported`）。dsh-tui ≥ v0.8.0 时，TUI `/settings` 屏幕同样可编辑这五个键（`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`）——在 Advisor 分节中暂存编辑，保存时经 revision 栅栏保护的 `settings.mutate` 写入同一份 advisor entry config（持久化在 profile 补丁层），live 重应用、无需重启。该分节随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供；旧版 dsh-tui 干净地 no-op，profile 补丁层仍是编辑路径。`systemPrompt` 不是 TUI 字段（单行输入）——请经 web 卡片或 profile 补丁层编辑。`/advisor config` 是回读手段（只读，seam 挂载时编辑提示指向 `/settings` 屏幕），`/advisor` / `on|off|status|config` 则出现在 TUI 的 `/` 菜单中并带子命令补全（要求 `dsh-tui-command-trees` 行，随附的 dsh-tui 组合包自带）。
 
 验证：
 
@@ -67,7 +67,7 @@ dsh --profile dsh-tui --dump-config   # 确认 dsh-advisor 层已消失
 
 ## 5. web Settings 暴露
 
-dsh web Settings 页的**"插件配置"页**为每个注册进 `settings.plugin.item` 卡片 slot 的插件渲染一张卡片。Advisor 卡片（namespace key `advisor`，按注册顺序渲染在三张上游卡片 bash / agent-loop / web-search 之后）通过 dsh 宿主的 apiproxy `describe` 读取 provider 目录（已暴露的 `llm-*` 命名空间），但 advisor 配置只通过**官方 `GatewayService` RPC 通道**读写——它不依赖 apiproxy allowlist（allowlist 仅覆盖模型提供者命名空间 + 产品命名空间：locale / permission / ui-conversation / ui-theme / ui-onboarding / agent-presets）。**上游 dsh 没有注册级 opt-in**（`exposeToWebClients` 不存在于上游 `SettingsRegisterOptions`——已在 pristine 20da39e 快照上核实），因此 `advisor` 命名空间**不在 apiproxy allowlist 上**。插件注册 `AdvisorConfigGateway`（带 `@Remote('get')`/`@Remote('set')` 方法的 `GatewayService`），宿主的 typertGateway 认领 `/api/advisor/get` + `/api/advisor/set`（与 dsh 内建 `goals` 服务同一机制），卡片经 `connection.rpc` 调用它们。进程内写入（`ctx.settings.update`）没有 exposed-namespace 检查，因此在任何提供 GatewayService 通道的 dsh 构建上保存都可用。无需也不施加任何宿主补丁。
+dsh web 的**「插件」页**在组合包自己的页面上渲染该组合包的配置，经 `plugins.bundle.config` 卡片 slot 注册（以组合包包名为 key）。Advisor 卡片（key `dsh-advisor`）通过 dsh 宿主的 apiproxy `describe` 读取 provider 目录（已暴露的 `llm-*` 命名空间），但 advisor 配置只通过**官方 `GatewayService` RPC 通道**读写——它不依赖 apiproxy allowlist（allowlist 仅覆盖模型提供者命名空间 + 产品命名空间：locale / permission / ui-conversation / ui-theme / ui-onboarding / agent-presets）。**上游 dsh 没有注册级 opt-in**（`exposeToWebClients` 不存在于上游 `SettingsRegisterOptions`——已在 pristine 20da39e 快照上核实），因此 `advisor` 命名空间**不在 apiproxy allowlist 上**。插件注册 `AdvisorConfigGateway`（带 `@Remote('get')`/`@Remote('set')` 方法的 `GatewayService`），宿主的 typertGateway 认领 `/api/advisor/get` + `/api/advisor/set`（与 dsh 内建 `goals` 服务同一机制），卡片经 `connection.rpc` 调用它们。进程内写入（`ctx.settings.update`）没有 exposed-namespace 检查，因此在任何提供 GatewayService 通道的 dsh 构建上保存都可用。无需也不施加任何宿主补丁。
 
 ## 6. 验证
 
@@ -76,7 +76,7 @@ dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-adv
 dsh --profile web
 ```
 
-启动后，web Settings 页的"插件配置"页会渲染 Advisor 卡片；它通过 `/api/advisor/get` + `/api/advisor/set` live 读写 `advisor` 命名空间——保存后新会话立即生效。
+启动后，web 的「插件」页会在 dsh-advisor 组合包页面上渲染 Advisor 卡片；它通过 `/api/advisor/get` + `/api/advisor/set` live 读写 advisor entry config——保存后运行中的会话立即生效。
 
 ## 7. 卸载
 

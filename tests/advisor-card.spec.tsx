@@ -22,8 +22,8 @@
  * way the host gateway does (merge → return the new composed config).
  *
  * Registration surface (KD-1): `apply` registers the card into the
- * `settings.plugin.item` keyed slot ledger (key 'advisor' — the settings
- * namespace the card edits, locale 'settings.advisor') with a
+ * `plugins.bundle.config` keyed slot ledger (key 'dsh-advisor' — the bundle
+ * package name the Plugins page dispatches, locale 'settings.advisor') with a
  * business-face-only inject (controller + the `hooks.snapshot` store — no
  * `t`); the old
  * `settings.section` advisor registration is gone, so the section ledger
@@ -76,15 +76,16 @@ const t: AdvisorCardProps['t'] = key => en[key as keyof typeof en]
 
 /**
  * Full card props the renderer would bind: the registrant's business inject
- * face (controller + useSnapshot), the framework-synthesized `t` seat, and
- * the runtime's global seat (session-list / workspace-list selector hooks —
- * every slot component receives them; the specs never exercise them).
+ * face (controller + useSnapshot), the framework-synthesized `t` seat, and the
+ * owner's `view` — ui-plugin-manager renders `plugins.bundle.config` with
+ * `view: 'page'` only, and the card is self-chromed for that one view.
  */
 function cardProps(controller: AdvisorSettingsStore, useSnapshot: SnapshotSelectorHook<AdvisorSettingsState>): AdvisorCardProps {
   return {
     controller,
     useSnapshot,
     t,
+    view: 'page',
   }
 }
 
@@ -119,7 +120,7 @@ const ZOMBIE: LlmConfigurableProvider = {
 
 function deepseekNs(): SettingsNamespaceView {
   return {
-    ns: 'llm-deepseek', schema: {}, applies: 'live', secrets: [], revision: 0,
+    ns: 'llm-deepseek', autoGenerate: true, schema: {}, applies: 'live', secrets: [], revision: 0,
     value: {
       apiKeyEnv: 'DEEPSEEK_API_KEY',
       models: [{ id: 'ds-a', name: 'DeepSeek A' }, { id: 'ds-b', name: 'DeepSeek B' }],
@@ -129,7 +130,7 @@ function deepseekNs(): SettingsNamespaceView {
 
 function piAiNs(): SettingsNamespaceView {
   return {
-    ns: 'llm-pi-ai', schema: {}, applies: 'live', secrets: [], revision: 0,
+    ns: 'llm-pi-ai', autoGenerate: true, schema: {}, applies: 'live', secrets: [], revision: 0,
     value: { providers: { openai: { apiKeyEnv: 'OPENAI_API_KEY' } } },
   }
 }
@@ -317,7 +318,7 @@ function fakeRuntime(scripted: Scripted) {
   return { ctx, ledger, locales, resetHandlers, remoteHandlers, effectDisposers, fireRemote }
 }
 
-describe('AdvisorCard registration (settings.plugin.item)', () => {
+describe('AdvisorCard registration (plugins.bundle.config)', () => {
   it('declares the dotted remote namespace injects (rc.1 contract)', () => {
     // Regression pin (upstream apply.client.spec.ts asserts the array
     // literally): each client Remote namespace is a child-fiber service
@@ -335,11 +336,12 @@ describe('AdvisorCard registration (settings.plugin.item)', () => {
     apply(ctx as unknown as ClientContext)
 
     // The card ledger holds exactly one advisor card.
-    const cards = ledger['settings.plugin.item'] ?? []
+    const cards = ledger['plugins.bundle.config'] ?? []
     expect(cards).toHaveLength(1)
-    // Keyed slot: `key` is the settings namespace the card edits; the
-    // old list-slot `id` / `order` options must be absent.
-    expect(cards[0].options.key).toBe('advisor')
+    // Keyed slot: `key` is the bundle package name the Plugins page
+    // dispatches (`entryKey = pkg.name`); the old list-slot `id` / `order`
+    // options must be absent.
+    expect(cards[0].options.key).toBe('dsh-advisor')
     expect(cards[0].options).not.toHaveProperty('id')
     expect(cards[0].options).not.toHaveProperty('order')
     expect(cards[0].options.locale).toBe('settings.advisor')
@@ -372,7 +374,7 @@ describe('AdvisorCard invalidation refresh (plan 003 / residual R3)', () => {
   function applyAndController(scripted: Scripted) {
     const runtime = fakeRuntime(scripted)
     apply(runtime.ctx as unknown as ClientContext)
-    const cards = runtime.ledger['settings.plugin.item'] ?? []
+    const cards = runtime.ledger['plugins.bundle.config'] ?? []
     const inject = cards[0].options.inject as () => object
     const face = inject() as { controller: AdvisorSettingsStore }
     return { ...runtime, controller: face.controller }
