@@ -48,7 +48,7 @@ The same keys are read and edited from **three surfaces** (one store — the adv
 
 1. **Plugin-row config** — the profile patch layer (`~/.dsh/profiles/<profile>/cordis.patch.yml`). This is where the config lives.
 2. **dsh web Plugins page — the dsh-advisor bundle's own page** — the Advisor **card** (bundle key `dsh-advisor`) with the enabled toggle, provider / model selects restricted to system-configured providers and their models, and the optional fields. Saving writes the advisor entry's config (landed through the config editor into the profile patch) and applies to running sessions immediately — no restart. The card requires a dsh web build whose shell declares the `plugins.bundle.config` card slot (dsh ≥ 0.1.7-rc.1) and loads packages that declare `dsh.client`; it reads and writes the config through the official `GatewayService` RPC channel (`/api/advisor/get` + `/api/advisor/set`), which is not gated by the settings exposure allowlist. It additionally blocks saving while enabled with a required field empty.
-3. **`/advisor` command** — per-session and ephemeral: it flips a session override, never the persisted config (see [Verify](#verify)).
+3. **`/advisor` command** — per-session and ephemeral: it flips a session override and pins a per-session reviewer model, never the persisted config (see [Verify](#verify)).
 
 In a **dsh-tui** profile the same five keys are editable in the TUI `/settings` screen: run `dsh --profile dsh-tui`, open `/settings`, and edit the **Advisor** section (`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`, each with zh/en label + hint). Edits are staged and written on save through the revision-fenced `settings.mutate` into the same advisor entry config the web card writes, and re-apply live without a restart. `systemPrompt` is NOT a TUI field (the TUI text control is single-line; a multi-line prompt would be truncated) — edit it via the web card or the profile patch layer. The section requires dsh-tui ≥ v0.8.0 (shipped in the `dsh-tui-settings-sections` row of the v0.8.0+ bundle); older dsh-tui versions no-op it cleanly and the profile patch layer remains the edit path. `/advisor config` stays a read-only readback whose edit hint names the `/settings` screen when the seam is mounted. Save behavior differs from the web card: the TUI seam has no cross-field validation, so a save may set `enabled: true` with empty `provider`/`model` — the explicit model gate resolves that to disabled-with-reason at runtime (visible via `/advisor status` and `/advisor config`); the web card blocks such a save outright. Full reference → [docs/configuration.md](docs/configuration.md).
 
@@ -67,11 +67,16 @@ With the advisor installed and enabled, control it in-session with the `/advisor
 /advisor on         enable the advisor for this session
 /advisor off        disable the advisor for this session
 /advisor status     show state, model, runtime status, pending count, last activity
+/advisor model      show the effective reviewer model and its source (session override or global default)
+/advisor model set <provider> <model>   pin a reviewer model for this session only
+/advisor model reset    drop the session pin and re-inherit the global defaults
 ```
 
 `/advisor on|off|toggle` are session-scoped and ephemeral: they flip a per-session override, never the persisted config. Enabling a session whose config lacks `provider`/`model` starts no model call — `/advisor status` (and the `/advisor on` reply) shows the gate reason: the advisor runs only when enabled **with** both configured. `/advisor on` is also the manual recovery path: a session advisor paused by a quota/rate-limit (`quota_exhausted` — no auto-resume timer) resumes in place, and a halted advisor (permanent model error, e.g. invalid credentials) is rebuilt fresh for the session.
 
-In a **dsh-tui** profile, `/advisor config` additionally reads back the composed configuration — read-only, with edit hints naming the real write paths: the TUI `/settings` screen (Advisor section, dsh-tui ≥ v0.8.0) and the profile patch layer. The `/advisor` / `on|off|status|config` commands are listed in the TUI `/` menu with subcommand completion (command discovery requires the `dsh-tui-command-trees` row — the shipped dsh-tui bundle has it).
+`/advisor model set` pins a reviewer model for the **invoking session only** — an in-memory, atomic `provider + model` pair that lives for the live session (cleared on dispose, owner teardown, cold resume, or restart; a forked/new session inherits the global defaults). It rides above the persisted global defaults without rewriting them: a complete session pair is used even when the global config has no pair yet, a malformed global config still blocks every session, half-pairs are never merged, and setting/resetting never touches the enable switch. Validation resolves the pair through the LLM service before commit (60 s bound, cancellable, no auto-retry); on failure the previous selection stays untouched. `/advisor config` remains the readback of the **global defaults**, not the session state.
+
+In a **dsh-tui** profile, `/advisor config` additionally reads back the composed configuration — the global defaults, read-only, with edit hints naming the real write paths: the TUI `/settings` screen (Advisor section, dsh-tui ≥ v0.8.0) and the profile patch layer. The `/advisor` / `on|off|status|config|model` commands are listed in the TUI `/` menu with subcommand completion (command discovery requires the `dsh-tui-command-trees` row — the shipped dsh-tui bundle has it).
 
 ## Features
 
@@ -82,10 +87,10 @@ In a **dsh-tui** profile, `/advisor config` additionally reads back the composed
   [advisor:concern] extract the helper into a module and unit-test it
   ```
 
-- **Explicit model gate**: `enabled` defaults to off; `enabled: true` without `provider` + `model` never starts a model call — status reports disabled-with-reason. Unknown config keys are rejected.
+- **Explicit model gate**: `enabled` defaults to off; `enabled: true` without `provider` + `model` never starts a model call — status reports disabled-with-reason. The gate applies to the *effective* route after session resolution: a complete per-session override pair satisfies it for that session; a malformed global config cannot be bypassed. Unknown config keys are rejected.
 - **Zero-tool minimal start**: the reviewer is an independent model call only — no advisor tools, nothing it can do to the session besides advisory messages.
 - **No-stall failure policy**: a failing or quota-limited advisor only drops its own bounded backlog — it can never park or pollute the primary loop.
-- **Session-scoped controls**: `/advisor on|off|status|config` work per session; the toggles are ephemeral overrides, never persisted config.
+- **Session-scoped controls**: `/advisor on|off|status|config|model` work per session; the toggles and the per-session model pin are ephemeral overrides, never persisted config — `/advisor config` always reports the global defaults.
 
 ![Advisor note injected into the session stream](docs/screenshots/advisor-injected-note.webp)
 

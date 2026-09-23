@@ -10,7 +10,7 @@
 
 卡片对配置的读写**只**走官方 `GatewayService` RPC 通道：`/api/advisor/get` + `/api/advisor/set`（`src/gateway.ts` 的 `AdvisorConfigGateway`，由宿主 typertGateway 认领，与 dsh 内建 `goals` 服务同一机制）。该通道不受 settings 暴露白名单门控；进程内写入（`settings.update`，`ns` 即 profile entry id `advisor`——bundle 行 id，`cordis.patch.yml`）经 config editor 落入 Loader，由 Loader 提交 volatile 字段并派发 `loader/volatile-update`。没有 config editor 的组合（headless/集成环境）里 `get` 仍读 entry、`set` 干净报错（KD-G5）。**插件不做任何宿主补丁**。
 
-第三个控制面 `/advisor` 指令是**会话级且临时**的（翻转的是按会话的 override，从不修改持久化配置）——见 [消费者契约](consumer-api.md#advisor-指令面) 与 [用法](../README.zh.md#用法)。
+第三个控制面 `/advisor` 指令是**会话级且临时**的（翻转的是按会话的启用 override、并可按会话钉住评审模型，从不修改持久化配置）——见 [消费者契约](consumer-api.md#advisor-指令面)、[会话级评审模型覆盖](#会话级评审模型覆盖运行时临时) 与 [用法](../README.zh.md#用法)。
 
 ## 配置字段
 
@@ -45,11 +45,28 @@
 
 `enabled: true` 而 `provider` 或 `model` **缺失或为空（含全空白字符串）** 时，`resolveAdvisorConfig`（`src/config.ts`）把配置解析为 **disabled-with-reason**：`enabled: false` + `disabledReason`，**绝不发起任何模型调用**（硬门禁，不是警告）。这是所有路径的 SSOT：
 
-- 运行时每次读取都经过该解析器（`src/index.ts` `safeResolved` / `safeEffective`），因此配置编辑也永远无法绕过门禁发起模型调用；
+- 运行时每次读取都经过该解析器（`src/index.ts` `safeResolved` / `safeEffective`），因此配置编辑也永远无法绕过门禁发起模型调用；门禁在会话解析**之后**作用于有效路由（见 [会话级评审模型覆盖](#会话级评审模型覆盖运行时临时)）——全局缺 pair 可由完整会话对满足，非法全局配置不可绕过；
 - `/advisor status` 与 `/advisor on` 的回复在门禁阻挡时展示原因（`src/commands.ts`）；
 - Settings 卡片在 enabled 且必填字段为空时阻止保存（TUI `/settings` seam 无此跨字段校验——保存行为差异见文档开头），但宿主侧硬门禁始终是最后防线。
 
 **未知键严格拒绝**：`resolveAdvisorConfig` 显式拒绝未知键（`CONFIG_KEYS` 白名单，`src/config.ts`）与非对象输入；插件行加载时未知键抛错、拒绝该行（`src/index.ts` 构造期读取仍用抛错版 `resolved()`）。entry config 若携带解析器拒绝的值（如经非严格 schemastery object merge 混入的未知键），live 读取会解析为 disabled-with-reason 携带错误信息 —— 永不 wedge 热路径、永不启动模型调用（`src/index.ts` `safeFallback`；`src/gateway.ts` `readConfig` 同样包含该 containment）。
+
+## 会话级评审模型覆盖（运行时，临时）
+
+除上表六个**持久化的全局默认值**键外，插件还支持一个**运行时、内存态、按会话**的评审模型覆盖：`modelOverride: { provider, model }` 原子对。它**绝不**写入 entry config、绝不持久化（持久化 schema 冻结在上述六键），由 `/advisor model` 指令面驱动：
+
+| 指令 | 行为 |
+|---|---|
+| `/advisor model` | 显示有效评审模型（provider/model）、来源（`session` 覆盖或 `global` 默认）与生存期说明 |
+| `/advisor model set <provider> <model>` | 仅为**发起调用的会话**钉住模型；参数分开传，允许模型 id 含 `/`；不接受任意 session-id 参数 |
+| `/advisor model reset` | 删除本会话覆盖，重新继承**当前**全局默认值；从不触碰启用开关 |
+
+- **解析顺序（单一有效解析器）**：(1) 先校验全局配置形状（非法仍然失败关闭）；(2) 启用 = 会话启用 override（`/advisor on|off`）?? 全局 `enabled`；(3) 路由 = 会话的**完整** `modelOverride` 对 ?? 组合后的全局 advisor 对——两级之间的**半个 pair 永不拼接**；(4) 全局组合保持 用户设置 → 插件行基础值 → schema 默认值。
+- **与 S4 门禁的关系**：显式 pair 门禁在会话解析**之后**作用于*有效*路由——全局默认缺 pair 时，完整的会话对可为该会话满足门禁；但**非法的全局配置**（未知键、坏值）无法被任何会话覆盖绕过。
+- **对校验**：缺失即继承、reset 即删除；空白/不完整对、含空白的标识符、多余字段一律拒绝；外侧空白裁剪；大小写保留。set/reset **从不**改变启用开关；`/advisor off` 保留会话对供之后 `/advisor on` 使用；钉住与今日全局默认相同的对仍然有效（保护会话免受日后默认值修改影响）。
+- **校验提交**：提交前经 app 根 LLM 服务 `resolveModelInfo(provider, model, signal)` 解析（catalog 成员资格仅是参考——手填可路由 id 允许）；查找绑定 60 秒（与运行时调用 deadline 默认一致）、可取消、**无自动重试**；失败时先前选择与运行时保持不变。
+- **生存期（KD-5）**：与启用 override 同一临时类别——同一 Agent 与 advisor owner 存活期间有效（导航/重连保持），agent/session dispose、owner 卸载、冷恢复、重启即清除；fork 的新会话继承全局默认值。状态是 O(活跃覆盖数)：reset 移除空条目，无历史 SessionId 堆积、无 TTL/GC。
+- **路由变更生效**：有效对变化时中止该会话旧的 advisor 调用、丢弃 backlog、重新 seed 到当前会话 seq，在**下一个**新的可评审 delta 上生效；有效对不变则不重启运行时。全局默认值修改影响继承者，不影响已钉住的会话。
 
 ## 配置读取模型（composition）
 
