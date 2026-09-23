@@ -76,22 +76,25 @@ dsh plugin --profile dsh-tui add .
 ```
 
 The bundle inserts the same `- insert: id: advisor` row into the dsh-tui
-profile's patch layer (`~/.dsh/profiles/dsh-tui/cordis.patch.yml`). The
-`advisor` settings namespace is shared across profiles via the global
-`$DSH_HOME/settings.yaml` `advisor:` section (the web Settings card writes
-there too). On dsh-tui ≥ v0.8.0 the TUI `/settings` screen also edits the
-same five keys (`enabled` / `provider` / `model` / `immuneTurns` /
-`maxDeltaMessages`) in its Advisor section — edits are staged and written on
-save through the revision-fenced `settings.mutate` into the same namespace
-user layer, re-applying live without a restart. The section ships with the
+profile's patch layer (`~/.dsh/profiles/dsh-tui/cordis.patch.yml`). Each
+profile carries its own advisor entry config there — the row's `config`
+fields are schema-volatile live fields (dsh ≥ 0.1.7-rc.1), committed by the
+Loader without a remount; there is no global settings.yaml section anymore
+(a pre-0.1.7 one is imported into the active profile and renamed
+`.imported` on first boot). On dsh-tui ≥ v0.8.0 the TUI `/settings` screen
+also edits the same five keys (`enabled` / `provider` / `model` /
+`immuneTurns` / `maxDeltaMessages`) in its Advisor section — edits are
+staged and written on save through the revision-fenced `settings.mutate`
+into the same advisor entry config (persisted in the profile patch),
+re-applying live without a restart. The section ships with the
 `dsh-tui-settings-sections` row in the v0.8.0+ bundle; on older dsh-tui
-versions it is a clean no-op and the patch layer / settings.yaml remain the
-edit paths. `systemPrompt` is not a TUI field (single-line input) — edit it
-via the web card or `$DSH_HOME/settings.yaml`. `/advisor config` is the
-readback (read-only, with edit hints naming the `/settings` screen when the
-seam is mounted), and `/advisor` / `on|off|status|config` surface in the TUI
-`/` menu with subcommand completion (requires the `dsh-tui-command-trees`
-row, shipped in the dsh-tui bundle).
+versions it is a clean no-op and the profile patch layer remains the edit
+path. `systemPrompt` is not a TUI field (single-line input) — edit it via
+the web card or the profile patch layer. `/advisor config` is the readback
+(read-only, with edit hints naming the `/settings` screen when the seam is
+mounted), and `/advisor` / `on|off|status|config` surface in the TUI `/`
+menu with subcommand completion (requires the `dsh-tui-command-trees` row,
+shipped in the dsh-tui bundle).
 
 Verify:
 
@@ -120,14 +123,15 @@ namespaces to configuration clients: model-provider namespaces plus product
 namespaces (locale / permission / ui-conversation / ui-theme / ui-onboarding /
 agent-presets). **Upstream dsh has no registration-level opt-in**
 (`exposeToWebClients` does not exist in upstream `SettingsRegisterOptions` —
-verified against the pristine 20da39e snapshot), so the `advisor` namespace is
+verified against the pristine 20da39e snapshot), so the advisor config is
 **not on the apiproxy allowlist**. The plugin registers `AdvisorConfigGateway`
 (a `GatewayService` with `@Remote('get')`/`@Remote('set')` methods), the
 host's typertGateway claims `/api/advisor/get` + `/api/advisor/set` (the same
 mechanism the dsh `goals` service uses), and the card calls them via
-`connection.rpc`. The in-process write (`ctx.settings.update`) carries no
-exposed-namespace check, so saving works on any dsh build that ships the
-GatewayService channel. No host patching is applied or required.
+`connection.rpc`. The in-process write (`settings.update` on the advisor
+entry id) carries no exposed-namespace check, so saving works on any dsh
+build that ships the GatewayService channel. No host patching is applied or
+required.
 
 ## 6. Verify
 
@@ -137,8 +141,8 @@ dsh --profile web
 ```
 
 After booting, the web Plugins page renders the Advisor card on the dsh-advisor
-bundle's page; it reads and writes the `advisor` namespace live through
-`/api/advisor/get` + `/api/advisor/set` — saving applies to new sessions
+bundle's page; it reads and writes the advisor entry config live through
+`/api/advisor/get` + `/api/advisor/set` — saving applies to running sessions
 immediately.
 
 ## 7. Uninstall

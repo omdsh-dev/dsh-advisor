@@ -116,13 +116,13 @@ export function apply(ctx: ClientContext): void {
   // Pushed invalidations converge the open surface without polling. Two
   // planes feed the shared microtask debounce:
   // - `connection/reset` (ctx.on): a connection reset invalidates the whole
-  //   client state (the upstream `dsh-client-ui-settings` scope uses the same
-  //   signal — its `SettingsScopeBinder` also subscribes to the remote
-  //   settings event below);
+  //   client state (the upstream `dsh-client-ui-settings` scope subscribes to
+  //   the same signal — `ctx.on('connection/reset')` beside its remote
+  //   settings event, per its lib/client.js);
   // - the granular Host invalidation events forwarded to the client remote
   //   face (`ctx.remote.$on`; legal key set = `API_REMOTE_FORWARDED_EVENTS`
   //   in @deepseek-ai/dsh-api-remotes): `settings/document-updated` (a
-  //   settings namespace document changed on the host — e.g. a provider
+  //   settings entry document changed on the host — e.g. a provider
   //   section edited on the Models page) and `llm/adapters-updated`
   //   (provider/model topology mutation — e.g. a model added on the Models
   //   page). The 20260811 dsh snapshot removed the old `settings/changed` /

@@ -132,8 +132,8 @@ function assistantMessage(value: string, toolCalls: Array<{ name: string; args: 
 
 /** V4 tool result: a first-class tool-role message (the V3 shape folded the
  * result into a user-role message carrying a `tool-result` content block —
- * that arm no longer exists). */
-function toolResultMessage(value: string): EventSpec {
+ * that arm no longer exists). `isError` is the message-level failure flag. */
+function toolResultMessage(value: string, isError = false): EventSpec {
   return {
     type: 'tool/result',
     data: {
@@ -144,7 +144,7 @@ function toolResultMessage(value: string): EventSpec {
         role: 'tool',
         toolCallId: ToolCallId('call-0'),
         content: [text(value)],
-        isError: false,
+        isError,
         source: { kind: 'tool', callId: ToolCallId('call-0') },
       },
     },
@@ -436,6 +436,25 @@ describe('DeltaRenderer — markdown rendering', () => {
     expect(delta).toBeDefined()
     expect(delta!.markdown).toContain('**agent**: - tool call: run_tests({})')
     expect(delta!.markdown).toContain('**user**: [tool result] 3 passed')
+    // The failed invocation must NOT read as a plain result.
+    expect(delta!.markdown).not.toContain('(failed)')
+  })
+
+  it('tags a failed tool result (message-level isError, V4)', () => {
+    const renderer = new DeltaRenderer()
+    const delta = renderer.update(buildEvents([
+      turnStart(1),
+      userMessage('run the tests'),
+      stepStart(1, 1),
+      assistantMessage('', [{ name: 'run_tests', args: '{}' }]),
+      toolResultMessage('tests crashed', true),
+      stepEnd(1, 1),
+      turnEnd(1),
+    ]))
+    expect(delta).toBeDefined()
+    // The failure tag rides the [tool result] prefix so the reviewer model
+    // sees the failure signal without re-reading the log.
+    expect(delta!.markdown).toContain('**user**: [tool result] (failed) tests crashed')
   })
 
   it('excludes reasoning blocks from assistant text (MVP)', () => {

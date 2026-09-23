@@ -1,14 +1,14 @@
-# 配置指南（`advisor` 命名空间）
+# 配置指南（advisor entry config）
 
-`dsh-advisor` 的配置集中在 `advisor` settings 命名空间。它有三个并行的编辑路径，读写同一组键：
+`dsh-advisor` 的配置就是**插件自己 entry 的 config**——profile 补丁层（如 `profiles/web/cordis.patch.yml`）里 `id: advisor` 那一行的 `config` 字段。dsh ≥ 0.1.7-rc.1 起全部六个字段都声明为 schema-volatile 的 **live 字段**：Loader 把编辑提交进运行中 fiber 的引用，**无需重挂载**（旧的全局 `$DSH_HOME/settings.yaml` user layer 已移除——dsh 首次启动时把该文件导入活跃 profile 并改名 `.imported`；`src/settings.ts` 的 bridge 读取的正是 entry config 的 live 引用）。三个并行的编辑路径读写同一份存储：
 
-1. **插件行 config** —— 用户 profile 的 `cordis.patch.yml`（如 `profiles/web/cordis.patch.yml`）里 `id: advisor` 那一行的 `config` 字段。这是合成的 **base**（`src/settings.ts` `installAdvisorSettings` 以 entry 为 `base` 注册命名空间）。
-2. **web「插件」页 —— dsh-advisor 组合包自己页面上的 Advisor 卡片**（bundle key `dsh-advisor`，经 `plugins.bundle.config` keyed slot 注册）—— 卡片把编辑结果写入 `advisor` 命名空间的 **user layer**，覆盖插件行 config 而无需改动它；保存后新会话立即生效，无需重启（运行时 live 读取合成值，见 [live 重应用](#live-重应用)）。
-3. **dsh-tui `/settings` 屏幕**（dsh-tui ≥ v0.8.0，随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供；旧版 dsh-tui 干净地 no-op）—— `/settings` 里的 **Advisor** 分节编辑同样的五个键（`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`，各带中英文标签与提示）。编辑先暂存，保存时经 revision 栅栏保护的 `settings.mutate` 写入同一个 user layer，live 重应用、无需重启。`systemPrompt` 不是 TUI 字段（TUI text 控件为单行；多行 prompt 会被截断）——经 web 卡片或 `$DSH_HOME/settings.yaml` 编辑。
+1. **插件行 config** —— 上面的补丁层字段本体，配置就存放在这里（`src/config.ts` 的 `Config` schema 即该 entry 的 Loader schema）。
+2. **web「插件」页 —— dsh-advisor 组合包自己页面上的 Advisor 卡片**（bundle key `dsh-advisor`，经 `plugins.bundle.config` keyed slot 注册）—— 卡片把编辑结果写进**同一份 entry config**（经 `settings.update('advisor', …)` → config editor → Loader 落盘到 profile 补丁层）；保存后运行中的会话立即生效，无需重启（运行时 live 读取 entry 引用，见 [live 重应用](#live-重应用)）。
+3. **dsh-tui `/settings` 屏幕**（dsh-tui ≥ v0.8.0，随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供；旧版 dsh-tui 干净地 no-op）—— `/settings` 里的 **Advisor** 分节编辑同样的五个键（`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`，各带中英文标签与提示）。编辑先暂存，保存时经 revision 栅栏保护的 `settings.mutate` 写入同一份 entry config，live 重应用、无需重启。`systemPrompt` 不是 TUI 字段（TUI text 控件为单行；多行 prompt 会被截断）——经 web 卡片或 profile 补丁层编辑。
 
-三条路径对等（TUI `/settings`、profile 补丁层、共享的 `$DSH_HOME/settings.yaml` 读写同一组键、同一 `advisor` 命名空间——补丁层落在合成 **base**，TUI `/settings` 与 `settings.yaml` 落在 **user layer**）。**保存行为差异（如实记录）**：web 卡片在 `enabled: true` 且必填字段为空时**阻止保存**；TUI seam 没有跨字段校验（上游行为），一次保存可能把 `enabled: true` 与空 `provider`/`model` 一起写入——S4 显式模型门禁（spec §5.2）会把该配置解析为 disabled-with-reason，可见于 `/advisor status` 与 `/advisor config`（见 [显式模型门禁（S4）](#显式模型门禁s4)）。
+三条路径对等（web 卡片、TUI `/settings`、profile 补丁层读写同一组键、同一份 entry config）。**保存行为差异（如实记录）**：web 卡片在 `enabled: true` 且必填字段为空时**阻止保存**；TUI seam 没有跨字段校验（上游行为），一次保存可能把 `enabled: true` 与空 `provider`/`model` 一起写入——S4 显式模型门禁（spec §5.2）会把该配置解析为 disabled-with-reason，可见于 `/advisor status` 与 `/advisor config`（见 [显式模型门禁（S4）](#显式模型门禁s4)）。
 
-卡片对配置的读写**只**走官方 `GatewayService` RPC 通道：`/api/advisor/get` + `/api/advisor/set`（`src/gateway.ts` 的 `AdvisorConfigGateway`，由宿主 typertGateway 认领，与 dsh 内建 `goals` 服务同一机制）。`advisor` 命名空间**不在**宿主 apiproxy 的 exposed-namespaces 白名单上（上游 dsh 没有注册级 opt-in），因此该通道也不受 settings 暴露白名单门控；进程内写入（`ctx.settings.update`）没有 exposed-namespace 检查。没有 settings service 时，source 就是插件行 entry，行为与未装插件时一致（`src/settings.ts`）。**插件不做任何宿主补丁**。
+卡片对配置的读写**只**走官方 `GatewayService` RPC 通道：`/api/advisor/get` + `/api/advisor/set`（`src/gateway.ts` 的 `AdvisorConfigGateway`，由宿主 typertGateway 认领，与 dsh 内建 `goals` 服务同一机制）。该通道不受 settings 暴露白名单门控；进程内写入（`settings.update`，`ns` 即 profile entry id `advisor`——bundle 行 id，`cordis.patch.yml`）经 config editor 落入 Loader，由 Loader 提交 volatile 字段并派发 `loader/volatile-update`。没有 config editor 的组合（headless/集成环境）里 `get` 仍读 entry、`set` 干净报错（KD-G5）。**插件不做任何宿主补丁**。
 
 第三个控制面 `/advisor` 指令是**会话级且临时**的（翻转的是按会话的 override，从不修改持久化配置）——见 [消费者契约](consumer-api.md#advisor-指令面) 与 [用法](../README.zh.md#用法)。
 
@@ -45,23 +45,23 @@
 
 `enabled: true` 而 `provider` 或 `model` **缺失或为空（含全空白字符串）** 时，`resolveAdvisorConfig`（`src/config.ts`）把配置解析为 **disabled-with-reason**：`enabled: false` + `disabledReason`，**绝不发起任何模型调用**（硬门禁，不是警告）。这是所有路径的 SSOT：
 
-- 运行时每次读取都经过该解析器（`src/index.ts` `safeResolved` / `safeEffective`），因此 settings 编辑也永远无法绕过门禁发起模型调用；
+- 运行时每次读取都经过该解析器（`src/index.ts` `safeResolved` / `safeEffective`），因此配置编辑也永远无法绕过门禁发起模型调用；
 - `/advisor status` 与 `/advisor on` 的回复在门禁阻挡时展示原因（`src/commands.ts`）；
 - Settings 卡片在 enabled 且必填字段为空时阻止保存（TUI `/settings` seam 无此跨字段校验——保存行为差异见文档开头），但宿主侧硬门禁始终是最后防线。
 
-**未知键严格拒绝**：`resolveAdvisorConfig` 显式拒绝未知键（`CONFIG_KEYS` 白名单，`src/config.ts`）与非对象输入；插件行加载时未知键抛错、拒绝该行（`src/index.ts` 构造期读取仍用抛错版 `resolved()`）。settings 的 user layer 若写入了解析器拒绝的值（如未知键），live 读取会解析为 disabled-with-reason 携带错误信息 —— 永不 wedge 热路径、永不启动模型调用（`src/index.ts` `safeFallback`；`src/gateway.ts` `readConfig` 同样包含该 containment）。
+**未知键严格拒绝**：`resolveAdvisorConfig` 显式拒绝未知键（`CONFIG_KEYS` 白名单，`src/config.ts`）与非对象输入；插件行加载时未知键抛错、拒绝该行（`src/index.ts` 构造期读取仍用抛错版 `resolved()`）。entry config 若携带解析器拒绝的值（如经非严格 schemastery object merge 混入的未知键），live 读取会解析为 disabled-with-reason 携带错误信息 —— 永不 wedge 热路径、永不启动模型调用（`src/index.ts` `safeFallback`；`src/gateway.ts` `readConfig` 同样包含该 containment）。
 
-## 合成模型（composition）
+## 配置读取模型（composition）
 
-三个来源按「后一层覆盖前一层」合成，各处使用同一组键（`src/settings.ts`）：
+只有一个存储：schema 默认值在 `Config` schema 上，值在插件 entry 的 config 里（`src/settings.ts`）：
 
 ```text
-schema 默认值 → 插件行 config（base）→ settings user layer（web 卡片 / TUI `/settings` 写入）
+schema 默认值（.volatile() live 字段）→ entry config（插件行本体；web 卡片 / TUI `/settings` 经 settings.update/mutate 写入同一处）
 ```
 
-- 无 settings service（未组合 `settings` 时，条件 `ctx.inject(['settings'], ...)` 子项不激活）→ source 恰为插件行 entry；
-- 有 settings service → `AdvisorSettingsBridge.source()` 读 scope 的 live 合成值；每次 committed 变更触发 `onChange`；
-- **TUI `/settings` 与 web 卡片对等**（dsh-tui ≥ v0.8.0）：两者都写同一个 user layer（`$DSH_HOME/settings.yaml`），与 profile 补丁层构成三条并行编辑路径。唯一的行为差异：web 卡片在 `enabled: true` 且必填字段为空时阻止保存；TUI seam 没有跨字段校验（上游行为，如实记录），保存可能写入 `enabled: true` + 空 `provider`/`model`——S4 门禁仍把该配置解析为 disabled-with-reason，运行时绝不发起模型调用（见 [显式模型门禁（S4）](#显式模型门禁s4)）。
+- `AdvisorSettingsBridge.source()` 每次调用都解包 entry 的 volatile 引用快照——读到的就是当前提交值；
+- 每次 Loader 提交（`loader/volatile-update`，仅派发给持有该 entry 的 fiber、且派发前值已提交）触发 `onChange`；
+- **TUI `/settings` 与 web 卡片对等**（dsh-tui ≥ v0.8.0）：两者都写同一份 entry config。唯一的行为差异：web 卡片在 `enabled: true` 且必填字段为空时阻止保存；TUI seam 没有跨字段校验（上游行为，如实记录），保存可能写入 `enabled: true` + 空 `provider`/`model`——S4 门禁仍把该配置解析为 disabled-with-reason，运行时绝不发起模型调用（见 [显式模型门禁（S4）](#显式模型门禁s4)）。
 
 ## 行为要点
 
@@ -75,7 +75,7 @@ schema 默认值 → 插件行 config（base）→ settings user layer（web 卡
 | `concern` | 值得在继续前权衡的重大风险或明显更优的方向 | `agent.steer`（**唤醒**），受 `immuneTurns` 冷却约束 |
 | `blocker` | 继续下去明显浪费工作（与显式用户指令矛盾、原地打转、根本性不可行） | `agent.steer` |
 
-送达消息是 user-role 消息，`source` 走分类化的 first-party `plugin` arm（`src/kinds.ts` `ADVISOR_PLUGIN_ID`；`kind: 'plugin'` + `plugin: 'advisor'`）与自我描述内容 `[advisor:{severity}] {note}`（`src/delivery.ts` `buildAdvisorMessage`；`form: 'notice'`，summary 有界 120 字符）—— 这是主模型获得的唯一关于如何对待它的线索。advisor 消息被排除在此后的 advisor delta 之外（自审排除，迁移前旧 kind 的 note 除外，见下）。
+送达消息是 user-role 消息，`source` 携带 advisor 自己的 producer kind（`src/kinds.ts` `ADVISOR_PLUGIN_ID`；`kind: 'advisor'`，dsh 0.1.7-rc.1 起经声明合并进入 `MessageSourceMap`）与自我描述内容 `[advisor:{severity}] {note}`（`src/delivery.ts` `buildAdvisorMessage`；`form: 'notice'`，summary 有界 120 字符）—— 这是主模型获得的唯一关于如何对待它的线索。advisor 消息被排除在此后的 advisor delta 之外（自审排除，含两种历史形状，见下）。
 
 **`immuneTurns` 冷却**（`src/delivery.ts` `AdvisorDelivery`）：仅在一条 concern/blocker **实际 steer 送达**后武装冷却栅栏；接下来 `immuneTurns` 个完成的 stepped 主 turn 走完之前，新的打断性 note 降级为 inject；`onSteppedTurnEnd`（每个完成的 stepped 可评审 turn/end）驱动倒计时。compaction / surface 重写（KD-5）清空栅栏。缺 agent 时 note 丢弃并记日志 —— advisory only，永不 throw、永不 stall。
 
@@ -92,12 +92,12 @@ schema 默认值 → 插件行 config（base）→ settings user layer（web 卡
 
 - **标准 stepped 会话**：每个正常结束（`reason.kind ∈ {completed, 'max-tokens', error}`）的 stepped 主 turn/end 之后评审增量 delta；跳过 `aborted` / `blocked` / `interrupted`（不评审被用户截断的 turn）；
 - **agentic / harness 会话**（从不发出 `turn/end`）：每个完成的 agent 回复轮次后 —— 当新的用户输入（含 `agent/inbox/spliced` 拼接的用户输入）在未评审的 assistant 增量之后到达时评审；非用户 inbox 拼接（advisor 自己的 inject/steer 送达等）永不触发（C-1 自触发修复）；
-- **自审排除**：带 advisor 分类化 `plugin` arm 的消息（`isAdvisorMessage`：`kind: 'plugin'` + `plugin: 'advisor'`）不被渲染进 advisor delta —— advisor 不会读回自己在该形状下投递的建议。**迁移代价（如实记录）**：该识别只覆盖 `plugin` arm；迁移前写入、带旧自定义 kind（`kind: 'advisor'`）的 note 已不再被谓词匹配，一次全量重放（compaction、非 append `surfaceOp`、或指纹失配 → `reset()` + `rebuild()` 自 0 重新折叠）会把它重新呈现给 advisor，每次重放一次 —— 无数据丢失、仅自审污染；有意不添加旧格式读取分支，因为项目的「不保持向后兼容」不变量禁止兼容层，故这是被接受而非被修复的代价，不是缺陷；
+- **自审排除**：带 advisor producer kind 的消息（`isAdvisorMessage`：`kind: 'advisor'`，或 0.1.6 时代 `{ kind: 'plugin', plugin: 'advisor' }` note 经 V3→V4 内存迁移后的 `kind: 'plugin:advisor'`）不被渲染进 advisor delta —— advisor 不会读回自己投递的建议。史前直接 `{ kind: 'advisor' }` 的 note 作为直接 kind 被迁移边原样保留，同样被重新匹配——身份迁移不再孤儿化任何一代已持久化的 note（dsh ≥ 0.1.7-rc.1 的 V4 写入侧直接拒绝裸 `plugin` kind）；
 - `maxDeltaMessages` 有界窗口（`DeltaRenderer`）；compaction / surface replace / 指纹不匹配 → 重置游标、全量重放（KD-5）。
 
 ### Live 重应用
 
-Settings 每次 committed 变更经 `bridge.onChange` 重派生（`src/index.ts`）：`immuneTurns` / `maxDeltaMessages` 原地更新（delivery / observer）；每个会话 runtime 仅在其「运行影响签名」（enabled / provider / model / systemPrompt）变化时重建 —— 只改免疫/窗口的编辑不会中断在途调用或丢弃 backlog；config 级开关跟随 live source，新会话立即生效。S4 门禁每次读取都经解析器重放，settings 编辑永远无法启动被门禁阻挡的模型调用。
+每次 Loader 提交的 volatile 编辑（`loader/volatile-update`）经 `bridge.onChange` 重派生（`src/index.ts`）：`immuneTurns` / `maxDeltaMessages` 原地更新（delivery / observer）；每个会话 runtime 仅在其「运行影响签名」（enabled / provider / model / systemPrompt）变化时重建 —— 只改免疫/窗口的编辑不会中断在途调用或丢弃 backlog；config 级开关跟随 live source，新会话立即生效。S4 门禁每次读取都经解析器重放，配置编辑永远无法启动被门禁阻挡的模型调用。
 
 ## Web 卡片行为（`src/client`）
 
@@ -106,7 +106,7 @@ Advisor 卡片（bundle key `dsh-advisor`，`src/client/index.ts` 注册进 `plu
 - **enabled 开关**（默认 OFF）：关闭时显示配置表单被隐藏的提示，进行中的草稿保留；
 - **provider / model 选择框**：只列出**已配置**的 provider（命名空间 + profile 均解析，KD-S2）；model 选项优先取 provider profile 的声明模型，否则回退 `llm.models` catalog；存储的 provider/model 不再可用时显示警告；join 为空时显示引导文案；
 - **systemPrompt** 文本框（placeholder 提示空 = 默认）、`immuneTurns` / `maxDeltaMessages` 数字输入（清空数字输入保持空、不强制为 0）；
-- **保存**经网关 `set`（`connection.rpc.call('/api', 'advisor/set', { patch })`）：只把相对上次读取的**变更键**作为 patch 发送；`set` 先经 `Config` schema 校验（未知键拒绝）再写 user layer，返回新合成值；
+- **保存**经网关 `set`（`connection.rpc.call('/api', 'advisor/set', { patch })`）：只把相对上次读取的**变更键**作为 patch 发送；`set` 先经 `Config` schema 校验（未知键拒绝）再写 entry config（经 config editor 落入 profile 补丁层的 advisor 行），返回新合成值；
 - **降级态**：网关不可达 → 卡片头部显示 config-channel 提示且不提供 Save；加载失败 → 头部提示 + 可重试；settings provider 只读 → 只读提示并禁用写入；
 - 卡片**没有** reset-to-defaults 动作（网关只暴露 `get` / `set` 两个端点）。
 

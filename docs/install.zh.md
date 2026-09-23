@@ -49,7 +49,7 @@ dsh plugin --profile dsh-tui add dsh-advisor   # <name> = 你的 profile 名
 dsh plugin --profile dsh-tui add .
 ```
 
-组合包把同样的 `- insert: id: advisor` 行插入 dsh-tui profile 的补丁层（`~/.dsh/profiles/dsh-tui/cordis.patch.yml`）。`advisor` settings namespace 经全局 `$DSH_HOME/settings.yaml` 的 `advisor:` 段跨 profile 共享（web Settings 卡片也写入该文件）。dsh-tui ≥ v0.8.0 时，TUI `/settings` 屏幕同样可编辑这五个键（`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`）——在 Advisor 分节中暂存编辑，保存时经 revision 栅栏保护的 `settings.mutate` 写入同一个命名空间 user layer，live 重应用、无需重启。该分节随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供；旧版 dsh-tui 干净地 no-op，仍以补丁层 / settings.yaml 为编辑路径。`systemPrompt` 不是 TUI 字段（单行输入）——请经 web 卡片或 `$DSH_HOME/settings.yaml` 编辑。`/advisor config` 是回读手段（只读，seam 挂载时编辑提示指向 `/settings` 屏幕），`/advisor` / `on|off|status|config` 则出现在 TUI 的 `/` 菜单中并带子命令补全（要求 `dsh-tui-command-trees` 行，随附的 dsh-tui 组合包自带）。
+组合包把同样的 `- insert: id: advisor` 行插入 dsh-tui profile 的补丁层（`~/.dsh/profiles/dsh-tui/cordis.patch.yml`）。每个 profile 在补丁层里持有自己的 advisor entry config——该行的 `config` 字段是 schema-volatile 的 live 字段（dsh ≥ 0.1.7-rc.1），由 Loader 免重挂载提交；全局 settings.yaml 分节已不存在（pre-0.1.7 的旧文件会在首次启动时被导入活跃 profile 并改名 `.imported`）。dsh-tui ≥ v0.8.0 时，TUI `/settings` 屏幕同样可编辑这五个键（`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`）——在 Advisor 分节中暂存编辑，保存时经 revision 栅栏保护的 `settings.mutate` 写入同一份 advisor entry config（持久化在 profile 补丁层），live 重应用、无需重启。该分节随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供；旧版 dsh-tui 干净地 no-op，profile 补丁层仍是编辑路径。`systemPrompt` 不是 TUI 字段（单行输入）——请经 web 卡片或 profile 补丁层编辑。`/advisor config` 是回读手段（只读，seam 挂载时编辑提示指向 `/settings` 屏幕），`/advisor` / `on|off|status|config` 则出现在 TUI 的 `/` 菜单中并带子命令补全（要求 `dsh-tui-command-trees` 行，随附的 dsh-tui 组合包自带）。
 
 验证：
 
@@ -76,7 +76,7 @@ dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-adv
 dsh --profile web
 ```
 
-启动后，web 的「插件」页会在 dsh-advisor 组合包页面上渲染 Advisor 卡片；它通过 `/api/advisor/get` + `/api/advisor/set` live 读写 `advisor` 命名空间——保存后新会话立即生效。
+启动后，web 的「插件」页会在 dsh-advisor 组合包页面上渲染 Advisor 卡片；它通过 `/api/advisor/get` + `/api/advisor/set` live 读写 advisor entry config——保存后运行中的会话立即生效。
 
 ## 7. 卸载
 
