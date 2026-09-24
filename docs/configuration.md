@@ -67,6 +67,7 @@
 - **校验提交**：提交前经 app 根 LLM 服务 `resolveModelInfo(provider, model, signal)` 解析（catalog 成员资格仅是参考——手填可路由 id 允许）；查找绑定 60 秒（与运行时调用 deadline 默认一致）、可取消、**无自动重试**；失败时先前选择与运行时保持不变。
 - **生存期（KD-5）**：与启用 override 同一临时类别——同一 Agent 与 advisor owner 存活期间有效（导航/重连保持），agent/session dispose、owner 卸载、冷恢复、重启即清除；fork 的新会话继承全局默认值。状态是 O(活跃覆盖数)：reset 移除空条目，无历史 SessionId 堆积、无 TTL/GC。
 - **路由变更生效**：有效对变化时中止该会话旧的 advisor 调用、丢弃 backlog、重新 seed 到当前会话 seq，在**下一个**新的可评审 delta 上生效；有效对不变则不重启运行时。全局默认值修改影响继承者，不影响已钉住的会话。
+- **Web 会话控制面（B2）**：同一控制器经两个插件自有端点暴露给 web 客户端——`/api/advisor/getSession`（返回权威会话快照：`sessionId`、`enabled`、`modelOverride`、`modelSource`、`effectiveModel`、可选 `disabledReason`、`lifetime: 'live-session'`）与 `/api/advisor/setSessionModel`（`selection` 为原子对或 `null`=reset），提交后返回同一快照。业务结果以插件域错误标签在返回数据中表达（如 `advisor/session-unknown` / `advisor/unavailable` / `advisor/rejected` / `advisor/failed`），不扩展 dsh 的失败词汇；未知/已销毁的会话目标直接拒绝且**不分配任何状态**；SessionId 不是授权——请求仍先经过 Connection 的 Host/Origin + 浏览器认证边界。web 界面是 `conversation.session.header.actions` 上的 **Advisor 动作**（非主模型插槽、非根卡片——全局卡片保持仅全局）：显示有效 pair/来源/生存期，支持钉住与「Use global default」；打开时（及打开期间断连/聚焦时）刷新，无推送事件、无轮询；控制面不可用时不提供写入，也**绝不回退**到全局写通道。
 
 ## 配置读取模型（composition）
 
