@@ -130,11 +130,12 @@ export function apply(ctx: ClientContext): void {
   // B2: the session action's refresh-signal epoch — bumped by every pushed
   // invalidation / connection reset / window focus that already coalesces
   // here, so an OPEN session menu refetches (fetch on reconnect / focus)
-  // while a closed one stays idle. The epoch is a plain counter store; the
+  // while a closed one stays idle. The epoch is a plain counter store (object
+  // state: the snapshot-store contract mutates a draft in place); the
   // per-session controllers consume it idempotently (a re-render never
   // double-fetches). No push-event contract, no polling — the bumps ride the
   // SAME debounced invalidation plane the global card already uses.
-  const refreshSignal = createSnapshotStore(0)
+  const refreshSignal = createSnapshotStore({ epoch: 0 })
 
   // Pushed invalidations converge the open surface without polling. Two
   // planes feed the shared microtask debounce:
@@ -172,7 +173,7 @@ export function apply(ctx: ClientContext): void {
         // refetch (reconnect / settings / provider-topology changes all
         // affect the effective session route — global pair edits reach
         // inheritors).
-        refreshSignal.update((epoch) => epoch + 1)
+        refreshSignal.update((signal) => { signal.epoch += 1 })
       })
     }
     const disposers: Array<() => void> = [ctx.on('connection/reset', refresh)]

@@ -54,7 +54,7 @@ export interface AdvisorSessionActionInjected {
     /** The per-session menu snapshot. */
     readonly snapshot: SnapshotStore<AdvisorSessionMenuState>
     /** Refresh-signal epoch (bumped on connection reset / window focus). */
-    readonly refreshSignal: SnapshotStore<number>
+    readonly refreshSignal: SnapshotStore<{ epoch: number }>
     /** The shared provider/model directory state. */
     readonly directory: SnapshotStore<AdvisorSettingsState>
   }
@@ -81,7 +81,7 @@ export type AdvisorSessionActionProps =
 export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNode {
   const { controller, directory, useSnapshot, useRefreshSignal, useDirectory, t } = props
   const state = useSnapshot((s) => s)
-  const epoch = useRefreshSignal((s) => s)
+  const epoch = useRefreshSignal((s) => s.epoch)
   const directoryState = useDirectory((s) => s)
   const [open, setOpen] = useState(false)
   // The staged pin selection is LOCAL user input (never seeded from the
