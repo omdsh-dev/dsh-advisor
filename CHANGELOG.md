@@ -2,6 +2,14 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.5.0] - 2026-09-24
+
+- 23047c0 Merge pull request #93 from omdsh-dev/feat/advisor-session-web-control
+- a4eae79 Merge pull request #92 from omdsh-dev/feat/session-model-override
+- c0f8323 Merge pull request #91 from omdsh-dev/chore/gitignore-video-agent
+- d7368f0 Merge pull request #90 from omdsh-dev/chore/dsh-0.1.7-rc.1
+- fced467 test: make the prepare-release fixture Windows-safe (#89)
+
 ## [0.4.1] - 2026-09-11
 
 - c681865 Merge pull request #85 from omdsh-dev/chore/dsh-0.1.5-rc.2
