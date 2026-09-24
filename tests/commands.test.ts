@@ -28,10 +28,16 @@ import { apply } from '../src/index'
 import type { AdvisorConfig } from '../src/config'
 import {
   AdvisorSessionOverrides,
+  MODEL_USAGE,
   USAGE,
   advisorConfigText,
+  advisorModelText,
   advisorStatusText,
+  modelResetText,
+  modelSetText,
   parseAdvisorCommand,
+  parseAdvisorModelCommand,
+  parseModelSetArgs,
   registerAdvisorCommands,
   summarizeSystemPrompt,
 } from '../src/commands'
@@ -39,7 +45,10 @@ import type {
   AdvisorCommandController,
   AdvisorCommandRegistry,
   AdvisorComposedConfig,
+  AdvisorModelRoute,
+  AdvisorResetModelOutcome,
   AdvisorSessionStatus,
+  AdvisorSetModelOutcome,
 } from '../src/commands'
 
 // ---------------------------------------------------------------------------
@@ -84,15 +93,27 @@ function baseConfig(overrides: Partial<AdvisorComposedConfig> = {}): AdvisorComp
   }
 }
 
-/** Stateful fake controller — records setEnabled calls and mirrors state. */
+/**
+ * Stateful fake controller — records setEnabled calls and mirrors state.
+ * The model methods return canned outcomes set per-test (`nextSetOutcome` /
+ * `nextResetOutcome`) and record the calls they received.
+ */
 class FakeController implements AdvisorCommandController {
   status: AdvisorSessionStatus
   config: AdvisorComposedConfig
+  route: AdvisorModelRoute
+  nextSetOutcome: AdvisorSetModelOutcome
+  nextResetOutcome: AdvisorResetModelOutcome
   readonly setCalls: Array<{ sessionId: string; enabled: boolean; sessionLength?: number }> = []
+  readonly setModelCalls: Array<{ sessionId: string; provider: string; model: string; sessionIdArg: string; signal?: AbortSignal }> = []
+  readonly resetModelCalls: Array<{ sessionId: string; sessionLength?: number }> = []
 
   constructor(status: AdvisorSessionStatus, config?: AdvisorComposedConfig) {
     this.status = status
     this.config = config ?? baseConfig()
+    this.route = { source: 'global' }
+    this.nextSetOutcome = { kind: 'failed', reason: 'fake: no outcome configured' }
+    this.nextResetOutcome = { kind: 'noop' }
   }
 
   getStatus(_sessionId: string): AdvisorSessionStatus {
@@ -103,9 +124,29 @@ class FakeController implements AdvisorCommandController {
     return this.config
   }
 
+  getModelRoute(_sessionId: string): AdvisorModelRoute {
+    return this.route
+  }
+
   setEnabled(sessionId: string, enabled: boolean, sessionLength?: number): void {
     this.setCalls.push({ sessionId, enabled, sessionLength })
     this.status = { ...this.status, enabled }
+  }
+
+  setModel(
+    sessionId: string,
+    provider: string,
+    model: string,
+    agent: Agent,
+    signal?: AbortSignal,
+  ): Promise<AdvisorSetModelOutcome> {
+    this.setModelCalls.push({ sessionId, provider, model, sessionIdArg: agent.session.id, signal })
+    return Promise.resolve(this.nextSetOutcome)
+  }
+
+  resetModel(sessionId: string, sessionLength?: number): AdvisorResetModelOutcome {
+    this.resetModelCalls.push({ sessionId, sessionLength })
+    return this.nextResetOutcome
   }
 }
 
@@ -235,12 +276,13 @@ describe('registerAdvisorCommands (registration function, brief: test directly)'
     expect(disposed).toBe(true)
   })
 
-  it('registry input.hint lists config (the TUI / row hint)', () => {
+  it('registry input.hint lists config and model (the TUI / row hint)', () => {
     const registry = new FakeRegistry()
     registerAdvisorCommands(registry, new FakeController(baseStatus()))
     const hint = registry.definitions[0]!.input?.hint
-    expect(hint).toBe('[on|off|status|config]')
+    expect(hint).toBe('[on|off|status|config|model]')
     expect(hint).toContain('config')
+    expect(hint).toContain('model')
   })
 })
 
@@ -249,9 +291,11 @@ describe('registerAdvisorCommands (registration function, brief: test directly)'
 // ---------------------------------------------------------------------------
 
 describe('USAGE (unknown-subcommand fallback)', () => {
-  it('header and subcommand list include config', () => {
-    expect(USAGE).toContain('Usage: /advisor [on|off|status|config]')
-    expect(USAGE).toContain('  /advisor config   show the composed advisor config (settings readback)')
+  it('header and subcommand list include config and the model surface', () => {
+    expect(USAGE).toContain('Usage: /advisor [on|off|status|config|model]')
+    expect(USAGE).toContain('  /advisor config   show the composed advisor config (global defaults readback)')
+    expect(USAGE).toContain('/advisor model set <provider> <model>')
+    expect(USAGE).toContain('/advisor model reset')
   })
 })
 
@@ -705,5 +749,279 @@ describe('apply wiring — /advisor config tuiSettingsAvailable reflects the tui
     if (result.kind === 'success') {
       expect(result.text).toContain('Edit: TUI /settings screen (Advisor section, dsh-tui ≥ v0.8.0) or ~/.dsh/profiles/<profile>/cordis.patch.yml (advisor plugin row)')
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Model surface (spec §5.3) — parse
+// ---------------------------------------------------------------------------
+
+describe('parseAdvisorCommand — model forms (spec §5.3)', () => {
+  it('bare "model" → model show; "model ..." → model with sub-parse', () => {
+    expect(parseAdvisorCommand(' model')).toEqual({ kind: 'model', sub: { kind: 'show' } })
+    expect(parseAdvisorCommand('model reset')).toEqual({ kind: 'model', sub: { kind: 'reset' } })
+    expect(parseAdvisorCommand('model set p m')).toEqual({ kind: 'model', sub: { kind: 'set', args: 'p m' } })
+  })
+
+  it('unknown model subcommand → model usage (not top-level usage)', () => {
+    expect(parseAdvisorCommand('model banana')).toEqual({ kind: 'model', sub: { kind: 'usage' } })
+  })
+
+  it('parseAdvisorModelCommand: exact forms after trimming', () => {
+    expect(parseAdvisorModelCommand('')).toEqual({ kind: 'show' })
+    expect(parseAdvisorModelCommand('  ')).toEqual({ kind: 'show' })
+    expect(parseAdvisorModelCommand('reset')).toEqual({ kind: 'reset' })
+    expect(parseAdvisorModelCommand(' reset ')).toEqual({ kind: 'reset' })
+    expect(parseAdvisorModelCommand('set p m')).toEqual({ kind: 'set', args: 'p m' })
+    expect(parseAdvisorModelCommand('set')).toEqual({ kind: 'set', args: '' })
+    expect(parseAdvisorModelCommand('banana')).toEqual({ kind: 'usage' })
+  })
+})
+
+describe('parseModelSetArgs (atomic-pair validation, spec §5.3)', () => {
+  it('accepts exactly two args — outer trim, case retained', () => {
+    expect(parseModelSetArgs('DeepSeek-Official deepseek-V4-Flash')).toEqual({
+      ok: true,
+      provider: 'DeepSeek-Official',
+      model: 'deepseek-V4-Flash',
+    })
+    expect(parseModelSetArgs('  p   m  ')).toEqual({ ok: true, provider: 'p', model: 'm' })
+  })
+
+  it('model ids containing / are fine (separate args)', () => {
+    expect(parseModelSetArgs('openrouter meta-llama/llama-3-70b')).toEqual({
+      ok: true,
+      provider: 'openrouter',
+      model: 'meta-llama/llama-3-70b',
+    })
+  })
+
+  it('blank / partial pairs rejected', () => {
+    expect(parseModelSetArgs('')).toMatchObject({ ok: false })
+    expect(parseModelSetArgs('   ')).toMatchObject({ ok: false })
+    expect(parseModelSetArgs('solo')).toMatchObject({ ok: false, reason: expect.stringContaining('incomplete pair') })
+  })
+
+  it('extra fields rejected', () => {
+    expect(parseModelSetArgs('p m extra')).toMatchObject({ ok: false, reason: expect.stringContaining('too many') })
+    // A quoted "identifier with a space" splits on the whitespace — structurally
+    // unable to form a valid pair (whitespace-containing identifiers rejected).
+    expect(parseModelSetArgs('"p x" m')).toMatchObject({ ok: false })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// AdvisorSessionOverrides — model pair + generation fence
+// ---------------------------------------------------------------------------
+
+describe('AdvisorSessionOverrides — model pair API (spec §5.3)', () => {
+  it('absence inherits; setModel commits an atomic pair; clearModel deletes', () => {
+    const overrides = new AdvisorSessionOverrides(false)
+    expect(overrides.model('s1')).toBeUndefined()
+    overrides.setModel('s1', { provider: 'p', model: 'm' })
+    expect(overrides.model('s1')).toEqual({ provider: 'p', model: 'm' })
+    expect(overrides.model('s2')).toBeUndefined() // per-session isolation
+    expect(overrides.clearModel('s1')).toBe(true)
+    expect(overrides.clearModel('s1')).toBe(false) // reset noop on an empty entry
+    expect(overrides.model('s1')).toBeUndefined()
+  })
+
+  it('generations fence model work: begin bumps, clear resets to 0', () => {
+    const overrides = new AdvisorSessionOverrides(false)
+    expect(overrides.modelGeneration('s1')).toBe(0)
+    const g1 = overrides.beginModelGeneration('s1')
+    expect(g1).toBe(1)
+    expect(overrides.modelGeneration('s1')).toBe(1)
+    expect(overrides.beginModelGeneration('s1')).toBe(2) // a newer command supersedes
+    overrides.clear('s1')
+    expect(overrides.modelGeneration('s1')).toBe(0) // captured 1..2 can never match again
+  })
+
+  it('generations are per-session', () => {
+    const overrides = new AdvisorSessionOverrides(false)
+    expect(overrides.beginModelGeneration('s1')).toBe(1)
+    expect(overrides.beginModelGeneration('s2')).toBe(1)
+    expect(overrides.modelGeneration('s1')).toBe(1)
+  })
+
+  it('clear wipes enable + pair + generation together (dispose)', () => {
+    const overrides = new AdvisorSessionOverrides(false)
+    overrides.set('s1', true)
+    overrides.setModel('s1', { provider: 'p', model: 'm' })
+    overrides.beginModelGeneration('s1')
+    overrides.clear('s1')
+    expect(overrides.effective('s1')).toBe(false)
+    expect(overrides.model('s1')).toBeUndefined()
+    expect(overrides.modelGeneration('s1')).toBe(0)
+  })
+
+  it('disposeAll wipes every session (owner teardown invalidates all fences)', () => {
+    const overrides = new AdvisorSessionOverrides(false)
+    overrides.set('s1', true)
+    overrides.setModel('s1', { provider: 'p', model: 'm' })
+    overrides.beginModelGeneration('s1')
+    overrides.beginModelGeneration('s2')
+    overrides.disposeAll()
+    expect(overrides.effective('s1')).toBe(false)
+    expect(overrides.model('s1')).toBeUndefined()
+    expect(overrides.modelGeneration('s1')).toBe(0)
+    expect(overrides.modelGeneration('s2')).toBe(0)
+  })
+
+  it('overrideSessionIds enumerates sessions holding enable and/or pair state', () => {
+    const overrides = new AdvisorSessionOverrides(false)
+    overrides.set('a', true)
+    overrides.setModel('b', { provider: 'p', model: 'm' })
+    expect([...overrides.overrideSessionIds()].sort()).toEqual(['a', 'b'])
+    overrides.clearModel('b')
+    expect([...overrides.overrideSessionIds()]).toEqual(['a'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Model surface — renderers
+// ---------------------------------------------------------------------------
+
+describe('advisorStatusText modelSource label (spec §5.3)', () => {
+  it('labels a session-pinned route and a global default distinctly', () => {
+    const session = advisorStatusText(baseStatus({
+      provider: 'p1', model: 'm1', modelSource: 'session', enabled: true, runtimeStatus: 'running',
+    }))
+    expect(session).toContain('Model: p1/m1 (session override)')
+    const global = advisorStatusText(baseStatus({
+      provider: 'p2', model: 'm2', modelSource: 'global', enabled: true, runtimeStatus: 'running',
+    }))
+    expect(global).toContain('Model: p2/m2 (global default)')
+  })
+
+  it('omits the label when no pair is shown (gate-blocked / malformed global)', () => {
+    const text = advisorStatusText(baseStatus({ enabled: true, runtimeStatus: 'disabled' }))
+    expect(text).not.toContain('session override')
+    expect(text).not.toContain('global default')
+  })
+})
+
+describe('advisorModelText / modelSetText / modelResetText (the /advisor model replies)', () => {
+  it('show: effective pair + source + the live-session lifetime', () => {
+    const session = advisorModelText({ provider: 'p', model: 'm', source: 'session' })
+    expect(session).toContain('Model: p/m')
+    expect(session).toContain('Source: session override')
+    expect(session).toContain('reset')
+    expect(session).toContain('never persisted')
+    const global = advisorModelText({ provider: 'g', model: 'gm', source: 'global' })
+    expect(global).toContain('Source: global default')
+    expect(global).toContain('/advisor model set <provider> <model>')
+  })
+
+  it('show: missing pair names both remediation paths without inventing a route', () => {
+    const text = advisorModelText({ source: 'global' })
+    expect(text).toContain('Model: none')
+    expect(text).toContain('/advisor model set <provider> <model>')
+    expect(text).toContain('never persisted')
+  })
+
+  it('set outcomes: committed / unchanged / rejected / failed / cancelled / superseded / gone', () => {
+    const status = baseStatus({ enabled: true, provider: 'p', model: 'm', modelSource: 'session', runtimeStatus: 'running' })
+    expect(modelSetText({ kind: 'committed', status })).toContain('Session model pinned: p/m')
+    expect(modelSetText({ kind: 'unchanged', status })).toContain('same effective route, runtime untouched')
+    expect(modelSetText({ kind: 'rejected', reason: 'too many arguments' })).toContain('Not set: too many arguments')
+    expect(modelSetText({ kind: 'failed', reason: 'boom' })).toContain('previous selection untouched')
+    expect(modelSetText({ kind: 'cancelled' })).toContain('cancelled')
+    expect(modelSetText({ kind: 'superseded' })).toContain('superseded')
+    expect(modelSetText({ kind: 'gone' })).toContain('no longer live')
+  })
+
+  it('reset outcomes: noop vs reset with the post-reset status', () => {
+    expect(modelResetText({ kind: 'noop' })).toContain('already inherits the global defaults')
+    const reset = modelResetText({
+      kind: 'reset',
+      status: baseStatus({
+        enabled: true,
+        disabledReason: 'enabled but provider and model are missing — configure both to enable the advisor',
+        runtimeStatus: 'disabled',
+      }),
+    })
+    expect(reset).toContain('pin removed')
+    // Reset to a missing global pair succeeds but reports gate-blocked/no-call.
+    expect(reset).toContain('configure both to enable the advisor')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Model surface — handler dispatch
+// ---------------------------------------------------------------------------
+
+describe('/advisor model handler dispatch (spec §5.3)', () => {
+  it('show renders the controller route for the invoking session', () => {
+    const controller = new FakeController(baseStatus())
+    controller.route = { provider: 'p', model: 'm', source: 'session' }
+    const handler = registerAndGetHandler(controller)
+    const result = invoke(handler, ' model')
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('Model: p/m')
+    expect(result.text).toContain('Source: session override')
+  })
+
+  it('unknown model subcommand → MODEL_USAGE (still a success result)', () => {
+    const controller = new FakeController(baseStatus())
+    const handler = registerAndGetHandler(controller)
+    const result = invoke(handler, ' model banana')
+    expect(result.kind).toBe('success')
+    expect(result.text).toBe(MODEL_USAGE)
+  })
+
+  it('reset reaches resetModel with the invoking session id + seed length', () => {
+    const controller = new FakeController(baseStatus())
+    controller.nextResetOutcome = { kind: 'noop' }
+    const handler = registerAndGetHandler(controller)
+    const result = invoke(handler, ' model reset')
+    expect(result.text).toContain('already inherits')
+    expect(controller.resetModelCalls).toEqual([{ sessionId: 'session-1', sessionLength: 0 }])
+  })
+
+  it('set with invalid args rejects WITHOUT reaching the controller (no validation started)', () => {
+    const controller = new FakeController(baseStatus())
+    const handler = registerAndGetHandler(controller)
+    const result = invoke(handler, ' model set only-one-arg')
+    expect(result.text).toContain('Not set:')
+    expect(controller.setModelCalls).toHaveLength(0)
+  })
+
+  it('set awaits the controller (async validation) and passes the invoking agent + signal', async () => {
+    const controller = new FakeController(baseStatus())
+    controller.nextSetOutcome = {
+      kind: 'committed',
+      status: baseStatus({ enabled: true, provider: 'p', model: 'm', modelSource: 'session', runtimeStatus: 'running' }),
+    }
+    const handler = registerAndGetHandler(controller)
+    const invocation: CommandInvocation = {
+      commandId: CommandId('cmd-test-1'),
+      agent: fakeAgent('session-1'),
+      rawInput: ' model set p m',
+      attachments: [],
+      signal: new AbortController().signal,
+    }
+    const result = await handler(invocation)
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('Session model pinned: p/m')
+    expect(controller.setModelCalls).toHaveLength(1)
+    expect(controller.setModelCalls[0]).toMatchObject({ sessionId: 'session-1', provider: 'p', model: 'm', sessionIdArg: 'session-1' })
+    expect(controller.setModelCalls[0]!.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('set surfaces a failed validation honestly (previous selection untouched)', async () => {
+    const controller = new FakeController(baseStatus())
+    controller.nextSetOutcome = { kind: 'failed', reason: 'model validation timed out after 60000ms' }
+    const handler = registerAndGetHandler(controller)
+    const invocation: CommandInvocation = {
+      commandId: CommandId('cmd-test-1'),
+      agent: fakeAgent('session-1'),
+      rawInput: ' model set p m',
+      attachments: [],
+      signal: new AbortController().signal,
+    }
+    const result = await handler(invocation)
+    expect(result.text).toContain('validation failed, previous selection untouched')
+    expect(result.text).toContain('timed out')
   })
 })

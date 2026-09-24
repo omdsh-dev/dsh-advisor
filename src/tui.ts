@@ -53,13 +53,18 @@ export interface TuiCommandTreeProvider {
 /** The `/advisor` tree root (matches the command registry name). */
 export const ADVISOR_TUI_ROOT = 'advisor'
 
-/** The four typed `/advisor` subcommands surfaced as completion children.
+/** The typed `/advisor` subcommands surfaced as completion children.
  * Bare `/advisor` (toggle) is the empty-argument default, not a completion
  * child (compass S1); `USAGE` is the unknown-subcommand fallback, not a
- * named command. */
-const ADVISOR_SUBCOMMANDS = ['on', 'off', 'status', 'config'] as const
+ * named command. `model` answers a depth-3 `set`/`reset` list (spec §5.3). */
+const ADVISOR_SUBCOMMANDS = ['on', 'off', 'status', 'config', 'model'] as const
 
 type AdvisorSubcommand = (typeof ADVISOR_SUBCOMMANDS)[number]
+
+/** The typed `/advisor model` subcommands surfaced at depth 3. */
+const ADVISOR_MODEL_SUBCOMMANDS = ['set', 'reset'] as const
+
+type AdvisorModelSubcommand = (typeof ADVISOR_MODEL_SUBCOMMANDS)[number]
 
 /** zh/en copy for the `/` menu row (shown via the host's `descriptions(root)`). */
 const ADVISOR_TUI_DESCRIPTIONS: TuiLocalizedDescriptions = {
@@ -98,16 +103,49 @@ const SUBCOMMAND_DESCRIPTIONS: Readonly<Record<AdvisorSubcommand, { description:
       en: 'Show the composed advisor config (settings readback)',
     },
   },
+  model: {
+    description: 'Show or re-route the per-session reviewer model (model set <provider> <model> | model reset)',
+    descriptions: {
+      zh: '查看或改设本会话的评审模型（model set <供应商> <模型> | model reset）',
+      en: 'Show or re-route the per-session reviewer model (model set <provider> <model> | model reset)',
+    },
+  },
+}
+
+/** zh/en copy per `/advisor model` completion node. */
+const MODEL_SUBCOMMAND_DESCRIPTIONS: Readonly<Record<AdvisorModelSubcommand, { description: string; descriptions: TuiLocalizedDescriptions }>> = {
+  set: {
+    description: 'Pin the reviewer model for this session only (separate args; ids may contain /)',
+    descriptions: {
+      zh: '仅为本会话钉住评审模型（参数分开传，模型 id 可含 /）',
+      en: 'Pin the reviewer model for this session only (separate args; ids may contain /)',
+    },
+  },
+  reset: {
+    description: 'Drop the session pin and re-inherit the current global defaults',
+    descriptions: {
+      zh: '取消本会话钉住，重新继承当前全局默认值',
+      en: 'Drop the session pin and re-inherit the current global defaults',
+    },
+  },
 }
 
 /** The `/advisor` completion tree. `children` NEVER throws: unknown paths and
  * a bare `[]` return an empty list (leaves have no deeper completion — the
- * TUI asks at depth 2). */
+ * TUI asks at depth 2; `/advisor model` additionally answers at depth 3). */
 const advisorTree: TuiCommandTreeProvider = {
   root: ADVISOR_TUI_ROOT,
   descriptions: ADVISOR_TUI_DESCRIPTIONS,
   children(canonicalPath: readonly string[]): readonly TuiCommandCompletionNode[] {
-    // Root at index 0: only `['advisor']` asks for the subcommand list.
+    // Root at index 0: `['advisor']` asks for the subcommand list;
+    // `['advisor', 'model']` asks for the model subcommand list (spec §5.3).
+    if (canonicalPath.length === 2 && canonicalPath[0] === ADVISOR_TUI_ROOT && canonicalPath[1] === 'model') {
+      return ADVISOR_MODEL_SUBCOMMANDS.map((name) => ({
+        name,
+        description: MODEL_SUBCOMMAND_DESCRIPTIONS[name].description,
+        descriptions: MODEL_SUBCOMMAND_DESCRIPTIONS[name].descriptions,
+      }))
+    }
     if (canonicalPath.length !== 1 || canonicalPath[0] !== ADVISOR_TUI_ROOT) return []
     return ADVISOR_SUBCOMMANDS.map((name) => ({
       name,

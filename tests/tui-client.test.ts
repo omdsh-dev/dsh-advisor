@@ -147,12 +147,12 @@ describe('provider children — completion tree (AC-1)', () => {
     return trees.providers[0]!
   }
 
-  it("children(['advisor']) returns the four subcommand nodes with name + description + zh/en descriptions", () => {
+  it("children(['advisor']) returns the five subcommand nodes with name + description + zh/en descriptions", () => {
     const provider = registeredProvider()
 
     const nodes = provider.children(['advisor'])
 
-    expect(nodes.map((node) => node.name)).toEqual(['on', 'off', 'status', 'config'])
+    expect(nodes.map((node) => node.name)).toEqual(['on', 'off', 'status', 'config', 'model'])
     for (const node of nodes) {
       expect(node.description).toBeTruthy()
       expect(node.descriptions?.zh).toBeTruthy()
@@ -160,11 +160,31 @@ describe('provider children — completion tree (AC-1)', () => {
     }
   })
 
+  it("children(['advisor', 'model']) returns the set/reset depth-3 nodes (spec §5.3)", () => {
+    const provider = registeredProvider()
+
+    const nodes = provider.children(['advisor', 'model'])
+
+    expect(nodes.map((node) => node.name)).toEqual(['set', 'reset'])
+    for (const node of nodes) {
+      expect(node.description).toBeTruthy()
+      expect(node.descriptions?.zh).toBeTruthy()
+      expect(node.descriptions?.en).toBeTruthy()
+    }
+    expect(nodes[0]!.description).toContain('separate args')
+  })
+
   it('children at depth 2 (a subcommand leaf) returns [] — no deeper completion', () => {
     const provider = registeredProvider()
     for (const sub of ['on', 'off', 'status', 'config'] as const) {
       expect(provider.children(['advisor', sub])).toEqual([])
     }
+  })
+
+  it("unknown paths under ['advisor', 'model'] return [] without throwing", () => {
+    const provider = registeredProvider()
+    expect(provider.children(['advisor', 'other'])).toEqual([])
+    expect(provider.children(['advisor', 'model', 'set'])).toEqual([])
   })
 
   it('children([]) and unknown roots return [] without throwing', () => {

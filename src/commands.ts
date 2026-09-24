@@ -1,23 +1,29 @@
 /**
- * T7 — slash commands (spec §2 S5, §6 status surface, §8.5 KD-5 seed-on-enable).
+ * T7 — slash commands (spec §2 S5, §6 status surface, §8.5 KD-5 seed-on-enable,
+ * §5.3 session model override).
  *
  * One `/advisor` command is registered (through {@link registerAdvisorCommands})
- * with four forms:
+ * with these forms:
  *
  * - `/advisor`           — toggle the per-session override (on ↔ off);
  * - `/advisor on`        — enable the advisor for this session;
  * - `/advisor off`       — disable the advisor for this session;
  * - `/advisor status`    — report the per-session status surface;
- * - `/advisor config`    — show the composed advisor config (settings readback);
+ * - `/advisor config`    — show the composed advisor config (global defaults);
+ * - `/advisor model`     — show the effective reviewer route + source;
+ * - `/advisor model set <provider> <model>` — pin an atomic pair for the
+ *   invoking session only (validated via `resolveModelInfo`, 60 s, no retry);
+ * - `/advisor model reset` — re-inherit the current global defaults;
  * - anything else        — usage text.
  *
- * Toggle/on/off are **session-scoped and ephemeral**: they drive a per-session
- * override flag (`AdvisorSessionOverrides`) that the runtime gate consults as
- * `override ?? config.enabled`, so no command ever touches the persisted
- * config (spec §4 mapping — matches omp `/advisor` semantics). Enabling a
- * session whose config has no provider/model starts no model call: the S4
- * explicit gate (spec §5.2) still applies, and the status/on text explains
- * the disabled-with-reason.
+ * All forms are **session-scoped and ephemeral**: they drive per-session
+ * overrides ({@link AdvisorSessionOverrides} — the enable flag and the
+ * runtime-only atomic model pair, fenced by per-session generations) that the
+ * runtime gate and the effective resolver consult, so no command ever touches
+ * the persisted config (spec §4 mapping, §5.3 — matches omp `/advisor`
+ * semantics). Enabling a session whose effective route has no complete pair
+ * starts no model call: the S4 explicit gate (spec §5.2) applies AFTER session
+ * resolution, and the status/on text explains the disabled-with-reason.
  *
  * The module is cordis-free (pure parse + render + registration contract), so
  * it is unit-testable with a fake command registry and a fake controller;
@@ -29,6 +35,7 @@
  */
 
 import type { CommandDefinition, CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { AdvisorRuntimeStatus } from './advisor-runtime.js'
 
 // ---------------------------------------------------------------------------
@@ -42,7 +49,63 @@ export type AdvisorCommand =
   | { readonly kind: 'off' }
   | { readonly kind: 'status' }
   | { readonly kind: 'config' }
+  | { readonly kind: 'model'; readonly sub: AdvisorModelCommand }
   | { readonly kind: 'usage' }
+
+/**
+ * The parsed form of the text following `/advisor model` (spec §5.3 B1
+ * surface): bare → show, `set <provider> <model>` → set (parsed by
+ * {@link parseModelSetArgs}), `reset` → reset, anything else → model usage.
+ */
+export type AdvisorModelCommand =
+  | { readonly kind: 'show' }
+  | { readonly kind: 'set'; readonly args: string }
+  | { readonly kind: 'reset' }
+  | { readonly kind: 'usage' }
+
+/**
+ * Parse the text following `/advisor model`. `set` keeps its RAW remainder —
+ * the atomic-pair validation ({@link parseModelSetArgs}) owns it, because the
+ * set flow reports a precise rejection reason in the command reply.
+ */
+export function parseAdvisorModelCommand(rawInput: string): AdvisorModelCommand {
+  const argument = rawInput.trim()
+  if (argument === '') return { kind: 'show' }
+  if (argument === 'reset') return { kind: 'reset' }
+  if (argument === 'set' || argument.startsWith('set ') || argument.startsWith('set\t')) {
+    return { kind: 'set', args: argument.slice('set'.length).trim() }
+  }
+  return { kind: 'usage' }
+}
+
+/**
+ * The result of parsing `/advisor model set` arguments into the atomic pair
+ * (spec §5.3 pair validation).
+ */
+export type ModelSetArgs =
+  | { readonly ok: true; readonly provider: string; readonly model: string }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * Validate `/advisor model set <provider> <model>` arguments (spec §5.3):
+ * exactly two arguments; outer whitespace trimmed; case retained; blank or
+ * partial pairs, extra fields (a third argument), and whitespace-containing
+ * identifiers rejected. Separate args are what allow model ids containing
+ * `/`. Never throws — every rejection carries a user-facing reason.
+ */
+export function parseModelSetArgs(rawArgs: string): ModelSetArgs {
+  const args = rawArgs.trim().split(/\s+/).filter((arg) => arg.length > 0)
+  if (args.length === 0) {
+    return { ok: false, reason: 'usage: /advisor model set <provider> <model>' }
+  }
+  if (args.length === 1) {
+    return { ok: false, reason: `incomplete pair — provider and model are both required (got only "${args[0]}")` }
+  }
+  if (args.length > 2) {
+    return { ok: false, reason: `too many arguments — the pair is exactly <provider> <model> (got ${args.length})` }
+  }
+  return { ok: true, provider: args[0]!, model: args[1]! }
+}
 
 /**
  * Parse the text following `/advisor` (the dsh `parseCommand` split already
@@ -57,6 +120,9 @@ export function parseAdvisorCommand(rawInput: string): AdvisorCommand {
   if (argument === 'off') return { kind: 'off' }
   if (argument === 'status') return { kind: 'status' }
   if (argument === 'config') return { kind: 'config' }
+  if (argument === 'model' || argument.startsWith('model ') || argument.startsWith('model\t')) {
+    return { kind: 'model', sub: parseAdvisorModelCommand(argument.slice('model'.length)) }
+  }
   return { kind: 'usage' }
 }
 
@@ -65,20 +131,52 @@ export function parseAdvisorCommand(rawInput: string): AdvisorCommand {
 // ---------------------------------------------------------------------------
 
 /**
- * The per-session override consulted by the runtime gate as
- * `override ?? config.enabled`. `/advisor on|off|toggle` write here — the
- * persisted config is never modified. The map is keyed by session id and
- * entries live for the session lifetime (`index.ts` clears them on
- * `agent/disposed` / `session/disposed`).
+ * The runtime-only reviewer model override for one session (spec §5.3) — an
+ * **atomic** `{ provider, model }` pair. It never merges with the global
+ * pair (no half-pairs) and is never persisted: it lives in memory for the
+ * live-session lifetime and is cleared by reset, dispose, owner teardown,
+ * cold resume, or restart.
+ */
+export interface AdvisorModelPair {
+  readonly provider: string
+  readonly model: string
+}
+
+/**
+ * Where a session's effective reviewer route comes from (spec §5.3):
+ * `session` = a pinned `AdvisorModelPair`, `global` = the composed global
+ * advisor pair.
+ */
+export type AdvisorModelSource = 'session' | 'global'
+
+/**
+ * The per-session overrides consulted by the runtime gate and the effective
+ * resolver (`src/index.ts`):
+ *
+ * - enable: `override ?? config.enabled` (`/advisor on|off|toggle`);
+ * - model: the complete session pair ?? the composed global pair — the pair
+ *   is atomic, so the two levels are never merged (spec §5.3);
+ * - generation: a per-session counter that fences async model work — a newer
+ *   set/reset supersedes unresolved older work, and dispose/owner teardown
+ *   (which wipe the counter) can never be undone by a delayed completion.
+ *
+ * Nothing here touches the persisted config. All maps are keyed by session id
+ * and hold only LIVE sessions' state: `clear` runs on `agent/disposed` /
+ * `session/disposed`, `clearModel` runs on reset (an emptied entry is
+ * removed), and `disposeAll` runs on owner teardown — state stays
+ * O(live overrides), with no historical SessionId accumulation and no
+ * TTL/GC job.
  */
 export class AdvisorSessionOverrides {
-  private readonly overrides = new Map<string, boolean>()
+  private readonly enables = new Map<string, boolean>()
+  private readonly models = new Map<string, AdvisorModelPair>()
+  private readonly generations = new Map<string, number>()
 
   constructor(private configEnabled: boolean) {}
 
   /** Effective switch for one session: `override ?? config.enabled`. */
   effective(sessionId: string): boolean {
-    return this.overrides.get(sessionId) ?? this.configEnabled
+    return this.enables.get(sessionId) ?? this.configEnabled
   }
 
   /**
@@ -91,14 +189,72 @@ export class AdvisorSessionOverrides {
     this.configEnabled = enabled
   }
 
-  /** Set the override for one session. */
+  /** Set the enable override for one session. */
   set(sessionId: string, enabled: boolean): void {
-    this.overrides.set(sessionId, enabled)
+    this.enables.set(sessionId, enabled)
   }
 
-  /** Remove a session's override, falling back to the config switch. */
+  /** The session's pinned model pair, or `undefined` when it inherits. */
+  model(sessionId: string): AdvisorModelPair | undefined {
+    return this.models.get(sessionId)
+  }
+
+  /** Commit the (already validated) atomic pair for one session. */
+  setModel(sessionId: string, pair: AdvisorModelPair): void {
+    this.models.set(sessionId, pair)
+  }
+
+  /**
+   * Remove a session's model pin (reset-to-inherit). @returns `true` when a
+   * pin was actually removed — `false` means the session was already
+   * inheriting (a reset no-op).
+   */
+  clearModel(sessionId: string): boolean {
+    return this.models.delete(sessionId)
+  }
+
+  /**
+   * Bump and return the session's model-work generation — the fence token an
+   * async validation captures; any later `beginModelGeneration` (a newer
+   * set/reset) or any state wipe makes the captured value stale.
+   */
+  beginModelGeneration(sessionId: string): number {
+    const next = (this.generations.get(sessionId) ?? 0) + 1
+    this.generations.set(sessionId, next)
+    return next
+  }
+
+  /** The session's current model-work generation (0 before the first). */
+  modelGeneration(sessionId: string): number {
+    return this.generations.get(sessionId) ?? 0
+  }
+
+  /** Sessions holding ANY per-session override state (enable and/or pair). */
+  overrideSessionIds(): IterableIterator<string> {
+    return new Set([...this.enables.keys(), ...this.models.keys()]).keys()
+  }
+
+  /**
+   * Drop ALL per-session state for one session (enable + pair + generation) —
+   * the `agent/disposed` / `session/disposed` cleanup. Wiping the generation
+   * invalidates any in-flight validation for the session (captured values are
+   * ≥ 1 and can never again match the post-clear default 0).
+   */
   clear(sessionId: string): void {
-    this.overrides.delete(sessionId)
+    this.enables.delete(sessionId)
+    this.models.delete(sessionId)
+    this.generations.delete(sessionId)
+  }
+
+  /**
+   * Owner teardown: wipe every session's state. Pending validations for any
+   * session become stale exactly like a per-session `clear` — a delayed
+   * completion can never commit after the owner is gone.
+   */
+  disposeAll(): void {
+    this.enables.clear()
+    this.models.clear()
+    this.generations.clear()
   }
 }
 
@@ -124,6 +280,12 @@ export interface AdvisorSessionStatus {
   readonly provider?: string
   /** Configured model id (shown even while disabled — spec §5.2). */
   readonly model?: string
+  /**
+   * Where the reported route comes from (spec §5.3) — present iff
+   * `provider`/`model` are: `session` = the session's pinned pair,
+   * `global` = the composed global advisor pair.
+   */
+  readonly modelSource?: AdvisorModelSource
   /** The session's runtime status; `disabled` when no runtime exists. */
   readonly runtimeStatus: AdvisorRuntimeStatus
   /** Deltas waiting to be drained (bounded backlog, spec §6). */
@@ -142,12 +304,95 @@ export function advisorStatusText(status: AdvisorSessionStatus): string {
   lines.push(status.enabled ? 'Advisor: enabled' : 'Advisor: disabled')
   if (status.disabledReason !== undefined) lines.push(`Reason: ${status.disabledReason}`)
   if (status.provider && status.model) {
-    lines.push(`Model: ${status.provider}/${status.model}`)
+    // Spec §5.3: the status reports the EFFECTIVE route, labeled by source.
+    const source = status.modelSource === 'session' ? 'session override' : 'global default'
+    lines.push(`Model: ${status.provider}/${status.model} (${source})`)
   }
   const pending = status.pendingCount > 0 ? ` (${status.pendingCount} pending)` : ''
   lines.push(`Runtime: ${status.runtimeStatus}${pending}`)
   lines.push(`Last activity: ${status.lastActivityAt === undefined ? 'never' : new Date(status.lastActivityAt).toISOString()}`)
   return lines.join('\n')
+}
+
+// ---------------------------------------------------------------------------
+// Model surface (`/advisor model` — spec §5.3, the B1 command face)
+// ---------------------------------------------------------------------------
+
+/** Validation deadline for one `/advisor model set` lookup (60 s — matches
+ * the runtime's whole-call deadline default, `src/advisor-runtime.ts`). */
+export const ADVISOR_MODEL_VALIDATION_TIMEOUT_MS = 60_000
+
+/** The effective reviewer route for one session (spec §5.3). */
+export interface AdvisorModelRoute {
+  readonly provider?: string
+  readonly model?: string
+  /** `session` when the effective pair is the session's pin, else `global`. */
+  readonly source: AdvisorModelSource
+}
+
+/** Outcome of one `/advisor model set` attempt (spec §5.3 validation + fencing). */
+export type AdvisorSetModelOutcome =
+  | { readonly kind: 'committed'; readonly status: AdvisorSessionStatus }
+  | { readonly kind: 'unchanged'; readonly status: AdvisorSessionStatus }
+  | { readonly kind: 'rejected'; readonly reason: string }
+  | { readonly kind: 'failed'; readonly reason: string }
+  | { readonly kind: 'cancelled' }
+  | { readonly kind: 'superseded' }
+  | { readonly kind: 'gone' }
+
+/** Outcome of one `/advisor model reset`. */
+export type AdvisorResetModelOutcome =
+  | { readonly kind: 'reset'; readonly status: AdvisorSessionStatus }
+  | { readonly kind: 'noop' }
+
+/**
+ * Render the `/advisor model` surface: the effective pair, its source, and
+ * the live-session lifetime (spec §5.3 — the reply must name the lifetime).
+ */
+export function advisorModelText(route: AdvisorModelRoute): string {
+  const lines: string[] = []
+  if (route.provider && route.model) {
+    lines.push(`Model: ${route.provider}/${route.model}`)
+    lines.push(
+      route.source === 'session'
+        ? 'Source: session override — lives for this session; cleared by /advisor model reset, dispose, or restart'
+        : 'Source: global default — pin a different route with /advisor model set <provider> <model>',
+    )
+  } else {
+    lines.push('Model: none — the global default has no provider/model')
+    lines.push('Set both globally (the /advisor config edit paths) or pin a session pair:')
+    lines.push('  /advisor model set <provider> <model>')
+  }
+  lines.push('Lifetime: this session only — never persisted; a new/forked session inherits the global defaults.')
+  return lines.join('\n')
+}
+
+/** Render one `/advisor model set` outcome. */
+export function modelSetText(outcome: AdvisorSetModelOutcome): string {
+  switch (outcome.kind) {
+    case 'committed':
+      return `Session model pinned: ${outcome.status.provider}/${outcome.status.model} (session override).\n${advisorStatusText(outcome.status)}`
+    case 'unchanged':
+      return `Session model pinned: ${outcome.status.provider}/${outcome.status.model} — same effective route, runtime untouched.`
+    case 'rejected':
+      return `Not set: ${outcome.reason}`
+    case 'failed':
+      return `Model not set — validation failed, previous selection untouched: ${outcome.reason}`
+    case 'cancelled':
+      return 'Model not set — the command was cancelled; previous selection untouched.'
+    case 'superseded':
+      return 'Model not set — superseded by a newer /advisor model command.'
+    case 'gone':
+      return 'Model not set — this session is no longer live.'
+  }
+}
+
+/** Render one `/advisor model reset` outcome. */
+export function modelResetText(outcome: AdvisorResetModelOutcome): string {
+  if (outcome.kind === 'noop') {
+    return 'No session model pin to reset — this session already inherits the global defaults.'
+  }
+  return `Session model pin removed — inheriting the global defaults.\n${advisorStatusText(outcome.status)}`
 }
 
 // ---------------------------------------------------------------------------
@@ -271,6 +516,29 @@ export interface AdvisorCommandController {
   getStatus(sessionId: string): AdvisorSessionStatus
   /** Snapshot the composed config surface (session-less settings readback). */
   getConfig(): AdvisorComposedConfig
+  /** The session's effective reviewer route (pair + source — spec §5.3). */
+  getModelRoute(sessionId: string): AdvisorModelRoute
+  /**
+   * Validate and commit an atomic pair for the INVOKING session (spec §5.3):
+   * resolve through the LLM service before commit (60 s deadline, fused with
+   * `signal`, cancellable, NO automatic retry — failure leaves the previous
+   * selection untouched), fenced by the per-session generation. Never toggles
+   * the enable override; never starts a generation call.
+   */
+  setModel(
+    sessionId: string,
+    provider: string,
+    model: string,
+    agent: Agent,
+    signal?: AbortSignal,
+  ): Promise<AdvisorSetModelOutcome>
+  /**
+   * Drop the session's pin and re-inherit the CURRENT global defaults (never
+   * touches the enable override). Synchronous — no validation needed.
+   * @param sessionLength - current transcript length, used for the re-seed
+   *   when the effective route actually changes.
+   */
+  resetModel(sessionId: string, sessionLength?: number): AdvisorResetModelOutcome
 }
 
 /** Minimal command registry surface (satisfied by the dsh `CommandService`). */
@@ -280,12 +548,25 @@ export interface AdvisorCommandRegistry {
 
 /** Usage text for an unknown `/advisor` subcommand. */
 export const USAGE = [
-  'Usage: /advisor [on|off|status|config]',
+  'Usage: /advisor [on|off|status|config|model]',
   '  /advisor          toggle the advisor for this session',
   '  /advisor on       enable the advisor for this session',
   '  /advisor off      disable the advisor for this session',
   '  /advisor status   show per-session advisor status (state, model, runtime, pending, last activity)',
-  '  /advisor config   show the composed advisor config (settings readback)',
+  '  /advisor config   show the composed advisor config (global defaults readback)',
+  '  /advisor model    show the effective model, its source (session override or global default), and the live-session lifetime',
+  '  /advisor model set <provider> <model>',
+  '                    pin the reviewer model for this session only (separate args; ids may contain /)',
+  '  /advisor model reset',
+  '                    drop the session pin and re-inherit the current global defaults',
+].join('\n')
+
+/** Usage text for an unknown `/advisor model` subcommand. */
+export const MODEL_USAGE = [
+  'Usage: /advisor model [set <provider> <model>|reset]',
+  '  /advisor model                  show the effective model and its source',
+  '  /advisor model set <p> <m>      pin the reviewer model for this session only',
+  '  /advisor model reset            re-inherit the current global defaults',
 ].join('\n')
 
 /**
@@ -301,7 +582,7 @@ function enableText(status: AdvisorSessionStatus): string {
 
 /** Build the `/advisor` handler bound to one controller. */
 function createAdvisorCommandHandler(controller: AdvisorCommandController) {
-  return (invocation: CommandInvocation): CommandResult => {
+  return (invocation: CommandInvocation): CommandResult | Promise<CommandResult> => {
     const sessionId = invocation.agent.session.id
     switch (parseAdvisorCommand(invocation.rawInput).kind) {
       case 'toggle': {
@@ -343,9 +624,40 @@ function createAdvisorCommandHandler(controller: AdvisorCommandController) {
       case 'config':
         // Session-less readback: the composed config, never the session state.
         return { kind: 'success', text: advisorConfigText(controller.getConfig()) }
+      case 'model':
+        return handleModelCommand(controller, sessionId, invocation)
       case 'usage':
         return { kind: 'success', text: USAGE }
     }
+  }
+}
+
+/**
+ * `/advisor model` dispatch (spec §5.3). Only the `set` form is async — it
+ * awaits the 60 s `resolveModelInfo` validation before replying with the
+ * outcome; show/reset are synchronous.
+ */
+function handleModelCommand(
+  controller: AdvisorCommandController,
+  sessionId: string,
+  invocation: CommandInvocation,
+): CommandResult | Promise<CommandResult> {
+  const command = parseAdvisorCommand(invocation.rawInput)
+  if (command.kind !== 'model') return { kind: 'success', text: MODEL_USAGE }
+  switch (command.sub.kind) {
+    case 'show':
+      return { kind: 'success', text: advisorModelText(controller.getModelRoute(sessionId)) }
+    case 'reset':
+      return { kind: 'success', text: modelResetText(controller.resetModel(sessionId, invocation.agent.session.seq)) }
+    case 'set': {
+      const args = parseModelSetArgs(command.sub.args)
+      if (!args.ok) return { kind: 'success', text: modelSetText({ kind: 'rejected', reason: args.reason }) }
+      return controller
+        .setModel(sessionId, args.provider, args.model, invocation.agent, invocation.signal)
+        .then((outcome) => ({ kind: 'success' as const, text: modelSetText(outcome) }))
+    }
+    case 'usage':
+      return { kind: 'success', text: MODEL_USAGE }
   }
 }
 
@@ -362,8 +674,8 @@ export function registerAdvisorCommands(
 ): () => void {
   return registry.register({
     name: 'advisor',
-    description: 'Toggle, enable, disable, or inspect the per-session advisor',
-    input: { hint: '[on|off|status|config]' },
+    description: 'Toggle, enable, disable, inspect, or re-route the per-session advisor',
+    input: { hint: '[on|off|status|config|model]' },
     handler: createAdvisorCommandHandler(controller),
   })
 }

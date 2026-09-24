@@ -63,8 +63,15 @@ import { AdvisorRuntime } from './advisor-runtime.js'
 import type { AdviceNote } from './advisor-runtime.js'
 import { AdvisorDelivery } from './delivery.js'
 import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts.js'
-import { AdvisorSessionOverrides, registerAdvisorCommands, summarizeSystemPrompt } from './commands.js'
-import type { AdvisorCommandController } from './commands.js'
+import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
+import { AdvisorSessionOverrides, registerAdvisorCommands, summarizeSystemPrompt, ADVISOR_MODEL_VALIDATION_TIMEOUT_MS } from './commands.js'
+import type {
+  AdvisorCommandController,
+  AdvisorModelRoute,
+  AdvisorResetModelOutcome,
+  AdvisorSessionStatus,
+  AdvisorSetModelOutcome,
+} from './commands.js'
 import { installTuiClient } from './tui.js'
 import { TUI_SETTINGS_SECTIONS, installTuiSettingsSection } from './tui-settings.js'
 
@@ -94,6 +101,65 @@ function claimReviewer(): boolean {
   if (g[REVIEWER_KEY] === true) return false
   g[REVIEWER_KEY] = true
   return true
+}
+
+/** Capability-owned code stamped onto the model-validation deadline's TimeoutReason. */
+const ADVISOR_MODEL_VALIDATION_TIMEOUT = 'ADVISOR_MODEL_VALIDATION_TIMEOUT'
+
+/**
+ * Fuse several upstream signals into one (spec §5.3 validation): the fused
+ * signal aborts when ANY upstream aborts. Used to combine the invoking
+ * command's cancellation signal with the owner-teardown signal — a hung
+ * `resolveModelInfo` lookup that honors cancellation aborts with whichever
+ * lands first, and the `dsh-timeout` deadline adds the 60 s bound on top.
+ * `cleanup` removes the listeners (the teardown signal outlives every
+ * short-lived validation).
+ */
+function fuseSignals(
+  ...upstreams: readonly (AbortSignal | undefined)[]
+): { readonly signal: AbortSignal; cleanup(): void } {
+  const controller = new AbortController()
+  const onAbort = (event: Event): void => {
+    controller.abort((event.target as AbortSignal).reason)
+  }
+  for (const upstream of upstreams) {
+    if (upstream === undefined) continue
+    if (upstream.aborted) controller.abort(upstream.reason)
+    else upstream.addEventListener('abort', onAbort)
+  }
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      for (const upstream of upstreams) upstream?.removeEventListener('abort', onAbort)
+    },
+  }
+}
+
+/**
+ * Race one promise against a signal (same shape as the runtime's per-chunk
+ * `raceIteratorNext`): settle with the promise's result, or `'aborted'` when
+ * the signal aborts first. Needed because `LlmRuntime.resolveModelInfo` only
+ * THREADS the signal into the adapter — an adapter whose lookup ignores
+ * cancellation would otherwise wedge the validation past the deadline; the
+ * race makes the 60 s bound (and the owner-teardown/command aborts) real for
+ * the caller regardless of adapter behavior.
+ */
+function raceSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | 'aborted'> {
+  if (signal.aborted) return Promise.resolve('aborted')
+  return new Promise<T | 'aborted'>((resolve, reject) => {
+    const onAbort = (): void => resolve('aborted')
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
 }
 
 export function apply(ctx: Context, config: AdvisorConfig) {
@@ -186,9 +252,23 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       return safeFallback(error instanceof Error ? error.message : String(error))
     }
   }
+  // Spec §5.3 — the ONE effective resolver: (1) the global shape is validated
+  // first (a malformed entry still throws → safeFallback: fail closed for
+  // every session); (2) enable = session enable override ?? global; (3) route
+  // = the session's COMPLETE modelOverride pair ?? the composed global pair —
+  // the pair is atomic, so the levels are never merged; (4) the explicit pair
+  // gate (§5.2) applies AFTER this resolution on the effective values: a
+  // complete session pair satisfies a pairless global default, while an
+  // invalid global schema can never be bypassed.
   const safeEffective = (sessionId: string): ResolvedAdvisorConfig => {
     try {
-      return resolveAdvisorConfig({ ...sourceConfig(), enabled: effectiveEnabled(sessionId) })
+      const source = sourceConfig()
+      const pair = overrides.model(sessionId)
+      return resolveAdvisorConfig({
+        ...source,
+        enabled: effectiveEnabled(sessionId),
+        ...(pair === undefined ? {} : { provider: pair.provider, model: pair.model }),
+      })
     } catch (error) {
       return safeFallback(error instanceof Error ? error.message : String(error))
     }
@@ -216,6 +296,18 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // safe wrapper (qc2 W-1 — a throwing resolver must not break the
   // session/event handler or `/advisor status`).
   const effectiveConfig = (sessionId: string): ResolvedAdvisorConfig => safeEffective(sessionId)
+  // n4 root-cause (host-observed NO_ADAPTER): this plugin's ctx may live in an
+  // isolated scope whose local llm service lacks the provider adapters (adapter
+  // registrations live on the application root's LlmRuntime). The APPLICATION
+  // ROOT's llm serves BOTH the advisor model calls (ensureRuntime) and the
+  // `/advisor model set` validation lookups (spec §5.3).
+  const appRootLlm = (): typeof ctx.llm =>
+    ((ctx as unknown as { root?: { get?: (k: string) => unknown } }).root?.get?.('llm') as typeof ctx.llm) ?? ctx.llm
+  // Spec §5.3 — model-validation teardown signal: fused into every in-flight
+  // `/advisor model set` lookup, so owner teardown aborts them promptly; the
+  // generation wipe (disposeAll, below) makes any completion that still
+  // settles unable to commit.
+  const validationTeardown = new AbortController()
 
   // T3+T4: per-session transcript observation wired into one advisor runtime
   // per session. On each stepped reviewable turn/end a bounded markdown delta
@@ -245,7 +337,9 @@ export function apply(ctx: Context, config: AdvisorConfig) {
    * creation and compared on every settings change (qc3 W-1 / qc1 W-2): only
    * a signature change tears the runtime down — an immuneTurns/
    * maxDeltaMessages-only edit updates the latches in place and keeps every
-   * in-flight call and backlog.
+   * in-flight call and backlog. The triple reads the EFFECTIVE config
+   * (spec §5.3), so a session-pinned pair freezes the signature against later
+   * global pair edits — global edits reach inheritors, never pinned sessions.
    */
   const runtimeSignatures = new Map<string, string>()
   const runtimeSignature = (sessionId: string): string => {
@@ -277,12 +371,7 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       provider: effective.provider!,
       model: effective.model!,
       systemPrompt: safeResolved().systemPrompt || DEFAULT_ADVISOR_SYSTEM_PROMPT,
-      // n4 root-cause (host-observed NO_ADAPTER): this plugin's ctx may live in
-      // an isolated scope whose local llm service lacks the provider adapters
-      // (adapter registrations live on the application root's LlmRuntime). Resolve
-      // the llm service from the APPLICATION ROOT so the advisor's model calls
-      // reach the registered deepseek-official adapter.
-      llm: ((ctx as unknown as { root?: { get?: (k: string) => unknown } }).root?.get?.('llm') as typeof ctx.llm) ?? ctx.llm,
+      llm: appRootLlm(),
       onNote: (note: AdviceNote) => {
         // Accepted notes only — the runtime's emission guard (T5) already
         // filtered suppressed ones. T6 routes the accepted note to the primary
@@ -307,6 +396,24 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     runtimeSignatures.delete(sessionId)
     runtime.dispose()
   }
+  /**
+   * Apply a committed effective-route change (spec §5.3): abort the session's
+   * old advisor call + drop its backlog (disposeRuntime), re-seed the observer
+   * cursor to the current transcript length, and recreate the runtime — the
+   * change takes effect at the next new reviewable delta (no replay of the
+   * current window). A disabled session keeps its (new) pin for a later
+   * `/advisor on`; an unchanged effective route restarts nothing.
+   * @param before - the effective config captured BEFORE the override state
+   *   changed (the caller mutates `overrides` between the capture and here).
+   */
+  const applyRouteChange = (sessionId: string, before: ResolvedAdvisorConfig, sessionLength?: number): void => {
+    if (!effectiveEnabled(sessionId)) return
+    const after = effectiveConfig(sessionId)
+    if (after.provider === before.provider && after.model === before.model) return
+    if (sessionLength !== undefined) observer.seedTo(sessionId, sessionLength)
+    disposeRuntime(sessionId)
+    ensureRuntime(sessionId)
+  }
 
   // n4 QC F-6: claim the single-reviewer role HERE — after every
   // construction-time throwing read (the delivery latch above resolves the
@@ -325,9 +432,14 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // qc1 W-4: release the claim when THIS (reviewer) fiber is disposed, so a
   // later re-apply/re-mount (plugin-row removal, composition reload, host hot
   // reload) can take over instead of leaving the advisor silently inert for
-  // the process lifetime. Registered only on the claiming fiber.
+  // the process lifetime. Registered only on the claiming fiber. The teardown
+  // also owns the override state (spec §5.3): abort in-flight model
+  // validations and wipe every per-session override entry/generation — a
+  // delayed validation completion can never commit after the owner is gone.
   ctx.effect(() => () => {
     delete (globalThis as Record<string, unknown>)[REVIEWER_KEY]
+    validationTeardown.abort('advisor owner disposed')
+    overrides.disposeAll()
   }, 'advisor: release reviewer claim')
   const observer = new SessionTranscriptObserver({
     maxDeltaMessages: resolved().maxDeltaMessages,
@@ -454,8 +566,16 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     delivery.setImmuneTurns(next.immuneTurns)
     observer.setMaxDeltaMessages(next.maxDeltaMessages)
     overrides.setConfigEnabled(sourceConfig().enabled)
+    // Candidates = live runtimes ∪ sessions holding an override. The second
+    // set covers an `/advisor on`-enabled session whose runtime is ABSENT
+    // because it was gate-blocked: when the defaults become usable (a global
+    // pair is committed) it must gain its runtime here, not wait for its next
+    // delta (plan: include enabled-gate-blocked sessions with no runtime when
+    // defaults become usable). The signature compare still gates actual
+    // rebuilds; ensureRuntime re-applies the post-gate gate on every call.
+    const candidates = new Set([...runtimes.keys(), ...overrides.overrideSessionIds()])
     let rebuilt = 0
-    for (const sessionId of [...runtimes.keys()]) {
+    for (const sessionId of candidates) {
       if (runtimeSignatures.get(sessionId) === runtimeSignature(sessionId)) continue
       disposeRuntime(sessionId)
       ensureRuntime(sessionId)
@@ -476,7 +596,34 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // no full-history replay) and creates/resumes/recoveries the session runtime;
   // `/advisor off` disposes it (abort in-flight, drop backlog). The S4 gate
   // reason is re-derived through the config resolver, the SSOT for the
-  // disabled-with-reason text (spec §5.2).
+  // disabled-with-reason text (spec §5.2). `/advisor model set|reset` mutate
+  // the runtime-only session pair (spec §5.3) through the generation-fenced
+  // validation + applyRouteChange seams below.
+  const sessionStatus = (sessionId: string): AdvisorSessionStatus => {
+    const runtime = runtimes.get(sessionId)
+    const effective = effectiveConfig(sessionId)
+    const pair = overrides.model(sessionId)
+    // Spec §5.3: the status reports the EFFECTIVE route, labeled by source.
+    // The label is `session` only when the effective pair IS the session's
+    // pin (a malformed global fails closed through safeFallback — provider/
+    // model undefined — and a pinned session under it reports no pair, with
+    // the reason carried by disabledReason).
+    const source = effective.provider === undefined || effective.model === undefined
+      ? undefined
+      : pair !== undefined && pair.provider === effective.provider && pair.model === effective.model
+        ? 'session'
+        : 'global'
+    return {
+      enabled: effective.enabled,
+      ...(effective.disabledReason === undefined ? {} : { disabledReason: effective.disabledReason }),
+      provider: effective.provider,
+      model: effective.model,
+      ...(source === undefined ? {} : { modelSource: source }),
+      runtimeStatus: runtime?.status() ?? 'disabled',
+      pendingCount: runtime?.pendingCount ?? 0,
+      lastActivityAt: runtime?.lastActivity,
+    }
+  }
   const controller: AdvisorCommandController = {
     setEnabled(sessionId: string, enabled: boolean, sessionLength?: number): void {
       // Recovery, not just a switch flip: `/advisor on` (and toggle-to-on)
@@ -508,17 +655,96 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       }
     },
     getStatus(sessionId: string) {
-      const runtime = runtimes.get(sessionId)
+      return sessionStatus(sessionId)
+    },
+    // Spec §5.3: the effective route for `/advisor model` — the resolver SSOT
+    // (effectiveConfig) supplies the pair, the session pin supplies the label.
+    getModelRoute(sessionId: string): AdvisorModelRoute {
       const effective = effectiveConfig(sessionId)
-      return {
-        enabled: effective.enabled,
-        ...(effective.disabledReason === undefined ? {} : { disabledReason: effective.disabledReason }),
-        provider: safeResolved().provider,
-        model: safeResolved().model,
-        runtimeStatus: runtime?.status() ?? 'disabled',
-        pendingCount: runtime?.pendingCount ?? 0,
-        lastActivityAt: runtime?.lastActivity,
+      const pair = overrides.model(sessionId)
+      const source = pair !== undefined && pair.provider === effective.provider && pair.model === effective.model
+        ? 'session'
+        : 'global'
+      return { provider: effective.provider, model: effective.model, source }
+    },
+    // Spec §5.3 — validate, then commit, an atomic session pair. Fence FIRST
+    // (bump the generation), so a newer set/reset — or any state wipe — makes
+    // this attempt stale. The lookup rides the app-root LLM service, bound to
+    // the 60 s deadline fused with the invoking command's signal and the owner
+    // teardown signal, with NO automatic retry; failure leaves the previous
+    // selection untouched. Catalog membership is advisory — a successful
+    // resolution is the acceptance gate. Selection never starts a generation
+    // call and never touches the enable override.
+    async setModel(
+      sessionId: string,
+      provider: string,
+      model: string,
+      agent: Agent,
+      signal?: AbortSignal,
+    ): Promise<AdvisorSetModelOutcome> {
+      const generation = overrides.beginModelGeneration(sessionId)
+      const fused = fuseSignals(signal, validationTeardown.signal)
+      try {
+        using deadlineHandle = deadline(fused.signal, ADVISOR_MODEL_VALIDATION_TIMEOUT_MS, ADVISOR_MODEL_VALIDATION_TIMEOUT)
+        // Race the lookup against the fused signal: a hung adapter lookup that
+        // ignores cancellation settles here as 'aborted' at the deadline, so
+        // the 60 s bound holds regardless of adapter behavior. There is NO
+        // automatic retry — one lookup, one outcome.
+        const resolvedInfo = await raceSignal(
+          appRootLlm().resolveModelInfo(provider, model, deadlineHandle.signal),
+          deadlineHandle.signal,
+        )
+        if (resolvedInfo === 'aborted') {
+          // Deadline fired → the timed-out failure; otherwise the invoking
+          // command was cancelled or the owner/session went away.
+          if (timeoutOf(deadlineHandle.signal, ADVISOR_MODEL_VALIDATION_TIMEOUT) !== undefined) {
+            return {
+              kind: 'failed',
+              reason: `model validation timed out after ${ADVISOR_MODEL_VALIDATION_TIMEOUT_MS}ms`,
+            }
+          }
+          if (signal?.aborted === true) return { kind: 'cancelled' }
+          return { kind: 'gone' }
+        }
+      } catch (error) {
+        // A rejecting lookup (unknown route, adapter throw) — classify the
+        // same abort vocabulary, else report the failure verbatim.
+        if (signal?.aborted === true) return { kind: 'cancelled' }
+        if (validationTeardown.signal.aborted) return { kind: 'gone' }
+        return { kind: 'failed', reason: error instanceof Error ? error.message : String(error) }
+      } finally {
+        fused.cleanup()
       }
+      // Fence checks AFTER the lookup settled — session/owner liveness first
+      // (a dispose/reload cannot be undone by a delayed validation completion),
+      // then the generation: a newer set/reset supersedes unresolved older
+      // work while the session is still live.
+      if (validationTeardown.signal.aborted || ctx.agents.get(sessionId as SessionId) === undefined) {
+        return { kind: 'gone' }
+      }
+      if (overrides.modelGeneration(sessionId) !== generation) return { kind: 'superseded' }
+      // Commit: the route-change effect fires only when the effective pair
+      // actually changed (an equal-default pin is recorded, not restarted).
+      const before = effectiveConfig(sessionId)
+      overrides.setModel(sessionId, { provider, model })
+      applyRouteChange(sessionId, before, agent.session.seq)
+      const status = sessionStatus(sessionId)
+      return before.provider === status.provider && before.model === status.model
+        ? { kind: 'unchanged', status }
+        : { kind: 'committed', status }
+    },
+    // Spec §5.3 — drop the pin and re-inherit the CURRENT global defaults.
+    // Synchronous (no lookup needed). The generation bumps FIRST — a reset is
+    // a newer model command even when there is no pin to remove (noop), so it
+    // supersedes any in-flight validation. Reset never touches the enable
+    // override, and reset to a missing global pair "succeeds" while the
+    // post-reset status reports the gate-blocked/no-call state.
+    resetModel(sessionId: string, sessionLength?: number): AdvisorResetModelOutcome {
+      overrides.beginModelGeneration(sessionId)
+      const before = effectiveConfig(sessionId)
+      if (!overrides.clearModel(sessionId)) return { kind: 'noop' }
+      applyRouteChange(sessionId, before, sessionLength)
+      return { kind: 'reset', status: sessionStatus(sessionId) }
     },
     // T2 (plan dsh-advisor-tui-client-n8): the composed-config readback.
     // Session-less BY DESIGN — reads `safeResolved()` (the live entry config
