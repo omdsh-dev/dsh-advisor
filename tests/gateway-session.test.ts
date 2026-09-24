@@ -32,7 +32,8 @@ import TypertGatewayService from '@deepseek-ai/dsh-api-gateway'
 import { TypertRegistry } from '@deepseek-ai/dsh-typert-registry'
 import { installAdvisorSettings } from '../src/settings'
 import { AdvisorConfigGateway } from '../src/gateway'
-import type { AdvisorSessionGatewayFace, AdvisorSessionRpcResult } from '../src/gateway'
+import type { AdvisorSessionGatewayFace, AdvisorSessionRpcResult, AdvisorSessionSnapshotWire } from '../src/gateway'
+import type { AdvisorConfig } from '../src/config'
 
 // n4 QC F-6: the single-reviewer guard is process-global; the composed tests
 // mount the real plugin, so the flag must reset between cases.
@@ -41,7 +42,7 @@ beforeEach(() => {
 })
 
 /** Full entry (plugin-row) config shape, merged over the schema defaults. */
-function entryConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function entryConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
   return {
     enabled: false,
     systemPrompt: '',
@@ -52,7 +53,7 @@ function entryConfig(overrides: Record<string, unknown> = {}): Record<string, un
 }
 
 /** One scripted face outcome. */
-function snapshot(result: AdvisorSessionRpcResult['snapshot']): AdvisorSessionRpcResult {
+function snapshot(result: AdvisorSessionSnapshotWire): AdvisorSessionRpcResult {
   return { snapshot: result }
 }
 
@@ -68,7 +69,7 @@ describe('advisor session endpoints (unit, scripted face)', () => {
   }
 
   it('getSession relays to the elected owner face', () => {
-    const getSession = vi.fn(() => snapshot({
+    const getSession = vi.fn((): AdvisorSessionRpcResult => snapshot({
       sessionId: 'sess-1', enabled: false, lifetime: 'live-session',
     }))
     const { gateway } = scripted({ getSession, setSessionModel: vi.fn(), resetSessionModel: vi.fn() })
@@ -154,8 +155,8 @@ async function compose(): Promise<Harness> {
   const resolveModelInfo = vi.fn(async () => ({ provider: 'deepseek', model: 'deepseek-chat' }))
   ctx.provide('agents', { get: (id: string) => (id === 'sess-1' ? agentDouble(id) : undefined) } as never)
   ctx.provide('llm', { stream: async () => {}, resolveModelInfo } as never)
-  const entry = new MemoryEntryConfig(entryConfig({ enabled: true }) as never)
-  await ctx.plugin(harnessAdvisorPlugin(), entry.config as never)
+  const entry = new MemoryEntryConfig(entryConfig({ enabled: true }))
+  await ctx.plugin(harnessAdvisorPlugin(), entry.config)
   await vi.waitFor(() => {
     expect(ctx.reflect.props['advisor']).toEqual({ type: 'service' })
   })
@@ -273,8 +274,8 @@ describe('composed session endpoints (apply wiring)', () => {
     ctx.provide('agents', { get: (id: string) => (id === 'sess-1' ? agentDouble(id) : undefined) } as never)
     const resolveModelInfo = vi.fn(async () => { throw new Error('unknown route') })
     ctx.provide('llm', { stream: async () => {}, resolveModelInfo } as never)
-    const entry = new MemoryEntryConfig(entryConfig({ enabled: true }) as never)
-    await ctx.plugin(harnessAdvisorPlugin(), entry.config as never)
+    const entry = new MemoryEntryConfig(entryConfig({ enabled: true }))
+    await ctx.plugin(harnessAdvisorPlugin(), entry.config)
     await vi.waitFor(() => expect(ctx.reflect.props['advisor']).toEqual({ type: 'service' }))
 
     const result = await ctx.typertGateway.invoke({
