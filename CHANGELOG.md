@@ -2,6 +2,10 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.5.1] - 2026-09-24
+
+- b007af3 Merge pull request #95 from omdsh-dev/chore/dsh-0.1.7-rc.2-cohort
+
 ## [0.5.0] - 2026-09-24
 
 - 23047c0 Merge pull request #93 from omdsh-dev/feat/advisor-session-web-control
