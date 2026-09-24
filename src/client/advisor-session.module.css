@@ -1,0 +1,200 @@
+/* Advisor session header action (B2) — the compact control registered into
+ * `conversation.session.header.actions`. Shape mirrors the card design
+ * language (advisor-card.module.css): every color resolves through a
+ * `--dsw-alias-*` token (light/dark adaptive); the trigger is a quiet ghost
+ * button that reads as a header action, and the open panel is a small
+ * self-contained popover card anchored under it. */
+
+/* The closed trigger: a neutral header action — the label is the plugin name
+   only (no model text: an open menu is a refreshable snapshot, a closed one
+   claims nothing). */
+.trigger {
+  appearance: none;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  padding: 3px 12px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.trigger:hover {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-label-dimmed);
+}
+
+.trigger[aria-expanded='true'] {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-3);
+  border-color: var(--dsw-alias-label-dimmed);
+}
+
+.trigger:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}
+
+/* Wrapper anchoring the popover under the trigger (the header action cell is
+   the positioning context). */
+.anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+/* The open panel: a bordered popover card above the header's z-plane. */
+.panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: 300px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-3);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.panelHeading {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The effective-route line: pair + source label. */
+.routeLine {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+  overflow-wrap: anywhere;
+}
+
+.sourceBadge {
+  margin-left: 6px;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 17px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.mutedLine {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.notice {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* The staged pin controls: two compact selects + the pin/reset actions. */
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}
+
+.selectRow {
+  display: flex;
+  gap: 8px;
+}
+
+.select {
+  flex: 1;
+  min-width: 0;
+  appearance: auto;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  padding: 4px 6px;
+}
+
+.select:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.select:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: -1px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Secondary (reset) and primary (pin) actions mirror the card's
+   discard/save pair. */
+.reset,
+.pin {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.reset {
+  border-color: var(--dsw-alias-border-l2);
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.reset:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-label-dimmed);
+}
+
+.pin {
+  background: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-bg-layer-3);
+}
+
+.reset:disabled,
+.pin:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.reset:focus-visible,
+.pin:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}

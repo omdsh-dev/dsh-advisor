@@ -34,6 +34,23 @@ export const en = {
   saved: 'Advisor settings saved. New sessions pick them up immediately.',
   readOnly: 'Settings are read-only in this environment.',
   namespaceUnavailable: 'The advisor configuration channel is not available yet — the settings gateway is not ready on this host. Configure the advisor via the plugin config row — `- id: advisor` whose `config:` map sets `enabled`/`provider`/`model` (e.g. `config: { enabled: true, provider: …, model: … }`) in `$DSH_HOME/profiles/<name>/cordis.patch.yml`. The advisor plugin runs fully from its plugin config row; the web settings form becomes available again on the next load once the gateway is reachable. Note: `/advisor` only toggles the advisor per session; it cannot supply provider/model.',
+  // Session header action (B2): the control lives on the session header and
+  // drives the live-session reviewer route only.
+  sessionTrigger: 'Advisor',
+  sessionExpand: 'Open the advisor controls for this session',
+  sessionCollapse: 'Close the advisor controls for this session',
+  sessionLoading: 'Loading…',
+  sessionModelHeading: 'Reviewer model for this session',
+  sessionSourceSession: 'session override',
+  sessionSourceGlobal: 'global default',
+  sessionNoPair: 'No reviewer model — the global default has no provider/model.',
+  sessionLifetime: 'Lives for this session only — never persisted; cleared on dispose or restart. A new or forked session inherits the global defaults.',
+  sessionAdvisorOff: 'The advisor is off for this session.',
+  sessionGateBlocked: 'No model call can start: {reason}',
+  sessionPinAction: 'Pin this model',
+  sessionPending: 'Applying…',
+  sessionReset: 'Use global default',
+  sessionUnavailable: 'The advisor session control surface is not available on this host. Use /advisor model in the session, or configure the global defaults on the Plugins page.',
 }
 
 /** The settings.advisor namespace key union. */
@@ -69,4 +86,19 @@ export const zh: typeof en = {
   saved: '顾问设置已保存。新会话立即生效。',
   readOnly: '当前环境中的设置为只读。',
   namespaceUnavailable: '顾问配置通道暂不可用——本宿主上的设置网关尚未就绪。请通过插件配置行配置顾问——在 `$DSH_HOME/profiles/<name>/cordis.patch.yml` 中写 `- id: advisor`，其 `config:` 映射中设置 `enabled`/`provider`/`model`（例如 `config: { enabled: true, provider: …, model: … }`）。顾问插件完全通过插件配置行运行；网关可用后，web 设置表单将在下次加载时重新显示。注意：`/advisor` 仅切换当前会话的顾问开关，无法提供 provider/model。',
+  sessionTrigger: '顾问',
+  sessionExpand: '打开本会话的顾问控制',
+  sessionCollapse: '关闭本会话的顾问控制',
+  sessionLoading: '加载中…',
+  sessionModelHeading: '本会话的审阅模型',
+  sessionSourceSession: '会话覆盖',
+  sessionSourceGlobal: '全局默认',
+  sessionNoPair: '暂无审阅模型——全局默认未配置 provider/model。',
+  sessionLifetime: '仅在本会话内有效——从不持久化；会话销毁或重启后清除。新建或分叉的会话继承全局默认值。',
+  sessionAdvisorOff: '本会话的顾问已关闭。',
+  sessionGateBlocked: '无法发起模型调用：{reason}',
+  sessionPinAction: '固定此模型',
+  sessionPending: '应用中…',
+  sessionReset: '使用全局默认',
+  sessionUnavailable: '本宿主上的顾问会话控制面不可用。请在会话中使用 /advisor model，或在 Plugins 页配置全局默认值。',
 }

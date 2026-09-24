@@ -3,11 +3,14 @@
  * shell-declared `plugins.bundle.config` keyed slot (the Plugins page's
  * per-bundle configuration seat — key `dsh-advisor`, the bundle's package name
  * the page dispatches, rendered on the bundle's own page between its
- * description and its rows). The card's store joins the settings namespaces
- * and the provider directory through the connection wire, and keeps fresh on
- * pushed invalidations. Export discipline: the client half value-imports ONLY the
- * frozen platform module table (CLIENT_EXTERNALS: react /
- * `@deepseek-ai/cordis` / ui-slots / ui-primitives / the documented
+ * description and its rows) and, since B2, an Advisor action into the
+ * shell-declared `conversation.session.header.actions` list slot (the
+ * per-session reviewer-model control, bound to the slot parent's SessionId —
+ * the global card stays global-only). The card's store joins the settings
+ * namespaces and the provider directory through the connection wire, and
+ * keeps fresh on pushed invalidations. Export discipline: the client half
+ * value-imports ONLY the frozen platform module table (CLIENT_EXTERNALS:
+ * react / `@deepseek-ai/cordis` / ui-slots / ui-primitives / the documented
  * `@deepseek-ai/dsh-client-store` exemption); every other
  * `@deepseek-ai/*` import is type-only (erased at build) — values arrive via
  * cordis injection (`ctx.get('connection')`, slot inject faces, the
@@ -21,6 +24,13 @@ import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client
 // ui-settings one: it loads the module's types (the ./client entry re-exports
 // the slot-contract merge) without any value import.
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
+// Type-only: pulls the Conversation shell's SlotMap merge — the
+// 'conversation.session.header.actions' entry (B2's session-scoped registration
+// target, declared by ui-conversation: a list/session slot whose parent
+// supplies the bound SessionId to the inject factory). Type-only like every
+// other @deepseek-ai/* import here — the bundle purity gate forbids value
+// imports outside the frozen loader table.
+import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls ui-settings' Context merge (ctx.settingsSchema — the
@@ -43,14 +53,18 @@ import type {} from '@deepseek-ai/dsh-api-remotes/types'
 // ui-renderer in the alpha.2 line).
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { AdvisorCard } from './advisor-card.tsx'
-import { AdvisorSettingsStore, refreshIfLoaded } from './advisor-store.ts'
+import { AdvisorSessionAction } from './advisor-session.tsx'
+import { AdvisorSessionModelController, AdvisorSettingsStore, refreshIfLoaded } from './advisor-store.ts'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { en, zh, type AdvisorKey } from './locales.ts'
 
 export type { AdvisorCardInjected, AdvisorCardProps } from './advisor-card.tsx'
+export type { AdvisorSessionActionInjected, AdvisorSessionActionProps } from './advisor-session.tsx'
 export type { AdvisorKey } from './locales.ts'
 export type {
-  AdvisorDraft, AdvisorSettingsState, AdvisorSettingsStore, ApplyFailure, ApplyState,
-  ModelOption, ModelsEmptyReason, ProviderOption,
+  AdvisorDraft, AdvisorSessionMenuState, AdvisorSessionModelController, AdvisorSessionRpcPayload,
+  AdvisorSessionSelection, AdvisorSessionSnapshotView, AdvisorSettingsState, AdvisorSettingsStore,
+  ApplyFailure, ApplyState, ModelOption, ModelsEmptyReason, ProviderOption,
 } from './advisor-store.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -113,6 +127,15 @@ export function apply(ctx: ClientContext): void {
   // dotted-namespace contract).
   const controller = new AdvisorSettingsStore(ctx.remote, connection.rpc, ctx.settingsSchema)
 
+  // B2: the session action's refresh-signal epoch — bumped by every pushed
+  // invalidation / connection reset / window focus that already coalesces
+  // here, so an OPEN session menu refetches (fetch on reconnect / focus)
+  // while a closed one stays idle. The epoch is a plain counter store; the
+  // per-session controllers consume it idempotently (a re-render never
+  // double-fetches). No push-event contract, no polling — the bumps ride the
+  // SAME debounced invalidation plane the global card already uses.
+  const refreshSignal = createSnapshotStore(0)
+
   // Pushed invalidations converge the open surface without polling. Two
   // planes feed the shared microtask debounce:
   // - `connection/reset` (ctx.on): a connection reset invalidates the whole
@@ -145,6 +168,11 @@ export function apply(ctx: ClientContext): void {
       queueMicrotask(() => {
         pending = false
         refreshIfLoaded(controller)
+        // B2: the same coalesced bump drives the open session menus'
+        // refetch (reconnect / settings / provider-topology changes all
+        // affect the effective session route — global pair edits reach
+        // inheritors).
+        refreshSignal.update((epoch) => epoch + 1)
       })
     }
     const disposers: Array<() => void> = [ctx.on('connection/reset', refresh)]
@@ -155,7 +183,14 @@ export function apply(ctx: ClientContext): void {
     // generation guard bound the cost.
     disposers.push(ctx.remote.$on('settings/document-updated', refresh))
     disposers.push(ctx.remote.$on('llm/adapters-updated', refresh))
-    return () => { for (const dispose of disposers) dispose() }
+    // B2 fetch-on-focus: a window focus bumps the epoch so an open menu
+    // refreshes its snapshot. Listener cleanup rides the same fiber effect.
+    const onFocus = (): void => { refresh() }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      for (const dispose of disposers) dispose()
+    }
   }, 'advisor: pushed invalidations')
 
   // KD-1: the card registers into the Plugins page's bundle-config seat with
@@ -185,5 +220,43 @@ export function apply(ctx: ClientContext): void {
       // bindSnapshotSelector call is gone with that package).
       inject: () => ({ controller, hooks: { snapshot: controller.store } }),
     }, AdvisorCard)
+  })
+
+  // B2 (issue #88 web session control): the session header's Advisor action —
+  // the web surface of the per-session model override. Registered into the
+  // shell-declared `conversation.session.header.actions` list slot (NOT the
+  // singleton primary-model slot, NOT the root plugin card above — the global
+  // card stays global-only). The slot is session-scoped: the framework
+  // resolves the bound SessionId into the inject factory and memoizes the
+  // resulting face per (entry × session scope binding), so each session gets
+  // ONE AdvisorSessionModelController whose fetches/writes carry its own
+  // sessionId — a late response for an old binding can never mutate or render
+  // another session's state (structural binding fence; the per-controller
+  // request fence orders same-session ops). All traffic rides the plugin
+  // session endpoints; the registration waits for the host declaration the
+  // same way the card waits for the Plugins page's.
+  ctx.slots.inject('conversation.session.header.actions', function* () {
+    yield ctx.slots.register({
+      name: 'conversation.session.header.actions',
+      // List slot: one cell per `id` — this bundle contributes exactly one
+      // action; default order keeps registration sequencing.
+      id: BUNDLE_NAME,
+      locale: NS,
+      inject: (sessionId: string) => {
+        const sessionController = new AdvisorSessionModelController(sessionId, connection.rpc)
+        return {
+          sessionId,
+          controller: sessionController,
+          // READ-only directory reuse: provider/model options come from the
+          // global card's store; the session surface never writes through it.
+          directory: controller,
+          hooks: {
+            snapshot: sessionController.store,
+            refreshSignal,
+            directory: controller.store,
+          },
+        }
+      },
+    }, AdvisorSessionAction)
   })
 }

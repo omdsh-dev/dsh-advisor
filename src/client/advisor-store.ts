@@ -787,3 +787,242 @@ export function refreshIfLoaded(controller: AdvisorSettingsStore): void {
   if (controller.store.getSnapshot().status === 'idle') return
   void controller.load()
 }
+
+// ---------------------------------------------------------------------------
+// Session model surface (B2 — issue #88 web session control)
+// ---------------------------------------------------------------------------
+
+/**
+ * The wire `snapshot` value of `/api/advisor/getSession` and of a successful
+ * `/api/advisor/setSessionModel` — client mirror of the node-side
+ * `AdvisorSessionSnapshotWire` (src/gateway.ts). Kept as a local structural
+ * type because the client bundle may not value-import the node-side module;
+ * the wire normalization omits absent keys (modelOverride / modelSource /
+ * effectiveModel / disabledReason are simply missing from the JSON).
+ */
+export interface AdvisorSessionSnapshotView {
+  /** The session the snapshot describes (echoes the request's binding). */
+  sessionId: string
+  /** Effective switch for this session (session override ?? global). */
+  enabled: boolean
+  /** Live-session lifetime marker — the snapshot is never durable. */
+  lifetime: 'live-session'
+  /** The session's pinned atomic pair; absent while it inherits. */
+  modelOverride?: { provider: string; model: string }
+  /** Where the effective route comes from; present iff a pair exists. */
+  modelSource?: 'session' | 'global'
+  /** The effective route; absent when neither level has a complete pair. */
+  effectiveModel?: { provider: string; model: string }
+  /** Present iff the S4 explicit gate blocks model calls. */
+  disabledReason?: string
+}
+
+/** One `setSessionModel` selection on the wire: an atomic pair, or null (= reset). */
+export type AdvisorSessionSelection = { readonly provider: string; readonly model: string } | null
+
+/**
+ * The RPC result union of the session endpoints: a snapshot, or a
+ * plugin-domain tagged error carried in the returned data (never a thrown
+ * coded failure — the dsh failure vocabulary stays frozen).
+ */
+export interface AdvisorSessionRpcPayload {
+  snapshot?: AdvisorSessionSnapshotView
+  error?: { tag: string; message: string }
+}
+
+/** The session header action's menu snapshot. */
+export interface AdvisorSessionMenuState {
+  /** idle → loading (first fetch) → ready; refreshes keep `snapshot` visible. */
+  phase: 'idle' | 'loading' | 'ready'
+  /** The authoritative snapshot; null until the first successful load. */
+  snapshot: AdvisorSessionSnapshotView | null
+  /** Last failure text for display (null when healthy). */
+  error: string | null
+  /**
+   * Latch: the session control surface is unavailable (no elected owner on
+   * the host, the target session is unknown/disposed, or the channel failed).
+   * An unavailable menu offers NO writes — it never falls back to the global
+   * `advisor/set` channel. Recovered by a later successful refresh.
+   */
+  unavailable: boolean
+  /** A set/reset write is in flight. */
+  pending: boolean
+}
+
+/**
+ * Per-session controller for the session header's Advisor action (one
+ * instance per session — the slot renderer memoizes the inject face per
+ * entry × session scope binding, so the instance lives and dies with the
+ * binding). Every call sends ITS OWN `sessionId` and commits only into its
+ * own store: a late response for an old binding can never mutate another
+ * session's state (the structural binding fence). Ordering within one session
+ * is fenced by a monotonic `requestSeq` — a newer open/refresh/write
+ * supersedes an unresolved older op, whose settle is discarded wholesale
+ * (the same generation-fence shape the host controller uses).
+ */
+export class AdvisorSessionModelController {
+  readonly sessionId: string
+
+  /** The snapshot the menu renders from (uSES-safe store). */
+  readonly store: SnapshotStore<AdvisorSessionMenuState> = createSnapshotStore<AdvisorSessionMenuState>({
+    phase: 'idle',
+    snapshot: null,
+    error: null,
+    unavailable: false,
+    pending: false,
+  })
+
+  /** Fence token: a newer op makes every older settle stale. */
+  private requestSeq = 0
+
+  /** Last consumed refresh-signal epoch (reconnect / focus bumps). */
+  private lastSignal: number | undefined
+
+  constructor(sessionId: string, private readonly rpc: ClientConnectionRpc) {
+    this.sessionId = sessionId
+  }
+
+  /**
+   * Record the refresh-signal epoch and report whether it is NEW. The open
+   * handler always refetches and merely marks the signal current; the render
+   * watcher calls this while open and refetches only on a true return (a
+   * reconnect/focus bump). Idempotent per epoch, so a re-render never
+   * double-fetches.
+   */
+  takeSignal(epoch: number): boolean {
+    if (this.lastSignal === epoch) return false
+    this.lastSignal = epoch
+    return true
+  }
+
+  /**
+   * Fetch the authoritative snapshot (`/api/advisor/getSession`). Called on
+   * menu open and on every refresh signal while open. A stale settle (a newer
+   * op superseded this fetch) touches nothing. An `advisor/unavailable` /
+   * `advisor/session-unknown` tag or a transport failure latches
+   * `unavailable` (writes stay off until a later successful refresh); other
+   * tagged outcomes leave the surface usable with the error shown.
+   */
+  async refresh(): Promise<void> {
+    const seq = ++this.requestSeq
+    this.store.update((s) => {
+      s.phase = 'loading'
+      // A refresh supersedes in-flight write feedback; the write may still
+      // land host-side — the refresh result is the authoritative state.
+      s.pending = false
+      s.error = null
+    })
+    let payload: AdvisorSessionRpcPayload | undefined
+    let transport: string | undefined
+    try {
+      const result = await this.rpc.call('/api', 'advisor/getSession', { args: { sessionId: this.sessionId } })
+      if (seq !== this.requestSeq) return
+      if (result.ok) payload = result.value as AdvisorSessionRpcPayload
+      else transport = result.error.message
+    } catch (error) {
+      if (seq !== this.requestSeq) return
+      transport = error instanceof Error ? error.message : String(error)
+    }
+    this.applyOutcome(payload, transport, seq)
+  }
+
+  /**
+   * Pin the atomic `{provider, model}` pair for THIS session
+   * (`/api/advisor/setSessionModel`, selection = the pair). Refuses outright
+   * while `unavailable` (store-side defense-in-depth — an unavailable menu
+   * must never issue a write, and must never fall back to the global
+   * `advisor/set` channel). The host validates the pair through the same
+   * rules as the `/advisor model set` command face.
+   */
+  async setSessionModel(provider: string, model: string): Promise<void> {
+    await this.write({ provider, model })
+  }
+
+  /**
+   * Drop the session pin and re-inherit the CURRENT global defaults
+   * (`selection: null`). Never touches the enable override; reset to a
+   * missing global pair still succeeds — the returned snapshot reports the
+   * gate-blocked/no-call state, which the menu renders truthfully.
+   */
+  async resetSessionModel(): Promise<void> {
+    await this.write(null)
+  }
+
+  /** Shared write path (both arms ride the same endpoint + fence + outcome mapping). */
+  private async write(selection: AdvisorSessionSelection): Promise<void> {
+    if (this.store.getSnapshot().unavailable) {
+      this.store.update((s) => {
+        s.error = 'advisor: the session control surface is unavailable — writes are not offered'
+      })
+      return
+    }
+    const seq = ++this.requestSeq
+    this.store.update((s) => {
+      s.pending = true
+      s.error = null
+    })
+    let payload: AdvisorSessionRpcPayload | undefined
+    let transport: string | undefined
+    try {
+      const result = await this.rpc.call('/api', 'advisor/setSessionModel', {
+        args: { sessionId: this.sessionId, selection },
+      })
+      if (seq !== this.requestSeq) return
+      if (result.ok) payload = result.value as AdvisorSessionRpcPayload
+      else transport = result.error.message
+    } catch (error) {
+      if (seq !== this.requestSeq) return
+      transport = error instanceof Error ? error.message : String(error)
+    }
+    this.applyOutcome(payload, transport, seq)
+  }
+
+  /**
+   * Commit one settled outcome. Guards (seq checked by the callers before
+   * reaching here): tagged `advisor/unavailable` / `advisor/session-unknown`
+   * and transport failures latch `unavailable` (no writes offered, last good
+   * snapshot kept for context); other tagged outcomes keep the surface usable
+   * and surface the message (the host left the previous selection untouched);
+   * a snapshot commits as the new authoritative state.
+   */
+  private applyOutcome(payload: AdvisorSessionRpcPayload | undefined, transport: string | undefined, seq: number): void {
+    if (seq !== this.requestSeq) return
+    const tagged = payload?.error
+    if (transport !== undefined || tagged?.tag === 'advisor/unavailable' || tagged?.tag === 'advisor/session-unknown') {
+      this.store.update((s) => {
+        s.phase = 'ready'
+        s.unavailable = true
+        s.pending = false
+        s.error = transport ?? tagged?.message ?? 'advisor: the session control surface is unavailable'
+      })
+      return
+    }
+    if (tagged !== undefined) {
+      this.store.update((s) => {
+        s.phase = 'ready'
+        s.pending = false
+        s.error = tagged.message
+      })
+      return
+    }
+    const snapshot = payload?.snapshot
+    if (snapshot === undefined) {
+      // Malformed payload — treat like an unavailable channel rather than
+      // rendering an invented state.
+      this.store.update((s) => {
+        s.phase = 'ready'
+        s.unavailable = true
+        s.pending = false
+        s.error = 'advisor: the session endpoint returned no snapshot'
+      })
+      return
+    }
+    this.store.update((s) => {
+      s.phase = 'ready'
+      s.snapshot = snapshot
+      s.unavailable = false
+      s.pending = false
+      s.error = null
+    })
+  }
+}
