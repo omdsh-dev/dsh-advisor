@@ -56,7 +56,8 @@ import type {} from '@deepseek-ai/dsh-commands'
 import { resolveAdvisorConfig } from './config.js'
 import type { AdvisorConfig, ResolvedAdvisorConfig } from './config.js'
 import { installAdvisorSettings } from './settings.js'
-import { AdvisorConfigGateway, advisorTypertContribution } from './gateway.js'
+import { AdvisorConfigGateway, advisorSessionError, advisorTypertContribution } from './gateway.js'
+import type { AdvisorSessionGatewayFace, AdvisorSessionRpcResult } from './gateway.js'
 import { SessionTranscriptObserver } from './transcript.js'
 import type { Delta } from './transcript.js'
 import { AdvisorRuntime } from './advisor-runtime.js'
@@ -193,8 +194,16 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // registrations are fiber effects (unregistered when this fiber disposes),
   // so a re-apply/re-mount can take over. The instance needs no handle here:
   // the typertGateway dispatches through `ctx.get('advisor')`.
+  //
+  // B2 (issue #88 web session control): the session endpoints route through
+  // the SAME controller the `/advisor model` commands drive — the face below
+  // is assigned by the elected (reviewer-claiming) fiber AFTER its controller
+  // exists; the gateway resolves it lazily per request, so a gateway on a
+  // fiber that lost the service-key race (or that never claimed the reviewer
+  // role) answers `advisor/unavailable` in data and stays inert.
+  let sessionControl: AdvisorSessionGatewayFace | undefined
   try {
-    new AdvisorConfigGateway(ctx, bridge)
+    new AdvisorConfigGateway(ctx, bridge, () => sessionControl)
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes('has been registered')) throw error
     ctx.logger('advisor').debug('advisor gateway already registered — no gateway on this fiber (multi-fiber dedupe)')
@@ -789,6 +798,94 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       }
     },
   }
+
+  // B2 (issue #88 web session control): the elected owner's session face —
+  // the web surface of the SAME `controller` above (`/api/advisor/getSession`
+  // + `/api/advisor/setSessionModel`; selection null = reset). Snapshot reads
+  // ride `sessionStatus` (the resolver SSOT); writes delegate to
+  // `controller.setModel` / `controller.resetModel`, so pre-commit
+  // `resolveModelInfo` validation, per-session generation fencing, and the
+  // route-change semantics are inherited from the B1 command face, never
+  // reimplemented. Liveness is checked BEFORE any controller call (a dead
+  // target must not allocate a generation — `setModel` bumps one on entry),
+  // using the SAME seam the controller's own post-lookup fence uses
+  // (`ctx.agents.get`), so a disposed/unknown session is rejected without
+  // allocating state. SessionId is NOT authorization: the request still
+  // crossed the Connection Host/Origin + browser-auth boundary upstream;
+  // this face adds no ACL layer. Business outcomes ride the returned data
+  // (plugin-domain error tags) — the dsh failure vocabulary stays frozen.
+  const sessionLiveError = (sessionId: string): AdvisorSessionRpcResult | undefined =>
+    ctx.agents.get(sessionId as SessionId) === undefined
+      ? advisorSessionError('advisor/session-unknown', `advisor: session ${sessionId} is not live`)
+      : undefined
+  const snapshotOfStatus = (sessionId: string, status: AdvisorSessionStatus): AdvisorSessionRpcResult => {
+    const effective = status.provider !== undefined && status.model !== undefined
+      ? { provider: status.provider, model: status.model }
+      : undefined
+    // The pin, when present, always IS the effective route (atomic override),
+    // so `modelSource === 'session'` marks a pinned `modelOverride`. A pin
+    // equal to the global default still reports `session` — the explicit pin
+    // is protected from later default edits.
+    const pinned = status.modelSource === 'session' ? effective : undefined
+    return {
+      snapshot: {
+        sessionId,
+        enabled: status.enabled,
+        lifetime: 'live-session',
+        ...(pinned === undefined ? {} : { modelOverride: pinned }),
+        ...(status.modelSource === undefined ? {} : { modelSource: status.modelSource }),
+        ...(effective === undefined ? {} : { effectiveModel: effective }),
+        ...(status.disabledReason === undefined ? {} : { disabledReason: status.disabledReason }),
+      },
+    }
+  }
+  const mapSetOutcome = (sessionId: string, outcome: AdvisorSetModelOutcome): AdvisorSessionRpcResult => {
+    switch (outcome.kind) {
+      case 'committed':
+      case 'unchanged':
+        return snapshotOfStatus(sessionId, outcome.status)
+      case 'rejected':
+        return advisorSessionError('advisor/rejected', `advisor: ${outcome.reason}`)
+      case 'failed':
+        return advisorSessionError('advisor/failed', `advisor: model validation failed — previous selection untouched: ${outcome.reason}`)
+      case 'cancelled':
+        return advisorSessionError('advisor/cancelled', 'advisor: the model set was cancelled — previous selection untouched')
+      case 'superseded':
+        return advisorSessionError('advisor/superseded', 'advisor: superseded by a newer model command — previous selection untouched')
+      case 'gone':
+        return advisorSessionError('advisor/session-unknown', 'advisor: this session is no longer live — selection untouched')
+    }
+  }
+  const mapResetOutcome = (sessionId: string, outcome: AdvisorResetModelOutcome): AdvisorSessionRpcResult =>
+    outcome.kind === 'reset' ? snapshotOfStatus(sessionId, outcome.status) : snapshotOfStatus(sessionId, sessionStatus(sessionId))
+  const sessionControlFace: AdvisorSessionGatewayFace = {
+    getSession(sessionId) {
+      const unknown = sessionLiveError(sessionId)
+      if (unknown !== undefined) return unknown
+      return snapshotOfStatus(sessionId, sessionStatus(sessionId))
+    },
+    async setSessionModel(sessionId, provider, model) {
+      const unknown = sessionLiveError(sessionId)
+      if (unknown !== undefined) return unknown
+      const agent = ctx.agents.get(sessionId as SessionId)
+      if (agent === undefined) return sessionLiveError(sessionId)!
+      // No per-request signal: the web RPC has no cancellation wire — the
+      // 60 s deadline and the owner-teardown signal (fused inside setModel)
+      // bound every lookup exactly like the command face's no-signal path.
+      return mapSetOutcome(sessionId, await controller.setModel(sessionId, provider, model, agent))
+    },
+    resetSessionModel(sessionId) {
+      const unknown = sessionLiveError(sessionId)
+      if (unknown !== undefined) return unknown
+      const agent = ctx.agents.get(sessionId as SessionId)
+      if (agent === undefined) return sessionLiveError(sessionId)!
+      // Reset with no pin is a SUCCESS (`noop`) — the post-reset status
+      // reports the inheriting (possibly gate-blocked) state, matching the
+      // command face's truthfulness.
+      return mapResetOutcome(sessionId, controller.resetModel(sessionId, agent.session.seq))
+    },
+  }
+  sessionControl = sessionControlFace
 
   // T7: the command child activates ONLY when a command registry is composed
   // (conditional child activation — `commands` must NOT join the top-level

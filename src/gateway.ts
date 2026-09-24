@@ -44,11 +44,100 @@ import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
 import { RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { ADVISOR_SETTINGS_NAMESPACE } from './settings.js'
 import type { AdvisorSettingsBridge } from './settings.js'
+import { parseModelPair } from './commands.js'
+import type { AdvisorModelSource } from './commands.js'
 import { resolveAdvisorConfig } from './config.js'
 import type { AdvisorConfig, ResolvedAdvisorConfig } from './config.js'
 
 /** Patch shape accepted by `advisor.set` — any subset of the config keys. */
 export type AdvisorConfigPatch = Partial<AdvisorConfig>
+
+// ---------------------------------------------------------------------------
+// Session model surface (B2 — issue #88 web session control)
+// ---------------------------------------------------------------------------
+
+/** An atomic reviewer-route pair on the wire (JSON-safe; never undefined-valued). */
+export interface AdvisorPairWire {
+  readonly provider: string
+  readonly model: string
+}
+
+/**
+ * The authoritative per-session advisor snapshot (spec §5.3) — the wire value
+ * of `advisor/getSession` and of a successful `advisor/setSessionModel`.
+ * Absent optional keys are OMITTED (the typertGateway result validation
+ * rejects undefined values), never present-as-undefined:
+ *
+ * - `modelOverride` — the session's pinned atomic pair; omitted while the
+ *   session inherits the global defaults;
+ * - `modelSource` — where the effective route comes from (`session` = the
+ *   pin, `global` = the composed global pair); present iff an effective pair
+ *   exists at all;
+ * - `effectiveModel` — the effective route; omitted when neither level has a
+ *   complete pair;
+ * - `disabledReason` — the S4 explicit-gate reason when it blocks.
+ */
+export interface AdvisorSessionSnapshotWire {
+  readonly sessionId: string
+  readonly enabled: boolean
+  /** Live-session lifetime marker (spec §5.3 — the snapshot is never durable). */
+  readonly lifetime: 'live-session'
+  readonly modelOverride?: AdvisorPairWire
+  readonly modelSource?: AdvisorModelSource
+  readonly effectiveModel?: AdvisorPairWire
+  readonly disabledReason?: string
+}
+
+/**
+ * Plugin-domain error tags carried in RETURNED DATA (`{ error: { tag,
+ * message } }`) — never new RemoteError codes (dsh's failure vocabulary stays
+ * frozen) and never a thrown coded failure for these business outcomes:
+ *
+ * - `advisor/session-unknown` — the target session is not (or no longer)
+ *   live; rejected without allocating any state;
+ * - `advisor/unavailable` — this gateway fiber holds no elected owner (no
+ *   controller face); the endpoints stay inert rather than guessing;
+ * - `advisor/rejected` — the selection failed pair validation (nothing was
+ *   written);
+ * - `advisor/failed` — the pre-commit `resolveModelInfo` validation failed
+ *   (previous selection untouched);
+ * - `advisor/superseded` — a newer set/reset superseded the attempt;
+ * - `advisor/cancelled` — the attempt was cancelled before commit.
+ */
+export type AdvisorSessionErrorTag =
+  | 'advisor/session-unknown'
+  | 'advisor/unavailable'
+  | 'advisor/rejected'
+  | 'advisor/failed'
+  | 'advisor/superseded'
+  | 'advisor/cancelled'
+
+/** One `advisor/getSession` / `advisor/setSessionModel` result: snapshot or tagged data error. */
+export type AdvisorSessionRpcResult =
+  | { readonly snapshot: AdvisorSessionSnapshotWire }
+  | { readonly error: { readonly tag: AdvisorSessionErrorTag; readonly message: string } }
+
+/** Build one tagged data error (keeps every call site's shape identical). */
+export function advisorSessionError(tag: AdvisorSessionErrorTag, message: string): AdvisorSessionRpcResult {
+  return { error: { tag, message } }
+}
+
+/**
+ * The elected owner's session face — implemented by the wiring (`index.ts`)
+ * against the SAME `AdvisorCommandController` the `/advisor model` commands
+ * drive (spec §5.3: one controller, no second state store, no divergence
+ * between the command face and the web face). The gateway consults it lazily
+ * per request: only the reviewer-claiming fiber assigns it, so a gateway on a
+ * non-owner fiber stays inert (`advisor/unavailable`) instead of guessing.
+ */
+export interface AdvisorSessionGatewayFace {
+  /** Authoritative snapshot for one live session (unknown → tagged error). */
+  getSession(sessionId: string): AdvisorSessionRpcResult
+  /** Validate + commit a pair through the command controller (same fencing). */
+  setSessionModel(sessionId: string, provider: string, model: string): Promise<AdvisorSessionRpcResult>
+  /** Drop the pin and re-inherit (selection: null); never touches the enable override. */
+  resetSessionModel(sessionId: string): AdvisorSessionRpcResult
+}
 
 /**
  * The host-side `advisor` config gateway (`/api/advisor/get` +
@@ -71,15 +160,28 @@ export class AdvisorConfigGateway extends TypertRemoteService {
   private readonly bridge: AdvisorSettingsBridge
   /** The live settings service once the optional inject child activates. */
   private settings: SettingsForms | undefined
+  /**
+   * The elected owner's session face, resolved LAZILY per request. The
+   * reviewer-claiming fiber assigns it after its controller exists (the
+   * gateway is constructed before the single-reviewer claim); a `undefined`
+   * answer means this fiber owns the service key but not the reviewer role —
+   * the session endpoints answer `advisor/unavailable` in data and stay
+   * inert (no second controller, no surviving-fiber promotion).
+   */
+  private readonly sessionControl: () => AdvisorSessionGatewayFace | undefined
 
   /**
    * @param ctx - owning context (the plugin fiber's ctx inside `apply`).
    * @param bridge - the same `AdvisorSettingsBridge` the runtime reads, so
    *   get/set always operate on the live composed config.
+   * @param sessionControl - lazy access to the elected owner's session face
+   *   (B2); defaults to "absent" so a direct construction without the wiring
+   *   keeps the session endpoints cleanly unavailable.
    */
-  constructor(ctx: Context, bridge: AdvisorSettingsBridge) {
+  constructor(ctx: Context, bridge: AdvisorSettingsBridge, sessionControl: () => AdvisorSessionGatewayFace | undefined = () => undefined) {
     super(ctx, 'advisor')
     this.bridge = bridge
+    this.sessionControl = sessionControl
     // The settings service is optional (no settings → entry fallback). The
     // inject child activates only when a settings service is composed, mirroring
     // installAdvisorSettings' conditional child; the returned disposer mirrors
@@ -101,6 +203,63 @@ export class AdvisorConfigGateway extends TypertRemoteService {
    */
   get(): { config: ResolvedAdvisorConfig } {
     return { config: this.readConfig() }
+  }
+
+  /**
+   * B2 — the authoritative snapshot for one live session
+   * (`/api/advisor/getSession`, args `{ sessionId }`). Read-only: never
+   * allocates override state (the snapshot rides the wiring's `sessionStatus`
+   * readback). Unknown/disposed targets answer `advisor/session-unknown`
+   * without touching the controller; a gateway without an elected owner
+   * answers `advisor/unavailable`. Business outcomes live in the returned
+   * data (plugin-domain tags) — nothing here throws coded failures and the
+   * dsh failure vocabulary stays frozen.
+   */
+  getSession(sessionId: string): AdvisorSessionRpcResult {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
+      return advisorSessionError('advisor/rejected', 'advisor: getSession requires a non-empty sessionId')
+    }
+    const face = this.sessionControl()
+    if (face === undefined) {
+      return advisorSessionError('advisor/unavailable', 'advisor: the session control surface is not owned by this gateway — no elected owner on this fiber')
+    }
+    return face.getSession(sessionId)
+  }
+
+  /**
+   * B2 — set (or reset) the per-session reviewer route for one live session
+   * (`/api/advisor/setSessionModel`, args `{ sessionId, selection }`).
+   * `selection: null` = reset (re-inherit the CURRENT global defaults; never
+   * touches the enable override). A non-null selection must be the atomic
+   * `{ provider, model }` pair and passes the SAME validation as the command
+   * face (`parseModelPair` — spec §5.3); the write itself routes through the
+   * elected owner's `AdvisorCommandController` (`setModel`/`resetModel`), so
+   * pre-commit `resolveModelInfo` validation (60 s, cancellable, no retry),
+   * per-session generation fencing, and the route-change semantics are
+   * INHERITED, not reimplemented. Unknown/disposed targets are rejected
+   * BEFORE the controller runs — no generation is allocated for a dead
+   * session. Returns the post-commit snapshot on success.
+   */
+  async setSessionModel(sessionId: string, selection: unknown): Promise<AdvisorSessionRpcResult> {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
+      return advisorSessionError('advisor/rejected', 'advisor: setSessionModel requires a non-empty sessionId')
+    }
+    const face = this.sessionControl()
+    if (face === undefined) {
+      return advisorSessionError('advisor/unavailable', 'advisor: the session control surface is not owned by this gateway — no elected owner on this fiber')
+    }
+    // Reset arm: the wire selection is null (JSON has no undefined).
+    if (selection === null) return face.resetSessionModel(sessionId)
+    // Set arm: validate the atomic pair shape BEFORE touching the controller
+    // (a malformed selection must not allocate a generation). Non-object and
+    // extra-field shapes read as absent keys → the same incomplete-pair
+    // rejection the command face reports.
+    const pair = typeof selection === 'object' && selection !== null
+      ? (selection as { provider?: unknown; model?: unknown })
+      : {}
+    const validated = parseModelPair(pair.provider, pair.model)
+    if (!validated.ok) return advisorSessionError('advisor/rejected', `advisor: ${validated.reason}`)
+    return face.setSessionModel(sessionId, validated.provider, validated.model)
   }
 
   /**
@@ -226,6 +385,34 @@ export function advisorTypertContribution(): TypertContribution {
         invocation: { kind: 'direct' },
         parameters: [
           { name: 'patch', wire: 'patch', source: 'json', codec: { mode: 'src-json' } },
+        ],
+        result: { mode: 'src-json' },
+      },
+      // B2 — the per-session model surface (issue #88). Same explicit
+      // registration, same direct/src-json dispatch shape; the payload
+      // contract stays one plain-object `args` keyed by parameter name
+      // (`getSession` → `{ args: { sessionId } }`; `setSessionModel` →
+      // `{ args: { sessionId, selection } }`).
+      {
+        id: 'dsh-advisor#advisor/getSession',
+        service: 'advisor',
+        namespace: 'advisor',
+        method: 'getSession',
+        invocation: { kind: 'direct' },
+        parameters: [
+          { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },
+        ],
+        result: { mode: 'src-json' },
+      },
+      {
+        id: 'dsh-advisor#advisor/setSessionModel',
+        service: 'advisor',
+        namespace: 'advisor',
+        method: 'setSessionModel',
+        invocation: { kind: 'direct' },
+        parameters: [
+          { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },
+          { name: 'selection', wire: 'selection', source: 'json', codec: { mode: 'src-json' } },
         ],
         result: { mode: 'src-json' },
       },

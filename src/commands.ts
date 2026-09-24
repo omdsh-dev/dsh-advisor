@@ -87,6 +87,31 @@ export type ModelSetArgs =
   | { readonly ok: false; readonly reason: string }
 
 /**
+ * Validate one structured `{provider, model}` pair (spec §5.3 pair validation):
+ * both values must be strings that are non-empty after outer trim, with no
+ * whitespace INSIDE either identifier (the same rules `parseModelSetArgs`
+ * enforces for the CLI form — one validation source shared by the command face
+ * and the web gateway face, so the two surfaces can never diverge). Outer
+ * whitespace is trimmed; case is retained; model ids containing `/` are fine
+ * (`/` is not whitespace). Never throws — every rejection carries a
+ * user-facing reason.
+ */
+export function parseModelPair(provider: unknown, model: unknown): ModelSetArgs {
+  if (typeof provider !== 'string' || typeof model !== 'string') {
+    return { ok: false, reason: 'incomplete pair — provider and model are both required' }
+  }
+  const trimmedProvider = provider.trim()
+  const trimmedModel = model.trim()
+  if (trimmedProvider === '' || trimmedModel === '') {
+    return { ok: false, reason: 'incomplete pair — provider and model are both required' }
+  }
+  if (/\s/.test(trimmedProvider) || /\s/.test(trimmedModel)) {
+    return { ok: false, reason: 'invalid pair — provider and model must not contain whitespace' }
+  }
+  return { ok: true, provider: trimmedProvider, model: trimmedModel }
+}
+
+/**
  * Validate `/advisor model set <provider> <model>` arguments (spec §5.3):
  * exactly two arguments; outer whitespace trimmed; case retained; blank or
  * partial pairs, extra fields (a third argument), and whitespace-containing
@@ -104,7 +129,9 @@ export function parseModelSetArgs(rawArgs: string): ModelSetArgs {
   if (args.length > 2) {
     return { ok: false, reason: `too many arguments — the pair is exactly <provider> <model> (got ${args.length})` }
   }
-  return { ok: true, provider: args[0]!, model: args[1]! }
+  // The split cannot leave whitespace inside a token; the shared validator is
+  // still the single authority for the pair shape (B2 web face parity).
+  return parseModelPair(args[0]!, args[1]!)
 }
 
 /**
