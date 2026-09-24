@@ -78,6 +78,8 @@ With the advisor installed and enabled, control it in-session with the `/advisor
 
 In a **dsh-tui** profile, `/advisor config` additionally reads back the composed configuration — the global defaults, read-only, with edit hints naming the real write paths: the TUI `/settings` screen (Advisor section, dsh-tui ≥ v0.8.0) and the profile patch layer. The `/advisor` / `on|off|status|config|model` commands are listed in the TUI `/` menu with subcommand completion (command discovery requires the `dsh-tui-command-trees` row — the shipped dsh-tui bundle has it).
 
+On the **web**, the same session model controls ride the session header's **Advisor action** (requires a dsh web build whose shell declares the `conversation.session.header.actions` slot — dsh ≥ 0.1.7-rc.1). The action is bound to the session it sits on: it shows the effective reviewer pair, its source (`session override` / `global default`), and the live-session lifetime; **Pin this model** pins a provider + model for that session, and **Use global default** drops the pin (the reset path). It writes ONLY through the plugin's session endpoints (`/api/advisor/getSession` + `/api/advisor/setSessionModel`) — the same controller, validation, and fencing as `/advisor model`, never the persisted config — and it never falls back to the global config write when the session surface is unavailable. The control refreshes when you open it (plus on reconnect/focus while open); there is no background polling. The global card on the Plugins page stays global-only.
+
 ## Features
 
 - **Independent reviewer per session**: a separate model call observes the primary transcript and reviews each stepped primary turn; advisor messages are excluded from later deltas, so the advisor does not read its own advice back. The exclusion recognizes the advisor's current producer kind (`advisor`) AND both historical shapes a still-openable log can carry: the prehistoric direct `{ kind: 'advisor' }` note and the 0.1.6-era note as the V3→V4 in-memory migration rewrote it (`kind: 'plugin:advisor'`) — no generation of persisted notes is orphaned by the identity migration.
@@ -90,13 +92,13 @@ In a **dsh-tui** profile, `/advisor config` additionally reads back the composed
 - **Explicit model gate**: `enabled` defaults to off; `enabled: true` without `provider` + `model` never starts a model call — status reports disabled-with-reason. The gate applies to the *effective* route after session resolution: a complete per-session override pair satisfies it for that session; a malformed global config cannot be bypassed. Unknown config keys are rejected.
 - **Zero-tool minimal start**: the reviewer is an independent model call only — no advisor tools, nothing it can do to the session besides advisory messages.
 - **No-stall failure policy**: a failing or quota-limited advisor only drops its own bounded backlog — it can never park or pollute the primary loop.
-- **Session-scoped controls**: `/advisor on|off|status|config|model` work per session; the toggles and the per-session model pin are ephemeral overrides, never persisted config — `/advisor config` always reports the global defaults.
+- **Session-scoped controls**: `/advisor on|off|status|config|model` work per session; the toggles and the per-session model pin are ephemeral overrides, never persisted config — `/advisor config` always reports the global defaults. On the web, the session header's **Advisor action** drives the same per-session pin through dedicated session endpoints (see [Verify](#verify)).
 
 ![Advisor note injected into the session stream](docs/screenshots/advisor-injected-note.webp)
 
 ## Mount-only (no dsh modification)
 
-The plugin installs as a **pure mount**: bundle insert + client card (the web Plugins page) + its own gateway channel (`/api/advisor/get|set`, claimed by the host's typertGateway — the same mechanism the dsh `goals` service uses, not gated by the settings exposure allowlist) + the `/advisor` commands — no dsh patches, no postinstall step, and dsh upgrades never require re-patching.
+The plugin installs as a **pure mount**: bundle insert + client card (the web Plugins page) + its own gateway channel (`/api/advisor/get|set` for the global config plus `/api/advisor/getSession|setSessionModel` for the per-session model surface, claimed by the host's typertGateway — the same mechanism the dsh `goals` service uses, not gated by the settings exposure allowlist) + the `/advisor` commands — no dsh patches, no postinstall step, and dsh upgrades never require re-patching.
 
 ## Limitations & roadmap
 

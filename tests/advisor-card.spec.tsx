@@ -78,7 +78,10 @@ const t: AdvisorCardProps['t'] = key => en[key as keyof typeof en]
  * Full card props the renderer would bind: the registrant's business inject
  * face (controller + useSnapshot), the framework-synthesized `t` seat, and the
  * owner's `view` — ui-plugin-manager renders `plugins.bundle.config` with
- * `view: 'page'` only, and the card is self-chromed for that one view.
+ * `view: 'page'` only, and the card is self-chromed for that one view. The
+ * global standard seat (`useWorkspaces` — merged into GlobalStandardProps by
+ * ui-conversation, whose SlotMap types this program pulls for the B2
+ * session-header registration) is a never-called stub: the card never reads it.
  */
 function cardProps(controller: AdvisorSettingsStore, useSnapshot: SnapshotSelectorHook<AdvisorSettingsState>): AdvisorCardProps {
   return {
@@ -86,6 +89,7 @@ function cardProps(controller: AdvisorSettingsStore, useSnapshot: SnapshotSelect
     useSnapshot,
     t,
     view: 'page',
+    useWorkspaces: (() => undefined) as never,
   }
 }
 

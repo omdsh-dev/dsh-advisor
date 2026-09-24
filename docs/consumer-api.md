@@ -38,18 +38,29 @@ import type { AdvisorConfig, ResolvedAdvisorConfig } from 'dsh-advisor'
 
 `apply` 在 try/catch 中构造 `AdvisorConfigGateway`（`src/gateway.ts`），它以 cordis 服务键 **`'advisor'`** 注册（`TypertRemoteService` 基类）。这是 `/api/advisor/*` RPC 端点的**调度目标**（typertGateway 经 `ctx.get('advisor')` 分发）—— **不是**面向消费者的公共 API：它不暴露可调用的纯函数面，也没有稳定对象契约可依赖。跨插件需要读取 advisor 状态时，应使用文档化的面（`/api/advisor/get`、`/advisor status`），而不是读取该服务对象的内部。
 
+### `/api/advisor/*` 端点面
+
+| 端点 | 作用域 | 说明 |
+|---|---|---|
+| `/api/advisor/get` / `/api/advisor/set` | **全局** | entry config 的读取/写入（经硬门禁的 resolved 值）。 |
+| `/api/advisor/getSession`（B2） | **会话** | 返回权威会话快照 `{ sessionId, enabled, modelOverride?, modelSource?, effectiveModel?, disabledReason?, lifetime: 'live-session' }`（缺省键在 wire 上省略）。只读，不分配状态。 |
+| `/api/advisor/setSessionModel`（B2） | **会话** | `{ sessionId, selection: { provider, model } \| null }`：钉住/更新原子对；`selection: null` = reset（重新继承当前全局默认，从不触碰启用开关）。返回提交后的同一快照。写入经**同一** `AdvisorCommandController`（`resolveModelInfo` 60 秒校验、按会话 generation 栅栏、路由变更语义继承自指令面）。 |
+
+业务结果（未知/已销毁会话、无 elected owner、校验拒绝/失败、被更新/取消）以**插件域错误标签**在返回数据中表达（`{ error: { tag, message } }`，`advisor/session-unknown` / `advisor/unavailable` / `advisor/rejected` / `advisor/failed` / `advisor/superseded` / `advisor/cancelled`）—— 不抛新的 coded 失败、不扩展 dsh 的失败词汇。未知/已销毁的会话目标在校验开始**之前**拒绝（不为死目标分配状态）；SessionId 不是授权——请求仍先经过 Connection 的 Host/Origin + 浏览器认证边界；无裸 HTTP 端点、无自创会话 ACL。两个会话端点由**获得 reviewer 角色的 fiber**的控制器提供（懒解析的 session face）；持有 `advisor` 服务键但无 elected owner 的 fiber 对其回答 `advisor/unavailable` 并保持惰性（无自动晋升）。
+
 多 fiber 去重：宿主会组合多个 `dsh-advisor` fiber（观察到的典型情况是 3 个）。`advisor` 服务键的注册是「先注册者拥有」，后续 fiber 静默回退（不报错、不重复 wiring；settings bridge 无注册动作——每个 fiber 自己的 bridge 由 `loader/volatile-update` 的 owning-fiber 过滤天然隔离）；typert 端点注册同理（重复注册失败时该 fiber 不提供端点）。首个获得 reviewer 角色的 apply 负责 observer / runtime / delivery 与 `/advisor` 指令的 wiring（单评审者守卫，`src/index.ts` `claimReviewer`）。**生命周期**：所有注册都是 fiber 作用域 effect —— fiber dispose 后端点 / reviewer 声明随之撤销，后续 re-apply / re-mount 可接管。
 
 ## 客户端入口（`dsh-advisor/client`）
 
-`src/client/index.ts` 是浏览器半，把 Advisor 卡片注册进宿主声明的 `plugins.bundle.config` 卡片 slot（web「插件」页上 dsh-advisor 组合包自己的页面，bundle key `dsh-advisor`）：
+`src/client/index.ts` 是浏览器半，把 Advisor 卡片注册进宿主声明的 `plugins.bundle.config` 卡片 slot（web「插件」页上 dsh-advisor 组合包自己的页面，bundle key `dsh-advisor`），并（B2）把会话级 Advisor 动作注册进宿主声明的 `conversation.session.header.actions` 会话作用域 list slot——该动作绑定到插槽父级解析的 SessionId，是 `/advisor model` 的 web 对应面（显示有效 pair/来源/live-session 生存期，支持钉住与 reset）；全局卡片保持**仅全局**。会话动作只调用会话端点，控制面不可用时不提供写入、也绝不回退到全局写通道；打开时与断连/聚焦信号时刷新，无推送事件、无轮询，关闭态标签为中性（不显示模型名）：
 
 ```ts
 import type { AdvisorCardProps, AdvisorSettingsStore, ModelOption, ProviderOption } from 'dsh-advisor/client'
+import type { AdvisorSessionActionProps, AdvisorSessionModelController, AdvisorSessionMenuState, AdvisorSessionSnapshotView } from 'dsh-advisor/client'
 ```
 
 - **`inject`**：`['slots', 'locale', 'connection', 'settingsSchema']`（cordis fiber 注入；`settingsSchema` 为 ui-settings 提供的不可变路径写入服务）；locale 字典命名空间 `settings.advisor`（zh / en）；
-- **类型导出**：`AdvisorCardInjected`、`AdvisorCardProps`、`AdvisorKey`、`AdvisorDraft`、`AdvisorSettingsState`、`AdvisorSettingsStore`、`ApplyFailure`、`ApplyState`、`ModelOption`、`ModelsEmptyReason`、`ProviderOption`；
+- **类型导出**：`AdvisorCardInjected`、`AdvisorCardProps`、`AdvisorKey`、`AdvisorDraft`、`AdvisorSettingsState`、`AdvisorSettingsStore`、`ApplyFailure`、`ApplyState`、`ModelOption`、`ModelsEmptyReason`、`ProviderOption`；B2 会话面：`AdvisorSessionActionInjected`、`AdvisorSessionActionProps`、`AdvisorSessionMenuState`、`AdvisorSessionModelController`、`AdvisorSessionRpcPayload`、`AdvisorSessionSelection`、`AdvisorSessionSnapshotView`；
 - **value 导出**：`refreshIfLoaded`（纯 controller 辅助：仅在卡片首次加载后重取页面快照；未打开的卡片不在后台失效时发起 fetch）；
 - **web 注入声明**（`package.json` `dsh.client`）：`@deepseek-ai/dsh-client-store` + `@deepseek-ai/dsh-client-ui-plugin-manager` + `@deepseek-ai/dsh-client-locale`，平台 `web`；
 - **导入纯度边界**：客户端 half 只 value-import 冻结的平台模块表（`CLIENT_EXTERNALS`：react / `@deepseek-ai/cordis` / ui-slots / ui-primitives / `@deepseek-ai/dsh-client-store`）；其余 `@deepseek-ai/*` 全部 type-only（构建期擦除），值经 cordis 注入到达（含 `settingsSchema` 服务）。
@@ -57,7 +68,8 @@ import type { AdvisorCardProps, AdvisorSettingsStore, ModelOption, ProviderOptio
 卡片的数据面（`src/client/advisor-store.ts`）：
 
 - **advisor 配置**：只经网关 RPC 通道（`connection.rpc.call('/api', 'advisor/get' | 'advisor/set', …)`）；`get` 返回 `{ config }`（宿主硬门禁后的 resolved 值，缺省键在 wire 上省略），`set` 接受 `{ patch }` 并返回新合成值；
-- **provider / model 目录**：走 `api.settings.describe` / `api.llm.*`（`llm-*` 命名空间在 exposed 集合内）；configured provider = 命名空间 + profile 均解析（KD-S2），model 选项 = profile 声明模型优先、catalog 回退；
+- **会话级模型面（B2）**：`AdvisorSessionModelController`（每个会话作用域绑定一个实例，由插槽 inject 工厂构造、渲染器按 entry × 会话绑定 memoize）只调用 `/api/advisor/getSession` | `/api/advisor/setSessionModel`，每次调用携带自己的 `sessionId` 且只提交进自己的 store——旧绑定的迟到响应既改不到别的会话，也会被同会话的请求栅栏整体丢弃；
+- **provider / model 目录**：走 `api.settings.describe` / `api.llm.*`（`llm-*` 命名空间在 exposed 集合内）；configured provider = 命名空间 + profile 均解析（KD-S2），model 选项 = profile 声明模型优先、catalog 回退；会话动作以**只读**方式复用同一目录 store；
 - 保存时对草稿与上次读取的配置做 diff，只发送变更键为 patch；清空 provider/model 存显式 `''`（网关 merge 无法表达 unset，解析器把 `''` 当缺失）；`advisor.get` 失败 → 卡片显示 config-channel 提示而非可写表单（KD-G5），永不提供 Apply。
 
 ## `/advisor` 指令面
