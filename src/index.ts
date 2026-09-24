@@ -135,6 +135,33 @@ function fuseSignals(
   }
 }
 
+/**
+ * Race one promise against a signal (same shape as the runtime's per-chunk
+ * `raceIteratorNext`): settle with the promise's result, or `'aborted'` when
+ * the signal aborts first. Needed because `LlmRuntime.resolveModelInfo` only
+ * THREADS the signal into the adapter — an adapter whose lookup ignores
+ * cancellation would otherwise wedge the validation past the deadline; the
+ * race makes the 60 s bound (and the owner-teardown/command aborts) real for
+ * the caller regardless of adapter behavior.
+ */
+function raceSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | 'aborted'> {
+  if (signal.aborted) return Promise.resolve('aborted')
+  return new Promise<T | 'aborted'>((resolve, reject) => {
+    const onAbort = (): void => resolve('aborted')
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
 export function apply(ctx: Context, config: AdvisorConfig) {
   // T2: the explicit provider/model gate — no model call without both
   // (spec §5.2). Unknown keys / malformed config throw here, rejecting the
@@ -659,29 +686,43 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       const fused = fuseSignals(signal, validationTeardown.signal)
       try {
         using deadlineHandle = deadline(fused.signal, ADVISOR_MODEL_VALIDATION_TIMEOUT_MS, ADVISOR_MODEL_VALIDATION_TIMEOUT)
-        try {
-          await appRootLlm().resolveModelInfo(provider, model, deadlineHandle.signal)
-        } catch (error) {
-          if (signal?.aborted === true) return { kind: 'cancelled' }
-          if (validationTeardown.signal.aborted) return { kind: 'gone' }
+        // Race the lookup against the fused signal: a hung adapter lookup that
+        // ignores cancellation settles here as 'aborted' at the deadline, so
+        // the 60 s bound holds regardless of adapter behavior. There is NO
+        // automatic retry — one lookup, one outcome.
+        const resolvedInfo = await raceSignal(
+          appRootLlm().resolveModelInfo(provider, model, deadlineHandle.signal),
+          deadlineHandle.signal,
+        )
+        if (resolvedInfo === 'aborted') {
+          // Deadline fired → the timed-out failure; otherwise the invoking
+          // command was cancelled or the owner/session went away.
           if (timeoutOf(deadlineHandle.signal, ADVISOR_MODEL_VALIDATION_TIMEOUT) !== undefined) {
             return {
               kind: 'failed',
               reason: `model validation timed out after ${ADVISOR_MODEL_VALIDATION_TIMEOUT_MS}ms`,
             }
           }
-          return { kind: 'failed', reason: error instanceof Error ? error.message : String(error) }
+          if (signal?.aborted === true) return { kind: 'cancelled' }
+          return { kind: 'gone' }
         }
+      } catch (error) {
+        // A rejecting lookup (unknown route, adapter throw) — classify the
+        // same abort vocabulary, else report the failure verbatim.
+        if (signal?.aborted === true) return { kind: 'cancelled' }
+        if (validationTeardown.signal.aborted) return { kind: 'gone' }
+        return { kind: 'failed', reason: error instanceof Error ? error.message : String(error) }
       } finally {
         fused.cleanup()
       }
-      // Fence checks AFTER the lookup settled — generation first: a newer
-      // set/reset supersedes unresolved older work; dispose/reload cannot be
-      // undone by a delayed validation completion.
-      if (overrides.modelGeneration(sessionId) !== generation) return { kind: 'superseded' }
+      // Fence checks AFTER the lookup settled — session/owner liveness first
+      // (a dispose/reload cannot be undone by a delayed validation completion),
+      // then the generation: a newer set/reset supersedes unresolved older
+      // work while the session is still live.
       if (validationTeardown.signal.aborted || ctx.agents.get(sessionId as SessionId) === undefined) {
         return { kind: 'gone' }
       }
+      if (overrides.modelGeneration(sessionId) !== generation) return { kind: 'superseded' }
       // Commit: the route-change effect fires only when the effective pair
       // actually changed (an equal-default pin is recorded, not restarted).
       const before = effectiveConfig(sessionId)
@@ -693,14 +734,15 @@ export function apply(ctx: Context, config: AdvisorConfig) {
         : { kind: 'committed', status }
     },
     // Spec §5.3 — drop the pin and re-inherit the CURRENT global defaults.
-    // Synchronous (no lookup needed); bumping the generation supersedes any
-    // in-flight validation, and reset never touches the enable override.
-    // Reset to a missing global pair "succeeds" but the post-reset status
-    // reports the gate-blocked/no-call state.
+    // Synchronous (no lookup needed). The generation bumps FIRST — a reset is
+    // a newer model command even when there is no pin to remove (noop), so it
+    // supersedes any in-flight validation. Reset never touches the enable
+    // override, and reset to a missing global pair "succeeds" while the
+    // post-reset status reports the gate-blocked/no-call state.
     resetModel(sessionId: string, sessionLength?: number): AdvisorResetModelOutcome {
+      overrides.beginModelGeneration(sessionId)
       const before = effectiveConfig(sessionId)
       if (!overrides.clearModel(sessionId)) return { kind: 'noop' }
-      overrides.beginModelGeneration(sessionId)
       applyRouteChange(sessionId, before, sessionLength)
       return { kind: 'reset', status: sessionStatus(sessionId) }
     },
