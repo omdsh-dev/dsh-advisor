@@ -9,16 +9,16 @@
  *    `ADVISOR_SETTINGS_NAMESPACE` ('advisor'); title + zh/en descriptions
  *    are non-empty strings; the disposer returned by the inject child is
  *    exactly the stub registry's `register` return value (no wrapping).
- * ② The section's fields: the five expected kinds in display order
- *    (`enabled` boolean, `provider`/`model` text,
- *    `immuneTurns`/`maxDeltaMessages` number), each with a non-empty `path`,
- *    `label`, and zh/en `hint`/`hintDescriptions`; `systemPrompt` is NOT
- *    among the field paths.
+ * ② The section's fields: the four expected kinds in display order
+ *    (`provider`/`model` text, `immuneTurns`/`maxDeltaMessages` number),
+ *    each with a non-empty `path`, `label`, and zh/en `hint`/`hintDescriptions`;
+ *    `systemPrompt` is NOT among the field paths.
  * ③ Field-path ↔ §5.1 schema alignment (regression pin): every field `path`
  *    is a single-element array whose key is a §5.1 `AdvisorConfig` key, and
- *    the exact allowed set is {enabled, provider, model, immuneTurns,
+ *    the exact allowed set is {provider, model, immuneTurns,
  *    maxDeltaMessages} — `systemPrompt` is the only §5.1 key intentionally
- *    absent (single-line TUI text input would truncate a multi-line prompt).
+ *    absent (single-line TUI text input would truncate a multi-line prompt);
+ *    `enabled` is gone with the config-level switch (2026-09-26).
  * ④ No `tuiSettingsSections` service → `installTuiSettingsSection` completes
  *    without error and registers nothing.
  * ⑤ A duplicate-ns registration is contained: debug log + no-op disposer,
@@ -54,7 +54,6 @@ import type { AdvisorConfig } from '../src/config'
 /** Full plugin-row config shape (the `apply` wiring test only needs a valid entry). */
 function entryConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
   return {
-    enabled: false,
     systemPrompt: '',
     immuneTurns: 3,
     maxDeltaMessages: 60,
@@ -67,10 +66,9 @@ function entryConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
  * order. The `keyof AdvisorConfig` annotation is the compile-time regression
  * pin: a field key drifting off the schema stops typechecking; the runtime
  * assertions below pin the exact allowed set (`systemPrompt` intentionally
- * absent).
+ * absent; `enabled` removed from the schema — the row toggle is the switch).
  */
 const TUI_FIELD_KEYS: readonly (keyof AdvisorConfig)[] = [
-  'enabled',
   'provider',
   'model',
   'immuneTurns',
@@ -194,7 +192,7 @@ describe('installTuiSettingsSection — registration (AC-1)', () => {
 // ② + ③ the section's fields: kinds, display order, zh/en copy, schema pins
 // ---------------------------------------------------------------------------
 
-describe('section fields — five §5.1 keys, display order, zh/en copy (AC-1)', () => {
+describe('section fields — four §5.1 keys, display order, zh/en copy (AC-1)', () => {
   function registeredSection(): TuiSettingsSection {
     const sections = new StubSettingsSections()
     const { ctx } = activateCtx({ tuiSettingsSections: sections })
@@ -203,11 +201,11 @@ describe('section fields — five §5.1 keys, display order, zh/en copy (AC-1)',
     return sections.sections[0]!
   }
 
-  it('declares the five fields with the expected kinds in display order', () => {
+  it('declares the four fields with the expected kinds in display order', () => {
     const fields = registeredSection().fields
 
     expect(fields.map((field) => field.path)).toEqual(TUI_FIELD_KEYS.map((key) => [key]))
-    expect(fields.map((field) => field.kind)).toEqual(['boolean', 'text', 'text', 'number', 'number'])
+    expect(fields.map((field) => field.kind)).toEqual(['text', 'text', 'number', 'number'])
   })
 
   it('every field carries a non-empty path, label, and zh/en hint + hintDescriptions; systemPrompt is absent', () => {

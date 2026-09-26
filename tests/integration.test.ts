@@ -20,8 +20,8 @@
  *    `agent.steer` with a message whose source is the `plugin` arm tagged
  *    `plugin: 'advisor'`.
  * 2. A nit routes to `agent.inject`, never `steer`.
- * 3. The explicit model gate (S4): `enabled: true` without `provider`/`model`
- *    starts zero model calls.
+ * 3. The explicit model gate (S4): a config without `provider`/`model`
+ *    (no config-level switch since 2026-09-26) starts zero model calls.
  * 4. `/advisor` commands register only when a `commands` registry is composed
  *    (conditional child activation — T7 ⚠️).
  * 5. A `compact/*` event and a `user/message` surface replace both reset the
@@ -121,7 +121,6 @@ class StubAdapter extends LlmAdapter {
 /** Merge test config over the schema defaults (full `AdvisorConfig` shape). */
 function fullConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
   return {
-    enabled: false,
     systemPrompt: '',
     immuneTurns: 3,
     maxDeltaMessages: 60,
@@ -399,7 +398,7 @@ async function registerCommands(ctx: Context): Promise<CommandDefinition['handle
 describe('integration — full advisor loop (spec §7)', () => {
   it('drives user → primary → turn/end → delta → advisor call → guard → steer with a stub adapter', async () => {
     const { ctx, adapter } = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [[...textReply('{"note":"extract the helper","severity":"concern"}')]],
     )
     const { agent, steer, inject } = makeFakeAgent('s1')
@@ -436,7 +435,7 @@ describe('integration — full advisor loop (spec §7)', () => {
 
   it('routes a nit to agent.inject, never steer', async () => {
     const { ctx, adapter } = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [[...textReply('{"note":"add a unit test","severity":"nit"}')]],
     )
     const { agent, steer, inject } = makeFakeAgent('s1')
@@ -453,8 +452,10 @@ describe('integration — full advisor loop (spec §7)', () => {
     expect(adapter.requests).toHaveLength(1)
   })
 
-  it('starts zero model calls when enabled without provider/model (explicit gate, S4)', async () => {
-    const { ctx, adapter } = await composeHarness({ enabled: true }, [])
+  it('starts zero model calls without provider/model (explicit gate, S4)', async () => {
+    // No config-level switch since 2026-09-26: the pairless entry resolves to
+    // disabled-with-reason and the gate drops every delta.
+    const { ctx, adapter } = await composeHarness({}, [])
     const { agent } = makeFakeAgent('s1')
     ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
@@ -463,18 +464,6 @@ describe('integration — full advisor loop (spec §7)', () => {
 
     await flush()
     expect(adapter.requests).toEqual([]) // no runtime → no model call, ever
-  })
-
-  it('starts zero model calls when the config switch is off (enabled: false)', async () => {
-    const { ctx, adapter } = await composeHarness({ enabled: false }, [])
-    const { agent } = makeFakeAgent('s1')
-    ctx.emit('agent/created', { agent, source: 'startup' })
-    const { session, log } = makeSession('s1')
-
-    feed(ctx, session, log, simpleTurn(1, 'do the thing', 'done'))
-
-    await flush()
-    expect(adapter.requests).toEqual([])
   })
 })
 
@@ -495,7 +484,7 @@ describe('integration — full advisor loop (spec §7)', () => {
 describe('integration — agentic reply-complete gate drives the loop without turn/end (KD-N4-5)', () => {
   it('harness stream → advisor calls per round, nit→inject / concern→steer, immuneTurns fence decays', async () => {
     const { ctx, adapter } = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model', immuneTurns: 3 },
+      { provider: 'stub', model: 'stub-model', immuneTurns: 3 },
       [
         [...textReply('{"note":"concern one","severity":"concern"}')],
         [...textReply('{"note":"concern two","severity":"concern"}')],
@@ -590,7 +579,7 @@ describe('integration — agentic reply-complete gate drives the loop without tu
 
   it('routes a nit note to agent.inject in a harness stream', async () => {
     const { ctx, adapter } = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [[...textReply('{"note":"add a unit test","severity":"nit"}')]],
     )
     const { agent, steer, inject } = makeFakeAgent('s1')
@@ -613,7 +602,7 @@ describe('integration — agentic reply-complete gate drives the loop without tu
 
   it('mode latch: after a reviewable turn/end the new gate stays dormant', async () => {
     const { ctx, adapter } = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [[...textReply('{"note":"extract the helper","severity":"concern"}')]],
     )
     const { agent, steer } = makeFakeAgent('s1')
@@ -648,7 +637,7 @@ describe('integration — agentic reply-complete gate drives the loop without tu
 describe('integration — advisor self-delivery never re-triggers the review gate (C-1)', () => {
   it('a re-emitted advisor inbox splice during delivery produces exactly one review per round', async () => {
     const { ctx, adapter } = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [
         [...textReply('{"note":"nit one","severity":"nit"}')],
         [...textReply('{"note":"nit two","severity":"nit"}')],
@@ -721,7 +710,7 @@ describe('integration — advisor self-delivery never re-triggers the review gat
 describe('integration — /advisor commands conditional activation (T7)', () => {
   it('runs a full cycle without a commands registry, then registers when one is composed', async () => {
     const { ctx, adapter } = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [[...textReply('{"note":"watch the loop bound","severity":"concern"}')]],
     )
     const { agent, steer } = makeFakeAgent('s1')
@@ -747,14 +736,17 @@ describe('integration — /advisor commands conditional activation (T7)', () => 
     expect(typeof definitions[0]!.handler).toBe('function')
   })
 
-  it('the registered /advisor on handler starts the live runtime (KD-5 seed-on-enable)', async () => {
+  it('the registered /advisor on handler restarts an off session with the KD-5 seed-on-enable', async () => {
     const { ctx, adapter } = await composeHarness(
-      // Config switch off; provider/model present so the S4 gate passes once
-      // the per-session override flips on.
-      { enabled: false, provider: 'stub', model: 'stub-model' },
-      [[...textReply('{"note":"after enabling","severity":"concern"}')]],
+      // Provider/model present so the S4 gate passes once the per-session
+      // override flips on; the session is paused with /advisor off below.
+      { provider: 'stub', model: 'stub-model' },
+      [
+        [...textReply('{"note":"pre pause","severity":"nit"}')],
+        [...textReply('{"note":"after enabling","severity":"concern"}')],
+      ],
     )
-    const { agent, steer } = makeFakeAgent('s1')
+    const { agent, steer, inject } = makeFakeAgent('s1')
     ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
@@ -769,10 +761,24 @@ describe('integration — /advisor commands conditional activation (T7)', () => 
     } as never)
     await vi.waitFor(() => expect(definitions).toHaveLength(1))
 
-    // Config off → a completed turn produces no model call.
+    // A running row is on: a completed turn is reviewed (nit → inject).
     feed(ctx, session, log, simpleTurn(1, 'history turn', 'old reply'))
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
+
+    // /advisor off with the REAL handler: the runtime is disposed and a
+    // completed turn produces no model call.
+    const off = definitions[0]!.handler({
+      commandId: CommandId('cmd-t8'),
+      agent: { id: 's1', session: { id: 's1', seq: log.length } } as unknown as Agent,
+      rawInput: ' off',
+      attachments: [],
+      signal: new AbortController().signal,
+    })
+    if (off instanceof Promise) throw new Error('test: /advisor handler must be synchronous')
+    expect(off.text).toContain('Advisor off')
+    feed(ctx, session, log, simpleTurn(2, 'paused work', 'paused reply'))
     await flush()
-    expect(adapter.requests).toEqual([])
+    expect(adapter.requests).toHaveLength(1) // disabled: no call
 
     // /advisor on with the REAL handler: flips the override, seeds the cursor
     // to the current transcript length, and creates/resumes the runtime.
@@ -788,13 +794,14 @@ describe('integration — /advisor commands conditional activation (T7)', () => 
 
     // The next completed turn is reviewed — incrementally, without replaying
     // the pre-enable history (KD-5 seed-on-enable).
-    feed(ctx, session, log, simpleTurn(2, 'new work', 'new reply'))
+    feed(ctx, session, log, simpleTurn(3, 'new work', 'new reply'))
     await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
 
-    expect(adapter.requests).toHaveLength(1)
-    const delta = deltaTextOf(adapter.requests[0]!)
+    expect(adapter.requests).toHaveLength(2)
+    const delta = deltaTextOf(adapter.requests[1]!)
     expect(delta).toContain('**user**: new work')
     expect(delta).not.toContain('history turn')
+    expect(delta).not.toContain('paused work')
     expect(steer.mock.calls[0]![0]).toMatchObject({
       role: 'user',
       source: { kind: 'advisor' },
@@ -809,7 +816,7 @@ describe('integration — /advisor commands conditional activation (T7)', () => 
 describe('integration — compact / surface-replace reset the composed observer + guard (KD-5)', () => {
   it('a compact/* rewrite triggers a full replay AND a fresh emission-guard history', async () => {
     const { ctx, adapter } = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [
         [...textReply('{"note":"extract the helper","severity":"concern"}')],
         [...textReply('{"note":"extract the helper","severity":"concern"}')],
@@ -847,7 +854,7 @@ describe('integration — compact / surface-replace reset the composed observer 
 
   it('a user/message surface replace (no compact events) also triggers the replay', async () => {
     const { ctx, adapter } = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [
         [...textReply('{"note":"first nit","severity":"nit"}')],
         [...textReply('{"note":"second nit","severity":"nit"}')],
@@ -883,16 +890,16 @@ describe('integration — compact / surface-replace reset the composed observer 
 // ---------------------------------------------------------------------------
 
 describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix wave 1)', () => {
-  it('config-enabled-but-gate-blocked: status shows the S4 reason and /advisor on says no model call can start (qc3 I-1/I-2)', async () => {
-    const { ctx, adapter } = await composeHarness({ enabled: true }, [])
+  it('pairless-gate-blocked: status shows the S4 reason and /advisor on says no model call can start (qc3 I-1/I-2)', async () => {
+    const { ctx, adapter } = await composeHarness({}, [])
     const { agent } = makeFakeAgent('s1')
     ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
     const handler = await registerCommands(ctx)
 
     // `/advisor status` must show the disabled-with-reason (spec §5.2) — the
-    // gate reason previously vanished because the overrides were seeded with
-    // the POST-gate switch.
+    // reason is re-derived through the resolver's post-gate resolution on
+    // every read.
     const status = invokeHandler(handler, ' status', session)
     expect(status.kind).toBe('success')
     expect(status.text).toContain('Reason:')
@@ -910,7 +917,7 @@ describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix w
 
   it('/advisor on resumes a quota-paused session advisor (KD-5 manual resume; qc1/qc2/qc3 W-1/I-4)', async () => {
     const { ctx, adapter } = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [
         [...errorReply(quotaFailure())], // turn 1 → quota_exhausted pause
         [...textReply('{"note":"back after resume","severity":"concern"}')], // the retained batch, after resume
@@ -938,7 +945,7 @@ describe('integration — /advisor recovery + S4 gate reporting wiring (QC fix w
 
   it('/advisor on rebuilds a halted session advisor after a permanent model error (qc1/qc2/qc3 W-1/I-4)', async () => {
     const { ctx, adapter } = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [
         [...errorReply(permanentFailure())], // turn 1 → permanent → halted
         [...textReply('{"note":"fresh start","severity":"concern"}')], // the rebuilt runtime
@@ -1002,7 +1009,7 @@ describe('integration — root-llm resolution from an isolated child scope (qc1 
     } as never)
     child.provide('sessions', {} as never)
     child.provide('agents', { get: () => undefined } as never)
-    await child.plugin(advisorPlugin, fullConfig({ enabled: true, provider: 'stub', model: 'stub-model' }))
+    await child.plugin(advisorPlugin, fullConfig({ provider: 'stub', model: 'stub-model' }))
 
     const { agent, steer } = makeFakeAgent('s1')
     child.emit('agent/created', { agent, source: 'startup' })
@@ -1029,7 +1036,7 @@ describe('integration — root-llm resolution from an isolated child scope (qc1 
 describe('single-reviewer guard (n4 QC F-6)', () => {
   it('a second apply on the same process does not wire a second reviewer (one model call per round)', async () => {
     const first = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [textReply('{"note":"first round"}')],
     )
     const { session, log } = makeSession()
@@ -1047,7 +1054,7 @@ describe('single-reviewer guard (n4 QC F-6)', () => {
 
     // Now compose a SECOND instance of the same plugin module in the same process.
     const second = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [textReply('{"note":"second round"}')],
     )
     // The guard is process-global: the second apply must not have claimed the
@@ -1072,7 +1079,7 @@ describe('single-reviewer guard (n4 QC F-6)', () => {
 
   it('releases the reviewer claim when the reviewer fiber is disposed — a later instance wires (qc1 W-4)', async () => {
     const first = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [textReply('{"note":"first round"}')],
     )
     const { session, log } = makeSession()
@@ -1087,7 +1094,7 @@ describe('single-reviewer guard (n4 QC F-6)', () => {
 
     // A later instance in the same process can now claim the role and wire.
     const second = await composeHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [textReply('{"note":"second round"}')],
     )
     expect((globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']).toBe(true)
@@ -1108,7 +1115,7 @@ describe('single-reviewer guard (n4 QC F-6)', () => {
     const ctx = new Context()
     ctx.provide('sessions', {} as never)
     ctx.provide('agents', { get: () => undefined } as never)
-    expect(() => advisorPlugin.apply(ctx, { enabled: true, bogus: 1 } as never))
+    expect(() => advisorPlugin.apply(ctx, { bogus: 1 } as never))
       .toThrow(/unknown config key "bogus"/)
     expect((globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']).toBeUndefined()
   })

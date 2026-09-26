@@ -161,7 +161,6 @@ class HangingResolveAdapter extends GatedStubAdapter {
 /** Merge test config over the schema defaults (full `AdvisorConfig` shape). */
 function fullConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
   return {
-    enabled: false,
     systemPrompt: '',
     immuneTurns: 3,
     maxDeltaMessages: 60,
@@ -347,7 +346,7 @@ function flush(): Promise<void> {
 describe('session model override — A/B isolation + inheritor tracking (spec §5.3)', () => {
   it('a pin affects only its own session; global edits reach inheritors, never the pinned session', async () => {
     const { ctx, adapter, entry, handler, agents } = await composeOverrideHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [textReply('a1'), textReply('b1'), textReply('a2'), textReply('b2')],
     )
     publishAgent(ctx, agents, 'A')
@@ -376,7 +375,7 @@ describe('session model override — A/B isolation + inheritor tracking (spec §
 
   it('readback labels: /advisor config stays GLOBAL; /advisor status + /advisor model report the effective route', async () => {
     const { ctx, handler, agents } = await composeOverrideHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [],
     )
     publishAgent(ctx, agents, 's1')
@@ -412,8 +411,9 @@ describe('session model override — A/B isolation + inheritor tracking (spec §
 describe('session model override — explicit gate applies AFTER session resolution (spec §5.2+§5.3)', () => {
   it('a complete session pair satisfies a pairless-but-valid global default', async () => {
     const { ctx, adapter, handler, agents } = await composeOverrideHarness(
-      // Enabled globally WITHOUT a pair: gate-blocked (no model call anywhere).
-      { enabled: true },
+      // Globally WITHOUT a pair: gate-blocked (no model call anywhere — no
+      // config-level switch since 2026-09-26, the gate keys on the pair).
+      {},
       [textReply('unblocked')],
     )
     publishAgent(ctx, agents, 's1')
@@ -436,7 +436,7 @@ describe('session model override — explicit gate applies AFTER session resolut
 
   it('a malformed global config cannot be bypassed — the pin records but the advisor stays blocked', async () => {
     const { ctx, adapter, entry, handler, agents } = await composeOverrideHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [textReply('x')],
     )
     publishAgent(ctx, agents, 's1')
@@ -473,7 +473,7 @@ describe('session model override — explicit gate applies AFTER session resolut
 describe('session model override — enable-switch independence (spec §5.3)', () => {
   it('model set never toggles enabled; off retains the pin for a later on', async () => {
     const { ctx, adapter, handler, agents } = await composeOverrideHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [textReply('after on')],
     )
     publishAgent(ctx, agents, 's1')
@@ -499,7 +499,7 @@ describe('session model override — enable-switch independence (spec §5.3)', (
 
   it('an equal-default pin records without restarting (in-flight call survives) and protects against later default edits', async () => {
     const { ctx, adapter, entry, handler, agents } = await composeOverrideHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [textReply('in flight'), textReply('after edit')],
     )
     const { inject } = publishAgent(ctx, agents, 's1')
@@ -539,7 +539,7 @@ describe('session model override — validation fencing (spec §5.3)', () => {
 
   it('the 60s deadline fires against a hung lookup even when the adapter ignores cancellation', async () => {
     const { ctx, handler, agents } = await composeOverrideHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [],
     )
     const hanging = new HangingResolveAdapter()
@@ -568,7 +568,7 @@ describe('session model override — validation fencing (spec §5.3)', () => {
 
   it('cancelling the invoking command aborts the lookup with NO retry; previous selection untouched', async () => {
     const { ctx, handler, agents } = await composeOverrideHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [],
     )
     const hanging = new HangingResolveAdapter()
@@ -591,7 +591,7 @@ describe('session model override — validation fencing (spec §5.3)', () => {
 
   it('a newer set supersedes unresolved older work; the final pin is the newer pair', async () => {
     const { ctx, handler, agents } = await composeOverrideHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [],
     )
     const hanging = new HangingResolveAdapter()
@@ -614,7 +614,7 @@ describe('session model override — validation fencing (spec §5.3)', () => {
 
   it('reset during validation supersedes the pending set and re-inherits', async () => {
     const { ctx, handler, agents } = await composeOverrideHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [],
     )
     const hanging = new HangingResolveAdapter()
@@ -636,7 +636,7 @@ describe('session model override — validation fencing (spec §5.3)', () => {
 
   it('a session dispose during validation cannot be undone by the delayed completion', async () => {
     const { ctx, agents, handler } = await composeOverrideHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [],
     )
     const hanging = new HangingResolveAdapter()
@@ -660,7 +660,7 @@ describe('session model override — validation fencing (spec §5.3)', () => {
 
   it('owner unload during validation aborts the lookup and drops the pin commit', async () => {
     const { ctx, fiber, handler, agents } = await composeOverrideHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [],
     )
     const hanging = new HangingResolveAdapter()
@@ -684,7 +684,7 @@ describe('session model override — validation fencing (spec §5.3)', () => {
 describe('session model override — route change effect (spec §5.3)', () => {
   it('aborts the old call, drops the backlog, re-seeds (no replay), and serves the next delta on the new route', async () => {
     const { ctx, adapter, handler, agents } = await composeOverrideHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [textReply('old route note'), textReply('new route note')],
     )
     const { inject } = publishAgent(ctx, agents, 's1')
@@ -727,7 +727,7 @@ describe('session model override — route change effect (spec §5.3)', () => {
 describe('session model override — lifetime (spec §5.3 + KD-5)', () => {
   it('agent dispose clears the pin: a cold-resumed or forked session inherits global defaults', async () => {
     const { ctx, agents, handler } = await composeOverrideHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [],
     )
     publishAgent(ctx, agents, 's1')
@@ -757,7 +757,7 @@ describe('session model override — lifetime (spec §5.3 + KD-5)', () => {
 describe('session model override — single elected owner (spec §5.3)', () => {
   it('a second plugin fiber stays inert: still one command registration, the owner keeps serving', async () => {
     const { ctx, handler, definitions, agents } = await composeOverrideHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [],
     )
     publishAgent(ctx, agents, 's1')
@@ -765,7 +765,7 @@ describe('session model override — single elected owner (spec §5.3)', () => {
 
     // Compose a second fiber (the host's observed multi-fiber composition):
     // the single-reviewer guard makes it return before any commands wiring.
-    const secondEntry = new MemoryEntryConfig(fullConfig({ enabled: true, provider: 'stub', model: 'stub-model' }))
+    const secondEntry = new MemoryEntryConfig(fullConfig({ provider: 'stub', model: 'stub-model' }))
     await ctx.plugin(harnessAdvisorPlugin(), secondEntry.config)
     await flush()
     expect(definitions).toHaveLength(1) // no duplicate registration

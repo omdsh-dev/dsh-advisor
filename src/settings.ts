@@ -7,7 +7,7 @@
  * service `SettingsForms` over profile entries). A plugin's editable config is
  * now its OWN entry config: the fields the schema declares `.volatile()` are
  * committed by the cordis Loader into the running fiber's references WITHOUT a
- * remount (`src/config.ts` marks all six live fields volatile).
+ * remount (`src/config.ts` marks all five live fields volatile).
  *
  * This module is the read side of that pipeline. `apply` receives the entry
  * config with each volatile field as a `{ get() }` reference; the bridge
@@ -27,7 +27,10 @@
  *
  * The hard gate is untouched: the source returns the RAW config and every
  * consumer passes it through `resolveAdvisorConfig` — the SSOT for the
- * enabled-without-pair disabled-with-reason resolution (no model call).
+ * pairless-config disabled-with-reason resolution (no model call). There is
+ * no config-level `enabled` key (2026-09-26): the plugin-row toggle is the
+ * master switch, so the entry's volatile fields are the four §5.1 keys plus
+ * the system prompt.
  *
  * The write side rides the same entry id: the gateway (`src/gateway.ts`)
  * writes through `settings.update(ADVISOR_SETTINGS_NAMESPACE, ...)` — the
@@ -85,7 +88,7 @@ interface VolatileUpdateContext {
  * Wire the live source over the entry config's volatile references.
  *
  * `entry` is the config object `apply` received — on a Loader composition the
- * six schema-declared fields are `{ get() }` references; plain-object entries
+ * five schema-declared fields are `{ get() }` references; plain-object entries
  * (integration harnesses) work identically. The bridge holds the ENTRY, not a
  * snapshot, so every `source()` call reads the references' CURRENT values and
  * the returned config is live from the first read. `onChange` fires on every

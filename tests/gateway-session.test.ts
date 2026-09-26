@@ -44,7 +44,6 @@ beforeEach(() => {
 /** Full entry (plugin-row) config shape, merged over the schema defaults. */
 function entryConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
   return {
-    enabled: false,
     systemPrompt: '',
     immuneTurns: 3,
     maxDeltaMessages: 60,
@@ -142,10 +141,10 @@ interface Harness {
 }
 
 /**
- * Compose the real plugin over a pairless-but-enabled global default: the
- * entry gate blocks (enabled: true without provider/model), which is exactly
- * the state where a session pin must satisfy the gate and a reset must report
- * the blocked state truthfully.
+ * Compose the real plugin over a pairless global default: the entry gate
+ * blocks (no provider/model — no config-level switch since 2026-09-26), which
+ * is exactly the state where a session pin must satisfy the gate and a reset
+ * must report the blocked state truthfully.
  */
 async function compose(): Promise<Harness> {
   const ctx = new Context()
@@ -155,7 +154,7 @@ async function compose(): Promise<Harness> {
   const resolveModelInfo = vi.fn(async () => ({ provider: 'deepseek', model: 'deepseek-chat' }))
   ctx.provide('agents', { get: (id: string) => (id === 'sess-1' ? agentDouble(id) : undefined) } as never)
   ctx.provide('llm', { stream: async () => {}, resolveModelInfo } as never)
-  const entry = new MemoryEntryConfig(entryConfig({ enabled: true }))
+  const entry = new MemoryEntryConfig(entryConfig())
   await ctx.plugin(harnessAdvisorPlugin(), entry.config)
   await vi.waitFor(() => {
     expect(ctx.reflect.props['advisor']).toEqual({ type: 'service' })
@@ -274,7 +273,7 @@ describe('composed session endpoints (apply wiring)', () => {
     ctx.provide('agents', { get: (id: string) => (id === 'sess-1' ? agentDouble(id) : undefined) } as never)
     const resolveModelInfo = vi.fn(async () => { throw new Error('unknown route') })
     ctx.provide('llm', { stream: async () => {}, resolveModelInfo } as never)
-    const entry = new MemoryEntryConfig(entryConfig({ enabled: true }))
+    const entry = new MemoryEntryConfig(entryConfig())
     await ctx.plugin(harnessAdvisorPlugin(), entry.config)
     await vi.waitFor(() => expect(ctx.reflect.props['advisor']).toEqual({ type: 'service' }))
 

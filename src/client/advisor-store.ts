@@ -82,7 +82,12 @@ export interface AdvisorStoreRemote {
  * simply missing from the JSON), so every optional key reads as undefined.
  */
 export interface AdvisorConfigView {
-  /** Master switch; the resolved value (false while the gate blocks). */
+  /**
+   * Read-only wire fact — the post-gate switch (false while the gate blocks).
+   * NOT a draft field: there is no config-level `enabled` key (2026-09-26;
+   * the plugin-row toggle is the switch), so the draft cannot write it and
+   * the card renders it nowhere.
+   */
   enabled: boolean
   /** Provider route; absent when unset. */
   provider?: string
@@ -128,13 +133,11 @@ export type ModelsEmptyReason =
   /** No profile models; the catalog has no group for this provider. */
   | 'unavailable'
 
-/** The user-layer draft the form edits (all six config keys). */
+/** The user-layer draft the form edits (provider/model/systemPrompt/immuneTurns/maxDeltaMessages). */
 export interface AdvisorDraft {
-  /** Master switch; default false. */
-  enabled: boolean
-  /** Provider route; required (non-empty) when enabled. */
+  /** Provider route; required (non-empty). */
   provider?: string
-  /** Model id; required (non-empty) when enabled. */
+  /** Model id; required (non-empty). */
   model?: string
   /** Optional system prompt override; '' = built-in reviewer prompt. */
   systemPrompt: string
@@ -183,16 +186,16 @@ export interface AdvisorSettingsState {
    * resolved `config === undefined` (qc1 S-2 fix wave). The snapshot cannot
    * tell a "refresh of a degraded card" from a "first mount not yet settled"
    * while `status === 'loading'` (both read loading + advisorPresent=false),
-   * so the card derives its degraded disclosure from this latch during
-   * loading — keeping the AC-3 notice visible through a background refresh
+   * so the card derives its degraded notice from this latch during loading —
+   * keeping the config-channel notice visible through a background refresh
    * of a degraded card. Set ONLY in the ready update (the load-error path
-   * leaves it alone — the error state has its own always-open branch).
+   * leaves it alone — the error state has its own always-on branch).
    */
   degraded: boolean
   /**
-   * Whether the draft holds edits a save would write — the "unsaved" pill
-   * and the save/discard disabled semantics (upstream CardShell.dirty).
-   * Derived as `patchFor(draft)` non-empty (KD-U2, plan
+   * Whether the draft holds edits a save would write — the save/discard
+   * disabled semantics (upstream CardShell.dirty). Derived as
+   * `patchFor(draft)` non-empty (KD-U2, plan
    * dsh-advisor-plugin-config-card-ux task 2), recomputed on load (seed
    * settled, real config resolved only), every draft mutation, discard and a
    * successful apply — always inside the same `store.update` callback that
@@ -207,7 +210,7 @@ export interface AdvisorSettingsState {
 
 /** The schema-defaulted advisor config used when no config resolves. */
 function defaultDraft(): AdvisorDraft {
-  return { enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 }
+  return { systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 }
 }
 
 /** A non-empty string field (whitespace-only reads as absent, mirroring the hard gate). */
@@ -227,7 +230,6 @@ function numberField(value: unknown, fallback: number): number {
  */
 function draftOfConfig(config: AdvisorConfigView | undefined): AdvisorDraft {
   return {
-    enabled: config?.enabled === true,
     provider: stringField(config?.provider),
     model: stringField(config?.model),
     systemPrompt: typeof config?.systemPrompt === 'string' ? config.systemPrompt : '',
@@ -236,9 +238,8 @@ function draftOfConfig(config: AdvisorConfigView | undefined): AdvisorDraft {
   }
 }
 
-/** KD-S4 client-form gate: enabled requires a non-empty provider and model. */
+/** KD-S4 client-form gate: a non-empty provider and model are both required. */
 function gateFailure(draft: AdvisorDraft): 'provider' | 'model' | undefined {
-  if (!draft.enabled) return undefined
   if (draft.provider === undefined) return 'provider'
   if (draft.model === undefined) return 'model'
   return undefined
@@ -259,8 +260,8 @@ export class AdvisorSettingsStore {
     namespaces: {},
     advisorPresent: false,
     // qc1 S-2: the degraded latch defaults false — a first mount / healthy
-    // card is never degraded, so the healthy card stays collapsed through its
-    // first load (the latch only flips on a settled degraded ready state).
+    // card is never degraded, so a healthy first load renders nothing (the
+    // latch only flips on a settled degraded ready state).
     degraded: false,
     // KD-U2: dirty derives from the patch diff against the seed
     // (recomputeDirty below — patchFor non-empty), recomputed on
@@ -429,8 +430,8 @@ export class AdvisorSettingsStore {
       s.advisorPresent = config !== undefined
       // qc1 S-2: the degraded latch mirrors advisorPresent on every SETTLED
       // ready update — during a subsequent refresh (status 'loading') the
-      // card derives its degraded disclosure from this latch, so the AC-3
-      // notice never collapses for the refresh window.
+      // card derives its degraded notice from this latch, so the config-
+      // channel notice never disappears for the refresh window.
       s.degraded = config === undefined
       s.modelsByProvider = {}
       s.modelsEmptyReason = {}
@@ -536,11 +537,6 @@ export class AdvisorSettingsStore {
     } catch {
       if (generation === this.catalogGeneration) this.catalog = undefined
     }
-  }
-
-  /** Set the enabled switch (gate fields become required while on). */
-  setEnabled(enabled: boolean): void {
-    this.setField('enabled', enabled)
   }
 
   /** Set or clear the provider ('' clears); switches invalidate the chosen model. */
@@ -714,7 +710,7 @@ export class AdvisorSettingsStore {
    */
   private patchFor(draft: AdvisorDraft): Record<string, unknown> {
     const patch: Record<string, unknown> = {}
-    const always = ['enabled', 'systemPrompt', 'immuneTurns', 'maxDeltaMessages'] as const
+    const always = ['systemPrompt', 'immuneTurns', 'maxDeltaMessages'] as const
     for (const key of always) {
       const next = draft[key]
       // A cleared number input (undefined) means "leave the stored value

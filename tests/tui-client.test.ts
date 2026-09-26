@@ -34,7 +34,6 @@ import type { AdvisorConfig } from '../src/config'
 /** Full plugin-row config shape (the `apply` wiring test only needs a valid entry). */
 function entryConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
   return {
-    enabled: false,
     systemPrompt: '',
     immuneTurns: 3,
     maxDeltaMessages: 60,

@@ -12,8 +12,9 @@
  * ② model options: profile-declared `models` win; else the
  *    `session.modelCatalog` group for that provider; neither → empty options
  *    + a reason.
- * ③ Apply gate (KD-S4): enabled + missing provider/model → blocked with the
- *    gate failure; disabled → provider/model may be empty and the apply lands.
+ * ③ Apply gate (KD-S4): a missing provider/model blocks the apply with the
+ *    gate failure — the gate is UNCONDITIONAL now (no config-level `enabled`
+ *    switch since 2026-09-26; the pair is the on/off state).
  * ④ gateway patch semantics: the advisor config is read/written over
  *    `rpc.call('/api', 'advisor/get'|'advisor/set')` — a minimal patch
  *    (changed keys only) against the last-read config; a cleared
@@ -242,7 +243,6 @@ describe('providers join (KD-S2 configured determination)', () => {
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     expect(draftOf(store)).toEqual({
-      enabled: true,
       provider: 'deepseek-official',
       model: 'ds-a',
       systemPrompt: '',
@@ -254,13 +254,13 @@ describe('providers join (KD-S2 configured determination)', () => {
   it('seeds the draft from the effective config regardless of layer origin (base+user already folded by the host)', async () => {
     // The gateway returns the RESOLVED config — the composition base / user
     // layer split is host-side and invisible here: the form shows the
-    // effective values so the toggle is not off while the advisor is running.
+    // effective values so the fields never lie about what runs. The wire
+    // `enabled` stays a read-only fact (the draft cannot write it).
     const { remote, rpc } = scriptedApi({
       config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20 },
     })
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
-    expect(draftOf(store).enabled).toBe(true)
     expect(draftOf(store).provider).toBe('deepseek-official')
     expect(draftOf(store).model).toBe('ds-a')
     expect(draftOf(store).systemPrompt).toBe('entry')
@@ -278,7 +278,6 @@ describe('providers join (KD-S2 configured determination)', () => {
     await store.load()
     expect(draftOf(store).provider).toBeUndefined()
     expect(draftOf(store).model).toBeUndefined()
-    expect(draftOf(store).enabled).toBe(false)
   })
 })
 
@@ -372,12 +371,11 @@ describe('model options (KD-S2 profile-first, catalog fallback)', () => {
   })
 })
 
-describe('apply gate (KD-S4 required-when-enabled)', () => {
-  it('blocks Apply when enabled with no provider, naming the gate failure', async () => {
+describe('apply gate (KD-S4 — the pair is required, unconditionally)', () => {
+  it('blocks Apply with no provider, naming the gate failure', async () => {
     const { remote, rpc, set } = scriptedApi()
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
-    store.setEnabled(true)
     await store.apply()
     const { applyState } = store.store.getSnapshot()
     expect(applyState.kind).toBe('error')
@@ -388,11 +386,10 @@ describe('apply gate (KD-S4 required-when-enabled)', () => {
     expect(set).not.toHaveBeenCalled()
   })
 
-  it('blocks Apply when enabled with a provider but no model', async () => {
+  it('blocks Apply with a provider but no model', async () => {
     const { remote, rpc, set } = scriptedApi()
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
-    store.setEnabled(true)
     store.setProvider('deepseek-official')
     await store.apply()
     const { applyState } = store.store.getSnapshot()
@@ -403,10 +400,12 @@ describe('apply gate (KD-S4 required-when-enabled)', () => {
     expect(set).not.toHaveBeenCalled()
   })
 
-  it('allows empty provider/model while disabled and lands the apply', async () => {
+  it('lands the apply once the pair is complete', async () => {
     const { remote, rpc, set } = scriptedApi()
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
+    store.setProvider('deepseek-official')
+    store.setModel('ds-a')
     store.setImmuneTurns(5)
     await store.apply()
     expect(set).toHaveBeenCalledTimes(1)
@@ -429,44 +428,45 @@ describe('apply patch + seed (gateway channel semantics)', () => {
     })
   })
 
-  it('overrides a config-pinned provider/model with explicit empty values when cleared', async () => {
-    // The seed pins the values through the effective config; the explicit ''
-    // override is used because the gateway merge cannot express an unset (the
-    // host resolver treats '' as absent — the clear stays stable).
-    const { remote, rpc, call } = scriptedApi({
+  it('blocks a cleared pair the seed pins at the gate (no clear write from the card)', async () => {
+    // The seed pins the values; the unconditional KD-S4 gate (no enable switch
+    // since 2026-09-26) refuses an incomplete pair, so the '' override the
+    // patch layer supports is a DIRTY-DERIVATION fact, never a card-issued
+    // write: clearing the provider marks the form dirty (a save would be
+    // needed) and the apply is refused until the pair is complete again.
+    const { remote, rpc, set } = scriptedApi({
       config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
-    // The KD-S4 gate forbids Apply while enabled with empty provider/model,
-    // so the clear path is exercised with the switch off (values are then
-    // ignored by the host gate).
-    store.setEnabled(false)
-    store.setProvider('')
+    store.setProvider('') // clears the provider AND the invalidated model
+    expect(store.store.getSnapshot().dirty).toBe(true)
     await store.apply()
-    const payload = call.mock.calls.find(callArgs => callArgs[1] === 'advisor/set')?.[2] as { args: { patch: Record<string, unknown> } }
-    expect(payload.args.patch).toEqual({ enabled: false, provider: '', model: '' })
+    const { applyState } = store.store.getSnapshot()
+    expect(applyState.kind).toBe('error')
+    if (applyState.kind === 'error' && applyState.failure.kind === 'gate') {
+      expect(applyState.failure.reason).toBe('provider')
+    }
+    expect(set).not.toHaveBeenCalled()
   })
 
-  it('keeps a base-clearing override stable across a second apply (no churn)', async () => {
-    // Apply 1 stores the explicit '' override; a later apply with a DIFFERENT
-    // edit must not re-emit the cleared keys — after the reload the get
-    // returns the stored '' (the wire may carry it), but the resolver treats
-    // '' as absent and the client reads it as missing, so the seed no longer
-    // pins provider/model and the second patch carries neither.
+  it('keeps earlier writes stable across a second apply (no churn)', async () => {
+    // Apply 1 stores the systemPrompt edit; a later apply with a DIFFERENT
+    // edit must not re-emit the already-stored key — after the reload the get
+    // returns the stored value, the seed no longer differs, and the second
+    // patch carries only the new key.
     const { remote, rpc, call } = scriptedApi({
-      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: 'entry', immuneTurns: 3, maxDeltaMessages: 60 },
     })
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
-    store.setEnabled(false)
-    store.setProvider('')
-    await store.apply() // Apply 1: stores the provider '' / model '' overrides
+    store.setSystemPrompt('edited')
+    await store.apply() // Apply 1: stores the systemPrompt edit
     let payload = call.mock.calls.find(callArgs => callArgs[1] === 'advisor/set')?.[2] as { args: { patch: Record<string, unknown> } }
-    expect(payload.args.patch.provider).toBe('')
+    expect(payload.args.patch.systemPrompt).toBe('edited')
 
-    // Apply 2 with a different edit (immuneTurns) carries no provider/model
-    // key: nothing pins them anymore, so nothing is written.
+    // Apply 2 with a different edit (immuneTurns) carries no systemPrompt
+    // key: nothing differs anymore, so nothing is re-written.
     store.setImmuneTurns(9)
     await store.apply()
     const setCalls = call.mock.calls.filter(callArgs => callArgs[1] === 'advisor/set')
@@ -474,23 +474,28 @@ describe('apply patch + seed (gateway channel semantics)', () => {
     expect(payload.args.patch).toEqual({ immuneTurns: 9 })
   })
 
-  it('omits the patch for a cleared provider/model nothing pins (nothing stored → no op)', async () => {
+  it('a cleared provider nothing pins stays clean (nothing stored → no op) and the gate still refuses the apply', async () => {
     // The config does not pin provider/model at all: clearing them writes
     // nothing — there is no stored value to remove (the old unset branch is
     // unreachable through the gateway: the returned config IS the effective
-    // view).
+    // view). The unconditional KD-S4 gate then refuses the pairless apply.
     const { remote, rpc, set } = scriptedApi()
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setProvider('')
+    expect(store.store.getSnapshot().dirty).toBe(false)
     await store.apply()
     expect(set).not.toHaveBeenCalled()
-    expect(store.store.getSnapshot().applyState.kind).toBe('saved')
+    const { applyState } = store.store.getSnapshot()
+    expect(applyState.kind).toBe('error')
+    if (applyState.kind === 'error' && applyState.failure.kind === 'gate') {
+      expect(applyState.failure.reason).toBe('provider')
+    }
   })
 
   it('omits a cleared number field from the patch (empty input = leave unchanged)', async () => {
     const { remote, rpc, call } = scriptedApi({
-      config: { enabled: false, systemPrompt: '', immuneTurns: 5, maxDeltaMessages: 60 },
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 5, maxDeltaMessages: 60 },
     })
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
@@ -502,7 +507,9 @@ describe('apply patch + seed (gateway channel semantics)', () => {
   })
 
   it('reports saved without a gateway call when the patch is empty', async () => {
-    const { remote, rpc, set } = scriptedApi()
+    const { remote, rpc, set } = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     await store.apply() // no edits at all → nothing to write
@@ -538,7 +545,6 @@ describe('apply patch + seed (gateway channel semantics)', () => {
     set.mockReturnValueOnce(Promise.resolve(failResult('host refused')))
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
-    store.setEnabled(true)
     store.setProvider('deepseek-official')
     store.setModel('ds-a')
     await store.apply()
@@ -562,7 +568,6 @@ describe('apply patch + seed (gateway channel semantics)', () => {
     // The Once is registered AFTER load so it targets the set call, not the
     // load's get call.
     call.mockRejectedValueOnce(new Error('transport down'))
-    store.setEnabled(true)
     store.setProvider('deepseek-official')
     store.setModel('ds-a')
     await store.apply()
@@ -572,7 +577,6 @@ describe('apply patch + seed (gateway channel semantics)', () => {
       expect(applyState.failure.message).toBe('transport down')
     }
     // The in-progress draft survives (nothing was written, nothing re-seeded).
-    expect(draft.enabled).toBe(true)
     expect(draft.provider).toBe('deepseek-official')
     expect(draft.model).toBe('ds-a')
     expect(describe).toHaveBeenCalledTimes(1)
@@ -722,13 +726,13 @@ describe('gateway availability (KD-G5 — advisorPresent)', () => {
     expect(state.advisorPresent).toBe(false)
     // The pristine (unseeded) draft stays the schema defaults — NOT marked
     // seeded, so the next successful load can still seed.
-    expect(state.draft).toEqual({ enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 })
+    expect(state.draft).toEqual({ systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 })
     // Gateway recovers: the next load seeds the ACTUAL config.
     await store.load()
     state = store.store.getSnapshot()
     expect(state.advisorPresent).toBe(true)
     expect(state.draft).toEqual({
-      enabled: true, provider: 'deepseek-official', model: 'ds-a',
+      provider: 'deepseek-official', model: 'ds-a',
       systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
     })
   })
@@ -736,7 +740,9 @@ describe('gateway availability (KD-G5 — advisorPresent)', () => {
 
 describe('post-apply reload failure (qc3 N-1)', () => {
   it('keeps the saved feedback when the reload after a successful set fails', async () => {
-    const { remote, rpc, describe, set } = scriptedApi()
+    const { remote, rpc, describe, set } = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
     // First describe (initial load) resolves; the post-apply reload fails.
     describe.mockReturnValueOnce(Promise.resolve(ok({
       writable: true,
@@ -766,14 +772,12 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setProvider('openai') // a provider switch invalidates the chosen model
-    store.setEnabled(false)
     store.setSystemPrompt('edited')
     expect(draftOf(store).provider).toBe('openai')
-    expect(draftOf(store).enabled).toBe(false)
     store.discard()
     // The draft is exactly the seed again — every edited key rewound.
     expect(draftOf(store)).toEqual({
-      enabled: true, provider: 'deepseek-official', model: 'ds-a',
+      provider: 'deepseek-official', model: 'ds-a',
       systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
     })
     // Discard is a client-side rewind — no advisor/set call ever happened.
@@ -789,7 +793,6 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
     })
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
-    store.setEnabled(false)
     store.setProvider('openai')
     store.setSystemPrompt('edited')
     store.discard()
@@ -798,7 +801,7 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
     expect(store.store.getSnapshot().applyState.kind).toBe('saved')
     // The empty apply leaves the rewound draft untouched (no re-seed, no re-write).
     expect(draftOf(store)).toEqual({
-      enabled: true, provider: 'deepseek-official', model: 'ds-a',
+      provider: 'deepseek-official', model: 'ds-a',
       systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60,
     })
   })
@@ -807,7 +810,7 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
     const { remote, rpc } = scriptedApi()
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
-    store.setEnabled(true) // enabled without provider/model → the KD-S4 gate blocks Apply
+    await store.apply() // no provider/model → the KD-S4 gate blocks Apply
     await store.apply()
     expect(store.store.getSnapshot().applyState.kind).toBe('error')
     store.discard()
@@ -815,7 +818,9 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
   })
 
   it('clears the saved feedback back to idle after a landed apply (discard is a no-op on values)', async () => {
-    const { remote, rpc } = scriptedApi()
+    const { remote, rpc } = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     store.setImmuneTurns(5)
@@ -859,11 +864,11 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
     await store.load()
     expect(store.store.getSnapshot().advisorPresent).toBe(false)
     store.discard()
-    expect(draftOf(store)).toEqual({ enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 })
+    expect(draftOf(store)).toEqual({ systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 })
     await store.load()
     expect(store.store.getSnapshot().advisorPresent).toBe(true)
     expect(draftOf(store)).toEqual({
-      enabled: true, provider: 'deepseek-official', model: 'ds-a',
+      provider: 'deepseek-official', model: 'ds-a',
       systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
     })
   })
@@ -871,7 +876,9 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
 
 describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — KD-U2)', () => {
   it('tracks the dirty lifecycle: clean → edit dirty → discard clean → edit → apply success clean', async () => {
-    const { remote, rpc } = scriptedApi()
+    const { remote, rpc } = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     // The store default is clean — no edits staged against any seed.
     expect(store.store.getSnapshot().dirty).toBe(false)
@@ -911,20 +918,19 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
     expect(store.store.getSnapshot().dirty).toBe(false)
-    // The KD-S4 gate forbids Apply while enabled with an empty provider/model,
-    // so the clear path is exercised with the switch off (values are then
-    // ignored by the host gate) — the dirty derivation itself does not care.
-    store.setEnabled(false)
+    // The unconditional KD-S4 gate refuses to APPLY a cleared pair, but the
+    // dirty derivation itself only diffs the draft against the seed: the
+    // clear is a staged edit (a save would be needed once the pair is
+    // complete again) and must read dirty.
     store.setProvider('') // patchFor emits provider: '' → a real write → dirty
     expect(store.store.getSnapshot().dirty).toBe(true)
   })
 
-  it("derives dirty from the '' provider override alone — no enabled toggle needed (M-6 isolation)", async () => {
-    // The sibling test calls setEnabled(false) first, which alone makes the
-    // patch non-empty ({ enabled: false }) — this variant isolates the
-    // ''-provider semantic: NO enabled toggle, only the provider clear, and
-    // the seed pins no model, so the resulting patch is exactly
-    // { provider: '' } → dirty derives true from that alone.
+  it("derives dirty from the '' provider override alone (M-6 isolation)", async () => {
+    // The sibling test clears a provider whose seed also pins a model; this
+    // variant isolates the ''-provider semantic: the seed pins NO model, so
+    // the resulting patch is exactly { provider: '' } → dirty derives true
+    // from that alone.
     const { remote, rpc } = scriptedApi({
       config: { enabled: false, provider: 'deepseek-official', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
@@ -976,7 +982,6 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
     set.mockReturnValueOnce(Promise.resolve(failResult('host refused')))
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
-    store.setEnabled(true)
     store.setProvider('deepseek-official')
     store.setModel('ds-a')
     expect(store.store.getSnapshot().dirty).toBe(true)
@@ -1007,61 +1012,59 @@ describe('dirty derivation (plan dsh-advisor-plugin-config-card-ux, task 2 — K
     expect(state.dirty).toBe(false) // host matches the draft → clean
   })
 
-  it('keeps the draft dirty when the client gate blocks apply (the force-down patch is unreachable from the card) (S-3 pin)', async () => {
-    // qc2 S-3 (deferred — plan Risks, 2026-08-12): the host force-down
-    // (resolved enabled:false + disabledReason) is reachable only if a patch
-    // the client gate would block still reaches the host. This pin documents
-    // that such a patch cannot be produced from the card: enabled without
-    // provider/model is blocked by the gate BEFORE any write, dirty stays
-    // true for the user to complete, and advisor/set is never called.
+  it('keeps the draft dirty when the client gate blocks apply (an incomplete pair never writes) (S-3 pin)', async () => {
+    // qc2 S-3 (deferred — plan Risks, 2026-08-12), restated for the
+    // unconditional gate: the host force-down (resolved enabled:false +
+    // disabledReason) is reachable only if a patch the client gate would
+    // block still reaches the host. This pin documents that such a patch
+    // cannot be produced from the card: an incomplete provider/model pair is
+    // blocked by the gate BEFORE any write, dirty stays true for the user to
+    // complete, and advisor/set is never called.
     const { remote, rpc, set } = scriptedApi()
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
-    store.setEnabled(true) // enabled + no provider/model → the KD-S4 gate blocks apply
+    expect(store.store.getSnapshot().dirty).toBe(false)
+    store.setProvider('deepseek-official') // provider set, model still missing → gate blocks
     expect(store.store.getSnapshot().dirty).toBe(true)
     await store.apply()
     const state = store.store.getSnapshot()
     expect(state.applyState.kind).toBe('error')
     if (state.applyState.kind === 'error' && state.applyState.failure.kind === 'gate') {
-      expect(state.applyState.failure.reason).toBe('provider')
+      expect(state.applyState.failure.reason).toBe('model')
     }
     expect(state.dirty).toBe(true) // nothing written, nothing re-seeded — the form stays
     expect(set).not.toHaveBeenCalled()
   })
 
-  it('recomputes dirty in the empty-patch apply branch — a stale seed cannot leave the pill lit (qc3 S-2)', async () => {
+  it('recomputes dirty in the empty-patch apply branch — an immediate re-apply after a landed save stays clean (qc3 S-2 restated)', async () => {
     // qc3 S-2 belt-and-braces: the empty-patch apply branch must recompute
-    // dirty like every other apply outcome. In every UI-reachable flow the
-    // patch is empty only when the draft already equals the seed (dirty
-    // false), but the M-7 degraded window can leave the SNAPSHOT dirty=true
-    // against a stale seed: a get-failure refresh clobbers `this.seed` to
-    // defaults while skipping the dirty recompute (config undefined). A
-    // programmatic apply in that window would diff EMPTY against the
-    // defaulted seed and report saved while the pill stayed lit.
+    // dirty like every other apply outcome. The original M-7 stale window (a
+    // get-failure refresh clobbers the seed to defaults while skipping the
+    // dirty recompute) can no longer reach this branch — the defaulted seed
+    // pairs with a pairless draft, which the unconditional KD-S4 gate refuses
+    // before the patch diff. The surviving reachable path: a draft exactly
+    // equal to a pair-pinning seed (right after a landed save), where the
+    // empty branch must still recompute and stay clean.
     const { remote, rpc, get, set } = scriptedApi({
-      config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
-    // Edit the draft back to the schema defaults (enabled off + cleared pair).
-    store.setEnabled(false)
-    store.setProvider('') // clears the provider AND the invalidated model
-    expect(draftOf(store)).toEqual({ enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 })
-    expect(store.store.getSnapshot().dirty).toBe(true) // still differs from the pinned seed
-    // The degraded refresh: get fails → `seed` clobbers to defaults and the
-    // dirty recompute is skipped → the stale window (snapshot dirty=true).
-    get.mockImplementationOnce(() => Promise.resolve(failResult('advisor gateway is not ready')))
-    await store.load()
-    let state = store.store.getSnapshot()
-    expect(state.advisorPresent).toBe(false)
-    expect(state.dirty).toBe(true) // stale — the recompute was skipped
-    // The programmatic apply diff-cleans against the (defaulted) seed → empty
-    // patch → saved WITHOUT a call, and the recompute clears the stale pill.
+    // Edit the draft and apply — the write lands and the returned config
+    // (with the pair) is adopted as the seed.
+    store.setSystemPrompt('edited')
     await store.apply()
-    state = store.store.getSnapshot()
-    expect(set).not.toHaveBeenCalled()
+    expect(set).toHaveBeenCalledTimes(1)
+    expect(store.store.getSnapshot().applyState.kind).toBe('saved')
+    expect(store.store.getSnapshot().dirty).toBe(false)
+    // An immediate re-apply: the draft equals the adopted seed → EMPTY patch →
+    // saved WITHOUT a call, and the branch recomputes dirty (stays clean).
+    await store.apply()
+    expect(set).toHaveBeenCalledTimes(1)
+    const state = store.store.getSnapshot()
     expect(state.applyState.kind).toBe('saved')
     expect(state.dirty).toBe(false)
+    expect(draftOf(store).provider).toBe('x') // the draft was never touched
   })
 })
 
@@ -1109,13 +1112,12 @@ describe('card scenario (store-level load/save over the gateway channel)', () =>
     await store.load()
     expect(store.store.getSnapshot().advisorPresent).toBe(true)
 
-    // Card edit: enable + pick provider/model → apply writes the minimal patch.
-    store.setEnabled(true)
+    // Card edit: pick provider/model → apply writes the minimal patch.
     store.setProvider('deepseek-official')
     store.setModel('ds-b')
     await store.apply()
     const payload = call.mock.calls.find(callArgs => callArgs[1] === 'advisor/set')?.[2] as { args: { patch: Record<string, unknown> } }
-    expect(payload.args.patch).toEqual({ enabled: true, provider: 'deepseek-official', model: 'ds-b' })
+    expect(payload.args.patch).toEqual({ provider: 'deepseek-official', model: 'ds-b' })
     expect(get).toHaveBeenCalledTimes(2) // initial load + post-apply reload
 
     // Edit again, then discard: the draft rewinds to the post-apply seed.
