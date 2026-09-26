@@ -25,6 +25,7 @@ coverage/
 .DS_Store
 .idea/
 .vscode/
+.zcodeignore
 
 # Video-agent scratch (local E2E sessions)
 .video_agent/
