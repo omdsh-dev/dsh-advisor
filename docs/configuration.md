@@ -6,7 +6,7 @@
 2. **web「插件」页 —— dsh-advisor 组合包自己页面上的 Advisor 卡片**（bundle key `dsh-advisor`，经 `plugins.bundle.config` keyed slot 注册）—— 卡片把编辑结果写进**同一份 entry config**（经 `settings.update('advisor', …)` → config editor → Loader 落盘到 profile 补丁层）；保存后运行中的会话立即生效，无需重启（运行时 live 读取 entry 引用，见 [live 重应用](#live-重应用)）。
 3. **dsh-tui `/settings` 屏幕**（dsh-tui ≥ v0.8.0，随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供；旧版 dsh-tui 干净地 no-op）—— `/settings` 里的 **Advisor** 分节编辑同样的四个键（`provider` / `model` / `immuneTurns` / `maxDeltaMessages`，各带中英文标签与提示）。编辑先暂存，保存时经 revision 栅栏保护的 `settings.mutate` 写入同一份 entry config，live 重应用、无需重启。`systemPrompt` 不是 TUI 字段（TUI text 控件为单行；多行 prompt 会被截断）——经 web 卡片或 profile 补丁层编辑。
 
-三条路径对等（web 卡片、TUI `/settings`、profile 补丁层读写同一组键、同一份 entry config）。**保存行为差异（如实记录）**：web 卡片在 `provider`/`model` 缺失时**阻止保存**（无条件的 pair 门禁——没有 enabled 开关可使它变为条件性）；TUI seam 没有跨字段校验（上游行为），一次保存可能把空 `provider`/`model` 写入——S4 显式模型门禁（spec §5.2）会把该配置解析为 disabled-with-reason，可见于 `/advisor status` 与 `/advisor config`（见 [显式模型门禁（S4）](#显式模型门禁s4)）。
+三条路径对等（web 卡片、TUI `/settings`、profile 补丁层读写同一组键、同一份 entry config）。**保存行为差异（如实记录）**：web 卡片在 `provider`/`model` 缺失时**阻止保存**（无条件的 pair 门禁——没有 enabled 开关可使它变为条件性）；TUI seam 没有跨字段校验（上游行为），一次保存可能把空 `provider`/`model` 写入——S4 显式模型门禁（spec §5.2）会把该配置解析为 disabled-with-reason，可见于 `/advisor status` 与 `/advisor config`（见 [显式模型门禁（S4）](#显式模型门禁s4)）。因此**完全清除已存储的 pair 无法从 web 卡片完成**（清空会标记未保存但保存被门禁拒绝）——走 TUI `/settings` 保存空值，或直接编辑 profile 补丁层。
 
 > **破坏性变更（2026-09-26）：`enabled` 配置键已移除。** 宿主 UI 中插件行的启用/停用开关就是总开关——插件行在运行即启用，无需任何配置键。存量 profile 若仍携带 `enabled:` 行会被当作未知键拒绝（该行会显示原因）；删除该行即可。不提供兼容层。
 

@@ -61,7 +61,7 @@ In a **dsh-tui** profile the same four keys are editable in the TUI `/settings` 
 dsh --profile web --dump-config   # shows a "# == dsh-advisor" layer with the advisor row
 ```
 
-With the advisor installed and enabled, control it in-session with the `/advisor` command (available when a command registry is composed):
+With the advisor installed and its plugin row enabled (the row switch on the Plugins page is the master switch), control it in-session with the `/advisor` command (available when a command registry is composed):
 
 ```
 /advisor            toggle the advisor for this session

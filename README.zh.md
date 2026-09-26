@@ -61,7 +61,7 @@ dsh plugin --profile dsh-tui add dsh-advisor  # dsh-tui 终端 profile
 dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-advisor" 层
 ```
 
-安装并启用后，在会话内用 `/advisor` 指令控制它（组合了 command registry 时可用）：
+安装并在插件页打开组件行的启用开关（row 开关即总开关）后，在会话内用 `/advisor` 指令控制它（组合了 command registry 时可用）：
 
 ```
 /advisor            toggle the advisor for this session
