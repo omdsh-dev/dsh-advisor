@@ -17,7 +17,8 @@
  *    namespace check only guards the apiproxy path).
  * ③ `set` with an unknown key is rejected by the `Config` schema
  *    (unknown-key rejection unchanged) and nothing is persisted — the removed
- *    `enabled` key (2026-09-26) is rejected the same way.
+ *    `enabled` key (2026-09-26) is tolerated and stripped from the write
+ *    payload — accepted, never persisted (2026-09-27 ruling).
  * ④ Hard gate regression: a pairless config still resolves to
  *    disabled-with-reason (no model call — SSOT unchanged).
  * ⑤ Endpoint claims: the explicit typert registration (the same

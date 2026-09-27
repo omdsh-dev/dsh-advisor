@@ -167,7 +167,7 @@ class GateTripController extends FakeController {
     this.status = enabled
       ? baseStatus({
         enabled: false,
-        disabledReason: 'enabled but provider and model are missing — configure both to enable the advisor',
+        disabledReason: 'provider and model are missing — configure both to enable the advisor',
       })
       : baseStatus({ enabled: false })
   }
@@ -356,7 +356,7 @@ describe('/advisor handler — toggle / on / off flip the runtime gate', () => {
   it('on with a config lacking provider/model reports the S4 gate reason', () => {
     const controller = new FakeController(baseStatus({
       enabled: false,
-      disabledReason: 'enabled but provider and model are missing — configure both to enable the advisor',
+      disabledReason: 'provider and model are missing — configure both to enable the advisor',
     }))
     const handler = registerAndGetHandler(controller)
     const result = invoke(handler, ' on')
@@ -428,7 +428,7 @@ describe('advisorStatusText (the /advisor status surface, spec §6)', () => {
   it('shows disabled-with-reason when the S4 gate blocks model calls', () => {
     const text = advisorStatusText({
       enabled: true,
-      disabledReason: 'enabled but provider and model are missing — configure both to enable the advisor',
+      disabledReason: 'provider and model are missing — configure both to enable the advisor',
       runtimeStatus: 'disabled',
       pendingCount: 0,
     })
@@ -505,10 +505,10 @@ describe('advisorConfigText (the /advisor config surface, composed session-less 
 
   it('renders disabled-with-reason when the gate blocks, without a Model line', () => {
     const text = advisorConfigText(baseConfig({
-      disabledReason: 'enabled but provider and model are missing — configure both to enable the advisor',
+      disabledReason: 'provider and model are missing — configure both to enable the advisor',
     }))
     expect(text).toContain('Advisor config: disabled')
-    expect(text).toContain('Reason: enabled but provider and model are missing — configure both to enable the advisor')
+    expect(text).toContain('Reason: provider and model are missing — configure both to enable the advisor')
     expect(text).not.toContain('Model:')
     expect(text).toContain('systemPrompt: <default>')
   })
@@ -938,7 +938,7 @@ describe('advisorModelText / modelSetText / modelResetText (the /advisor model r
       kind: 'reset',
       status: baseStatus({
         enabled: true,
-        disabledReason: 'enabled but provider and model are missing — configure both to enable the advisor',
+        disabledReason: 'provider and model are missing — configure both to enable the advisor',
         runtimeStatus: 'disabled',
       }),
     })

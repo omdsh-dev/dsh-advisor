@@ -427,7 +427,7 @@ export function modelResetText(outcome: AdvisorResetModelOutcome): string {
  * (`AdvisorSessionStatus`); config and status are separate.
  */
 export interface AdvisorComposedConfig {
-  /** Config-level composed switch — NOT the per-session override. */
+  /** Post-gate pair flag — not the per-session override. */
   readonly enabled: boolean
   /** Present iff the composed config is disabled by the explicit gate. */
   readonly disabledReason?: string
