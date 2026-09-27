@@ -2,6 +2,11 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.5.2] - 2026-09-27
+
+- 5b24ad1 feat: flat advisor settings card, localized plugin meta, drop the config-level enabled switch (#98)
+- 700ba7b chore: ignore local .zcodeignore (#97)
+
 ## [0.5.1] - 2026-09-24
 
 - b007af3 Merge pull request #95 from omdsh-dev/chore/dsh-0.1.7-rc.2-cohort
