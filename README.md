@@ -30,7 +30,7 @@ Same plugin, either front end — the only difference is the `--profile` flag. P
 
 Edit the `config` of the `advisor` row in your profile's patch layer (`~/.dsh/profiles/<profile>/cordis.patch.yml`). All five fields are schema-volatile live fields (dsh ≥ 0.1.7-rc.1): the web card and the TUI `/settings` screen write this same entry config — persisted in the profile patch, committed without a remount. (A pre-0.1.7 `$DSH_HOME/settings.yaml` `advisor:` section no longer exists: dsh imports it into the active profile once and renames the file `.imported`.)
 
-> **Breaking change (2026-09-26): the `enabled` config key was removed.** The plugin-row enable/disable toggle in the host UI is the master switch — a running row is enabled, and there is nothing left to configure for it. A stored profile still carrying an `enabled:` line is rejected as an unknown config key (the row shows the reason); delete the line. There is no compatibility layer.
+> **Breaking change (2026-09-26): the `enabled` config key was removed.** The plugin-row enable/disable toggle in the host UI is the master switch — a running row is enabled, and there is nothing left to configure for it. A stored profile still carrying an `enabled:` line keeps working: the line is **silently ignored** (accepted, never read, never re-persisted — 2026-09-27 ruling, no manual deletion needed); the key is deprecated and the write paths no longer persist it.
 
 ```yaml
 # ~/.dsh/profiles/<profile>/cordis.patch.yml — the advisor row's config
@@ -90,7 +90,7 @@ On the **web**, the same session model controls ride the session header's **Advi
   [advisor:concern] extract the helper into a module and unit-test it
   ```
 
-- **Explicit model gate**: a missing `provider` + `model` never starts a model call — status reports disabled-with-reason. The gate applies to the *effective* route after session resolution: a complete per-session override pair satisfies it for that session; a malformed global config cannot be bypassed. Unknown config keys are rejected — including the removed `enabled` key (the plugin-row toggle is the switch).
+- **Explicit model gate**: a missing `provider` + `model` never starts a model call — status reports disabled-with-reason. The gate applies to the *effective* route after session resolution: a complete per-session override pair satisfies it for that session; a malformed global config cannot be bypassed. Unknown config keys are rejected — the removed `enabled` key is the one legacy exception (silently ignored; the plugin-row toggle is the switch).
 - **Zero-tool minimal start**: the reviewer is an independent model call only — no advisor tools, nothing it can do to the session besides advisory messages.
 - **No-stall failure policy**: a failing or quota-limited advisor only drops its own bounded backlog — it can never park or pollute the primary loop.
 - **Session-scoped controls**: `/advisor on|off|status|config|model` work per session; the toggles and the per-session model pin are ephemeral overrides, never persisted config — `/advisor config` always reports the global defaults. On the web, the session header's **Advisor action** drives the same per-session pin through dedicated session endpoints (see [Verify](#verify)).

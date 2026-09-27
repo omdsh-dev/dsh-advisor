@@ -8,7 +8,7 @@
 
 三条路径对等（web 卡片、TUI `/settings`、profile 补丁层读写同一组键、同一份 entry config）。**保存行为差异（如实记录）**：web 卡片在 `provider`/`model` 缺失时**阻止保存**（无条件的 pair 门禁——没有 enabled 开关可使它变为条件性）；TUI seam 没有跨字段校验（上游行为），一次保存可能把空 `provider`/`model` 写入——S4 显式模型门禁（spec §5.2）会把该配置解析为 disabled-with-reason，可见于 `/advisor status` 与 `/advisor config`（见 [显式模型门禁（S4）](#显式模型门禁s4)）。因此**完全清除已存储的 pair 无法从 web 卡片完成**（清空会标记未保存但保存被门禁拒绝）——走 TUI `/settings` 保存空值，或直接编辑 profile 补丁层。
 
-> **破坏性变更（2026-09-26）：`enabled` 配置键已移除。** 宿主 UI 中插件行的启用/停用开关就是总开关——插件行在运行即启用，无需任何配置键。存量 profile 若仍携带 `enabled:` 行会被当作未知键拒绝（该行会显示原因）；删除该行即可。不提供兼容层。
+> **破坏性变更（2026-09-26）：`enabled` 配置键已移除。** 宿主 UI 中插件行的启用/停用开关就是总开关——插件行在运行即启用，无需任何配置键。存量 profile 若仍携带 `enabled:` 行**继续正常工作**：该行会被**静默忽略**（接受但剥离，永不读取、永不回写——2026-09-27 裁决，无需手工删除）；该键已废弃，写入路径不再持久化它。
 
 卡片对配置的读写**只**走官方 `GatewayService` RPC 通道：`/api/advisor/get` + `/api/advisor/set`（`src/gateway.ts` 的 `AdvisorConfigGateway`，由宿主 typertGateway 认领，与 dsh 内建 `goals` 服务同一机制）。该通道不受 settings 暴露白名单门控；进程内写入（`settings.update`，`ns` 即 profile entry id `advisor`——bundle 行 id，`cordis.patch.yml`）经 config editor 落入 Loader，由 Loader 提交 volatile 字段并派发 `loader/volatile-update`。没有 config editor 的组合（headless/集成环境）里 `get` 仍读 entry、`set` 干净报错（KD-G5）。**插件不做任何宿主补丁**。
 
@@ -26,7 +26,7 @@
 | `immuneTurns` | number（整数 ≥ 0） | `3` | 冷却步数：实际 steer 过一次 concern/blocker 后，接下来 N 个完成的 stepped 主 turn 必须走完，另一条打断性 note 才可再次 steer；窗口内的 note 降级为 inject。 |
 | `maxDeltaMessages` | number（整数 ≥ 0） | `60` | 有界的 advisor 输入窗口。超过 N 的 delta 以 `… <earlier messages omitted>` 标记截断；`0` = 无上限。 |
 
-> 默认值即 `Config` schema 的默认值（`z.string().default('')`、`z.number().step(1).min(0).default(3)` / `.default(60)`，`src/config.ts`）。`provider` / `model` 在 schema 上没有默认值 —— 保持可选是为了让缺 pair 的配置能通过 Loader 校验、再由门禁解析为 disabled-with-reason（而不是加载失败）。`enabled` 键已移除（2026-09-26）——宿主 UI 的插件行开关即总开关；存储值中残留的 `enabled:` 会被严格未知键拒绝。
+> 默认值即 `Config` schema 的默认值（`z.string().default('')`、`z.number().step(1).min(0).default(3)` / `.default(60)`，`src/config.ts`）。`provider` / `model` 在 schema 上没有默认值 —— 保持可选是为了让缺 pair 的配置能通过 Loader 校验、再由门禁解析为 disabled-with-reason（而不是加载失败）。`enabled` 键已移除（2026-09-26）——宿主 UI 的插件行开关即总开关；存储值中残留的 `enabled:` 会被静默忽略（2026-09-27 裁决：接受但剥离，永不读取、永不回写）。
 
 ### 示例 YAML
 
@@ -123,7 +123,7 @@ Advisor 卡片（bundle key `dsh-advisor`，`src/client/index.ts` 注册进 `plu
 
 - **provider / model 选择框（无条件常显）**：只列出**已配置**的 provider（命名空间 + profile 均解析，KD-S2）；model 选项优先取 provider profile 的声明模型，否则回退 `llm.models` catalog；存储的 provider/model 不再可用时显示警告；join 为空时显示引导文案；provider/model 缺失时以行内文案提示并阻止保存（KD-S4 无条件门禁）；
 - **systemPrompt** 文本框（placeholder 即内置评审 prompt——`src/prompts.ts` `DEFAULT_ADVISOR_SYSTEM_PROMPT`，下方 hint 提示「留空则使用默认」）、`immuneTurns` / `maxDeltaMessages` 数字输入并排（清空数字输入保持空、不强制为 0）；
-- **保存**经网关 `set`（`connection.rpc.call('/api', 'advisor/set', { patch })`）：只把相对上次读取的**变更键**作为 patch 发送；`set` 先经 `Config` schema 校验（未知键拒绝——含已移除的 `enabled`）再写 entry config（经 config editor 落入 profile 补丁层的 advisor 行），返回新合成值；
+- **保存**经网关 `set`（`connection.rpc.call('/api', 'advisor/set', { patch })`）：只把相对上次读取的**变更键**作为 patch 发送；`set` 先经 `Config` schema 校验（未知键拒绝；已移除的 `enabled` 是唯一例外——接受但剥离，不回写）再写 entry config（经 config editor 落入 profile 补丁层的 advisor 行），返回新合成值；
 - **降级态（平铺常显）**：网关不可达 → 卡片平铺显示 config-channel 提示且不提供 Save；加载失败 → 错误提示 + 可重试；settings provider 只读 → 只读提示并禁用写入；
 - 卡片**没有** reset-to-defaults 动作（网关只暴露 `get` / `set` 两个端点）。
 

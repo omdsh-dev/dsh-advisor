@@ -30,7 +30,7 @@ dsh plugin --profile dsh-tui add dsh-advisor  # dsh-tui 终端 profile
 
 编辑 profile 补丁层（`~/.dsh/profiles/<profile>/cordis.patch.yml`）里 `advisor` 行的 `config`。五个字段全部是 schema-volatile 的 live 字段（dsh ≥ 0.1.7-rc.1）：web 卡片与 TUI `/settings` 屏幕写入的就是这同一份 entry config——持久化在 profile 补丁层，无需重挂载即生效。（pre-0.1.7 的 `$DSH_HOME/settings.yaml` `advisor:` 分节已不存在：dsh 会在首次启动时把它导入活跃 profile 一次，并将该文件改名为 `.imported`。）
 
-> **破坏性变更（2026-09-26）：`enabled` 配置键已移除。** 宿主 UI 中插件行的启用/停用开关就是总开关——插件行在运行即启用，无需任何配置键。存量 profile 若仍携带 `enabled:` 行会被当作未知键拒绝（该行会显示原因）；删除该行即可。不提供兼容层。
+> **破坏性变更（2026-09-26）：`enabled` 配置键已移除。** 宿主 UI 中插件行的启用/停用开关就是总开关——插件行在运行即启用，无需任何配置键。存量 profile 若仍携带 `enabled:` 行**继续正常工作**：该行会被**静默忽略**（接受但剥离，永不读取、永不回写——2026-09-27 裁决，无需手工删除）；该键已废弃，写入路径不再持久化它。
 
 ```yaml
 # ~/.dsh/profiles/<profile>/cordis.patch.yml —— advisor 行的 config

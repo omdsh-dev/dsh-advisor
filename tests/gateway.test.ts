@@ -356,7 +356,7 @@ describe('set validation (Config schema, unknown-key rejection unchanged)', () =
 // ---------------------------------------------------------------------------
 
 describe('hard gate regression (resolveAdvisorConfig stays the SSOT)', () => {
-  it('a patch carrying the removed `enabled` key is rejected (unknown key — 2026-09-26 removal, no compat layer)', async () => {
+  it('tolerates the legacy `enabled` key in a patch but never persists it (2026-09-27 ruling)', async () => {
     const ctx = new Context()
     const entry = new MemoryEntryConfig(entryConfig())
     const bridge = installAdvisorSettings(ctx, entry.config)
@@ -364,11 +364,16 @@ describe('hard gate regression (resolveAdvisorConfig stays the SSOT)', () => {
     const settings = await provideSettingsDouble(ctx, entry)
     await waitCaptured(ctx, gateway)
 
-    // The config-level switch is gone (the row toggle is the switch): a
-    // stored profile's `enabled:` lands at `set` like any unknown key and
-    // nothing is written.
-    await expect(gateway.set({ enabled: true } as never)).rejects.toThrow(/unknown config key "enabled"/)
-    expect(settings.update).not.toHaveBeenCalled()
+    // Stored-profile parity: the removed key passes validation (a stored
+    // profile carrying `enabled:` loads cleanly) but is STRIPPED from the
+    // write payload — the row toggle replaced it, so the dead key must not be
+    // re-persisted. The valid pair in the same patch lands normally.
+    await gateway.set({ enabled: true, provider: 'deepseek', model: 'deepseek-chat' } as never)
+    expect(settings.update).toHaveBeenCalledWith('advisor', { provider: 'deepseek', model: 'deepseek-chat' })
+    // The landed write resolves through the gate: the pair made it enabled.
+    const config = gateway.get().config
+    expect(config.enabled).toBe(true)
+    expect(config.provider).toBe('deepseek')
   })
 
   it('a pairless entry resolves to disabled-with-reason through get', async () => {

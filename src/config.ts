@@ -19,8 +19,11 @@
  * — the advisor never starts a model call (hard gate, not a warning). The
  * volatile unwrap happens BEFORE the gate: an unwrapped reference object is
  * truthy, so the provider/model reads would silently pass the gate on the
- * reference objects themselves. `enabled` arriving in a raw config (a stored
- * profile predating the removal) is rejected like any other unknown key.
+ * reference objects themselves. A legacy `enabled` key arriving in a raw
+ * config (a stored profile predating the removal) is TOLERATED and silently
+ * dropped — accepted but never persisted or read (2026-09-27 user ruling:
+ * the stored row must not reject the plugin); every other unknown key is
+ * still rejected (spec §5.2 strict schema).
  *
  * @module dsh-advisor/config
  */
@@ -73,12 +76,27 @@ const CONFIG_KEYS: ReadonlySet<string> = new Set([
 ])
 
 /**
+ * Removed config keys the strict unknown-key rejection TOLERATES — accepted
+ * into a raw config but stripped from every snapshot/write so they are never
+ * read and never re-persisted. Only the 2026-09-26-removed `enabled` lives
+ * here: the plugin-row enable/disable toggle replaced the config-level master
+ * switch, and stored profiles still carrying `enabled: false/true` must load
+ * cleanly instead of being rejected (2026-09-27 user ruling — the stored line
+ * is simply ignored; no compatibility surface beyond dropping the dead key).
+ * Every other unknown key stays a hard reject (spec §5.2).
+ */
+const LEGACY_KEYS: ReadonlySet<string> = new Set([
+  'enabled',
+])
+
+/**
  * Loader schema (strict): defaults + type/bounds validation for the plugin
  * row config. The explicit gate is intentionally NOT here — `provider`/`model`
  * stay optional so a pairless config validates and then resolves to
  * disabled-with-reason instead of failing to load. There is no `enabled`
  * field: the plugin-row enable/disable toggle is the master switch, and a
- * stored `enabled:` key is rejected as unknown by the strict resolver.
+ * stored `enabled:` key is tolerated and dropped by the resolver
+ * ({@link LEGACY_KEYS}) — never read, never persisted.
  *
  * Volatile (dsh 0.1.7-rc.1): every field is a LIVE field. The Loader commits
  * edits into the running fiber's references without remounting the plugin
@@ -144,16 +162,24 @@ function unwrapReference<T>(value: unknown): T {
  * the plain value it is on non-Loader paths), and `null` — which schemastery
  * passes through for fields without a default — is normalized to `undefined`
  * so the resolved contract is null-free and the gate treats null exactly like
- * a missing value. Keys outside the schema ride along untouched (the
- * schemastery object resolver merges unknown keys through; they are never
- * volatile-declared, so they are never references) — the hard gate's
- * unknown-key rejection must keep seeing them.
+ * a missing value. Legacy keys ({@link LEGACY_KEYS}) are STRIPPED before the
+ * rest-spread: the schema-removed `enabled` may arrive on a stored profile
+ * (or an integration entry), and the snapshot must never carry it — no
+ * consumer reads it and no snapshot-derived write can re-persist it. Every
+ * other key outside the schema rides along untouched (the schemastery object
+ * resolver merges unknown keys through; they are never volatile-declared, so
+ * they are never references) — the hard gate's unknown-key rejection must
+ * keep seeing them.
  *
  * This is a snapshot read, NOT a validation: the result is the RAW composed
  * config `resolveAdvisorConfig` consumes.
  */
 export function unwrapAdvisorConfig(raw: VolatileAdvisorConfig): AdvisorConfig {
-  const { provider, model, systemPrompt, immuneTurns, maxDeltaMessages, ...rest } = raw
+  // The raw side is loose on purpose: the schema-removed `enabled` is not a
+  // VolatileAdvisorConfig member but can arrive on any plain entry — the cast
+  // widens only to let the destructure strip it.
+  const { enabled, provider, model, systemPrompt, immuneTurns, maxDeltaMessages, ...rest } =
+    raw as VolatileAdvisorConfig & { readonly enabled?: unknown }
   return {
     ...rest,
     provider: unwrapReference<string | undefined>(provider) ?? undefined,
@@ -168,9 +194,11 @@ export function unwrapAdvisorConfig(raw: VolatileAdvisorConfig): AdvisorConfig {
  * Resolve the raw config into the runtime contract.
  *
  * - Rejects unknown keys (strict schema, spec §5.2) and non-object input.
- *   `enabled` is an unknown key since its 2026-09-26 removal — a stored
- *   profile still carrying it is rejected with an actionable message (the row
- *   toggle replaces it; no compatibility layer).
+ *   The 2026-09-26-removed `enabled` is the ONE tolerated exception
+ *   ({@link LEGACY_KEYS}): a stored profile still carrying it loads cleanly,
+ *   the key is stripped from the snapshot and never persisted (2026-09-27
+ *   user ruling — the row toggle replaced it; ignoring the stored line is the
+ *   whole migration surface). Every other unknown key is still a hard reject.
  * - Applies the explicit model gate (S4): `provider` or `model` missing/empty
  *   → disabled-with-reason, never throws, no model call. Both present →
  *   `enabled: true` (the post-gate flag).
@@ -184,7 +212,7 @@ export function resolveAdvisorConfig(raw: unknown): ResolvedAdvisorConfig {
     throw new TypeError('dsh-advisor: configuration must be a plain object')
   }
   for (const key of Object.keys(raw)) {
-    if (!CONFIG_KEYS.has(key)) {
+    if (!CONFIG_KEYS.has(key) && !LEGACY_KEYS.has(key)) {
       throw new Error(`dsh-advisor: unknown config key "${key}"`)
     }
   }

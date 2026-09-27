@@ -14,9 +14,11 @@
  *   switch), so when `provider`/`model` is missing or empty it resolves to a
  *   disabled-with-reason config (no model call); a complete pair resolves
  *   enabled.
- * - Unknown config keys are rejected (strict schema) — including `enabled`
- *   itself, whose removal is the 2026-09-26 breaking change (a stored profile
- *   still carrying it is rejected with an actionable message).
+ * - Unknown config keys are rejected (strict schema) — with ONE tolerated
+ *   legacy exception: the 2026-09-26-removed `enabled` key is accepted and
+ *   silently dropped (2026-09-27 user ruling — a stored profile still
+ *   carrying it loads cleanly instead of being rejected; the row toggle
+ *   replaced it, the dead value is never read and never re-persisted).
  */
 
 import { describe, expect, it } from 'vitest'
@@ -168,14 +170,29 @@ describe('strict schema — unknown keys rejected (spec §5.2)', () => {
       .toThrow(/unknown config key "extra"/)
   })
 
-  it('rejects the removed `enabled` key (2026-09-26 breaking change — no compat layer)', () => {
+  it('tolerates and drops the legacy `enabled` key (2026-09-27 ruling — stored profiles load cleanly)', () => {
     // The migration surface: a stored profile still carrying `enabled:` is
-    // rejected like any unknown key (the row toggle replaces it). The host
-    // surfaces the message as the row's disabledReason.
-    expect(() => resolveAdvisorConfig({ enabled: true }))
-      .toThrow(/unknown config key "enabled"/)
-    expect(() => resolveAdvisorConfig({ enabled: false }))
-      .toThrow(/unknown config key "enabled"/)
+    // accepted but IGNORED (the row toggle replaced it) — the value never
+    // influences the resolution, which keys purely on the pair.
+    const withPair = resolveAdvisorConfig({ enabled: true, provider: 'p', model: 'm' })
+    expect(withPair.enabled).toBe(true)
+    expect(withPair.provider).toBe('p')
+    expect(withPair.disabledReason).toBeUndefined()
+    // Any legacy value on a pairless config still resolves through the pair
+    // gate — the dead switch cannot turn the advisor on or off.
+    for (const legacyValue of [true, false]) {
+      const resolved = resolveAdvisorConfig({ enabled: legacyValue })
+      expect(resolved.enabled).toBe(false)
+      expect(resolved.disabledReason).toMatch(/provider and model are missing/)
+    }
+    // The legacy key is stripped from the snapshot: `source()` and every
+    // downstream consumer (and any snapshot-derived write) never carry it.
+    expect(unwrapAdvisorConfig(Config({ enabled: true, provider: 'p' }))).toEqual({
+      provider: 'p',
+      systemPrompt: '',
+      immuneTurns: 3,
+      maxDeltaMessages: 60,
+    })
   })
 
   it('rejects non-object config input', () => {

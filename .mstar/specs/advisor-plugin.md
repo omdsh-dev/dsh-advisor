@@ -1,7 +1,8 @@
 # dsh advisor plugin — Architecture & Contract Spec
 
 > **Status:** frozen reference (Review & Edit chain, architect seat, iter-20260810-dsh-advisor).
-> **Revision (2026-09-26, user ruling):** the config-level `enabled` key is REMOVED — the plugin-row enable/disable toggle IS the master switch (a running row is enabled; no compatibility layer, stored `enabled:` keys are rejected as unknown); the web settings card is flattened to the official settings-page layout with the plugin meta (`locale/*.json` + `icon.svg`) localized. §2 S4, §5, §7, §8.6 KD-6 carry the updated wording.
+> **Revision (2026-09-26, user ruling):** the config-level `enabled` key is REMOVED — the plugin-row enable/disable toggle IS the master switch (a running row is enabled); the web settings card is flattened to the official settings-page layout with the plugin meta (`locale/*.json` + `icon.svg`) localized. §2 S4, §5, §7, §8.6 KD-6 carry the updated wording.
+> **Revision (2026-09-27, user ruling):** a stored profile's legacy `enabled:` line is TOLERATED and silently dropped — accepted, never read, never re-persisted (no load rejection); every other unknown key is still strictly rejected (§5.1/§5.2 unchanged in spirit).
 > **Durable location:** `.mstar/specs/advisor-plugin.md` (tracked). The working draft lives in the iteration package (`.mstar/iterations/iter-20260810-dsh-advisor/specs/advisor-plugin-spec.md`, gitignored); **this file is the canonical SSOT.** Plan `primary_spec` points here.
 > **References:** repos named only — `omp` (the "advisor" subsystem being ported) and `dsh` (DeepSeek Harness). No local paths in this tracked document.
 
@@ -80,7 +81,7 @@ advisor:
   maxDeltaMessages: 60    # int ≥ 0, default 60 — 0 = unbounded (see §8 KD-3)
 ```
 
-Schema library: schemastery (as used by dsh packages). Unknown keys are rejected (strict schema) — including the removed `enabled` key (2026-09-26; a stored profile still carrying it is rejected with an actionable message; the plugin-row toggle replaces it).
+Schema library: schemastery (as used by dsh packages). Unknown keys are rejected (strict schema) — with ONE tolerated legacy exception: the removed `enabled` key is accepted and silently dropped (2026-09-27 user ruling; a stored profile still carrying it loads cleanly — the key is never read and never re-persisted; the plugin-row toggle replaces it).
 
 ### 5.2 Validation rules (explicit model gate — user-locked)
 
@@ -116,7 +117,7 @@ Besides the persisted global defaults there is exactly one runtime-only, per-ses
 - **Unit (per module):**
   - `transcript.ts` — cursor advances on append; prefix rewrite (fingerprint mismatch or `surfaceOp replace`) → reset + full replay; own-message (`plugin` arm — `kind: 'plugin'` + `plugin: 'advisor'`) exclusion; bounded window with truncation marker (§8 KD-3); role labels; `seedTo(length)`.
   - `emission-guard.ts` — normalization (`"Stop."` ≡ `*stop*`), dedupe, content-free suppression, one-note-per-update, escalation (nit→concern allowed, concern→nit suppressed), reset clears history.
-  - `config.ts` — schema defaults; a missing provider/model pair → disabled-with-reason; unknown keys rejected (including the removed `enabled`); severity enum validation.
+  - `config.ts` — schema defaults; a missing provider/model pair → disabled-with-reason; unknown keys rejected (the legacy `enabled` tolerated and dropped); severity enum validation.
   - `advisor-runtime.ts` — drain with a stub adapter registered via `ctx.llm.registerAdapter`; JSON-frame parse (valid/invalid/missing severity → default nit); adapter throw → note dropped, runtime continues; no model call when the pair gate blocks; quota error → pause; permanent error → halt.
   - `advisor-runtime.ts` — minimal request contract (KD-6, §8.6): every recorded advisor `GenerateOptions` key set matches the closed AC-1 whitelist (`['maxTokens', 'messages', 'model', 'provider', 'reasoningEffort', 'signal', 'system']` when the model advertises `'off'`, same list without `reasoningEffort` otherwise) with `'tools'`/`'temperature'`/`'stop'`/`'purpose'` absent, one user delta, `maxTokens === ADVISOR_MAX_TOKENS` (768), and the configured `system`; a `resolveModelInfo` failure (throw or deadline abort) writes no cache entry and a later definitive resolution re-advertises `reasoningEffort: 'off'` (no-latch + recovery); a definitive no-`'off'` logs the `advisor: thinking-off unavailable …` debug line once per runtime (log-once) while a resolution failure never logs it (failures silent); a deadline-aborted resolution is re-resolved by the retry and the drain stays deadline-bounded (n4 QC N-5 rewrite).
   - `delivery.ts` — nit injects without waking; concern/blocker steer; immuneTurns downgrade window; advisor-source messages carry the classified first-party `plugin` arm (`kind: 'plugin'`, `plugin: 'advisor'`) pinned to `form: 'notice'` with a bounded summary.
