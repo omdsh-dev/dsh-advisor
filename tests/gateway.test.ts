@@ -16,8 +16,10 @@
  *    patch rides the in-process write channel (the wire-level exposed-
  *    namespace check only guards the apiproxy path).
  * ③ `set` with an unknown key is rejected by the `Config` schema
- *    (unknown-key rejection unchanged) and nothing is persisted.
- * ④ Hard gate regression: enabled without provider/model still resolves to
+ *    (unknown-key rejection unchanged) and nothing is persisted — the removed
+ *    `enabled` key (2026-09-26) is tolerated and stripped from the write
+ *    payload — accepted, never persisted (2026-09-27 ruling).
+ * ④ Hard gate regression: a pairless config still resolves to
  *    disabled-with-reason (no model call — SSOT unchanged).
  * ⑤ Endpoint claims: the explicit typert registration (the same
  *    `ctx.typert.local` store `claimsEndpoint` checks) claims
@@ -57,7 +59,6 @@ beforeEach(() => {
 /** Full entry (plugin-row) config shape, merged over the schema defaults. */
 function entryConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
   return {
-    enabled: false,
     systemPrompt: '',
     immuneTurns: 3,
     maxDeltaMessages: 60,
@@ -123,7 +124,7 @@ async function waitCaptured(ctx: Context, gateway: AdvisorConfigGateway): Promis
 describe('no settings service (entry fallback)', () => {
   it('get returns the entry composed value; the gateway is a registered service', () => {
     const ctx = new Context()
-    const entry = entryConfig({ enabled: true, provider: 'deepseek', model: 'deepseek-chat', immuneTurns: 5 })
+    const entry = entryConfig({ provider: 'deepseek', model: 'deepseek-chat', immuneTurns: 5 })
     const gateway = new AdvisorConfigGateway(ctx, installAdvisorSettings(ctx, entry))
 
     expect(ctx.reflect.props['advisor']).toEqual({ type: 'service' })
@@ -141,7 +142,7 @@ describe('no settings service (entry fallback)', () => {
 
   it('get unwraps a volatile-reference entry (the loader-resolved shape)', () => {
     const ctx = new Context()
-    const entry = new MemoryEntryConfig(entryConfig({ enabled: true, provider: 'deepseek', model: 'deepseek-chat' }))
+    const entry = new MemoryEntryConfig(entryConfig({ provider: 'deepseek', model: 'deepseek-chat' }))
     const gateway = new AdvisorConfigGateway(ctx, installAdvisorSettings(ctx, entry.config))
     expect(gateway.get().config.enabled).toBe(true)
     expect(gateway.get().config.provider).toBe('deepseek')
@@ -150,7 +151,7 @@ describe('no settings service (entry fallback)', () => {
   it('set fails cleanly when no settings service is composed (KD-G5 error path)', async () => {
     const ctx = new Context()
     const gateway = new AdvisorConfigGateway(ctx, installAdvisorSettings(ctx, entryConfig()))
-    await expect(gateway.set({ enabled: true })).rejects.toThrow(/settings service is unavailable/)
+    await expect(gateway.set({ maxDeltaMessages: 10 })).rejects.toThrow(/settings service is unavailable/)
   })
 
   it('a second gateway on the same context fails loud (multi-fiber dedupe relies on this)', () => {
@@ -175,7 +176,7 @@ describe('with a settings service (set writes the entry config)', () => {
     await provideSettingsDouble(ctx, entry)
     await waitCaptured(ctx, gateway)
 
-    const result = await gateway.set({ enabled: true, provider: 'deepseek', model: 'deepseek-chat' })
+    const result = await gateway.set({ provider: 'deepseek', model: 'deepseek-chat' })
 
     // The write rode the settings channel keyed by the ENTRY id.
     const composed: ResolvedAdvisorConfig = {
@@ -201,8 +202,8 @@ describe('with a settings service (set writes the entry config)', () => {
     const settings = await provideSettingsDouble(ctx, entry)
     await waitCaptured(ctx, gateway)
 
-    await gateway.set({ enabled: true })
-    expect(settings.update).toHaveBeenCalledWith('advisor', { enabled: true })
+    await gateway.set({ maxDeltaMessages: 10 })
+    expect(settings.update).toHaveBeenCalledWith('advisor', { maxDeltaMessages: 10 })
   })
 
   it('a patch changing only one key leaves the other entry values intact', async () => {
@@ -220,6 +221,7 @@ describe('with a settings service (set writes the entry config)', () => {
         systemPrompt: '',
         immuneTurns: 3,
         maxDeltaMessages: 10,
+        disabledReason: expect.any(String),
       },
     })
   })
@@ -232,11 +234,11 @@ describe('with a settings service (set writes the entry config)', () => {
     await provideSettingsDouble(ctx, entry)
     await waitCaptured(ctx, gateway)
 
-    await gateway.set({ enabled: true, provider: 'deepseek', model: 'deepseek-chat' })
+    await gateway.set({ provider: 'deepseek', model: 'deepseek-chat' })
     await gateway.set({ maxDeltaMessages: 10 })
 
-    // The entry config keeps ALL four keys written across the two calls — a
-    // replace-semantics write would have dropped the earlier trio.
+    // The entry config keeps ALL three keys written across the two calls — a
+    // replace-semantics write would have dropped the earlier pair.
     expect(gateway.get()).toEqual({
       config: {
         enabled: true,
@@ -251,7 +253,7 @@ describe('with a settings service (set writes the entry config)', () => {
 
   it('an empty patch is a no-op: returns the current composed value without a write (S2)', async () => {
     const ctx = new Context()
-    const entry = new MemoryEntryConfig(entryConfig({ enabled: true, provider: 'deepseek', model: 'deepseek-chat' }))
+    const entry = new MemoryEntryConfig(entryConfig({ provider: 'deepseek', model: 'deepseek-chat' }))
     const bridge = installAdvisorSettings(ctx, entry.config)
     const gateway = new AdvisorConfigGateway(ctx, bridge)
     const settings = await provideSettingsDouble(ctx, entry)
@@ -269,7 +271,7 @@ describe('with a settings service (set writes the entry config)', () => {
     // read; the raw entry config must not store it either — the null key is
     // dropped before the write, so the pinned provider survives.
     const ctx = new Context()
-    const entry = new MemoryEntryConfig(entryConfig({ enabled: true, provider: 'deepseek', model: 'deepseek-chat' }))
+    const entry = new MemoryEntryConfig(entryConfig({ provider: 'deepseek', model: 'deepseek-chat' }))
     const bridge = installAdvisorSettings(ctx, entry.config)
     const gateway = new AdvisorConfigGateway(ctx, bridge)
     await provideSettingsDouble(ctx, entry)
@@ -288,7 +290,7 @@ describe('with a settings service (set writes the entry config)', () => {
 
   it('an all-null patch is a no-op: nothing written, composed value unchanged', async () => {
     const ctx = new Context()
-    const entry = new MemoryEntryConfig(entryConfig({ enabled: true, provider: 'deepseek', model: 'deepseek-chat' }))
+    const entry = new MemoryEntryConfig(entryConfig({ provider: 'deepseek', model: 'deepseek-chat' }))
     const bridge = installAdvisorSettings(ctx, entry.config)
     const gateway = new AdvisorConfigGateway(ctx, bridge)
     const settings = await provideSettingsDouble(ctx, entry)
@@ -315,7 +317,7 @@ describe('with a settings service (set writes the entry config)', () => {
 
     ctx.registry.delete(MemorySettingsDouble)
     await vi.waitFor(() => expect(settingsOf(gateway)).toBeUndefined())
-    await expect(gateway.set({ enabled: true })).rejects.toThrow(/settings service is unavailable/)
+    await expect(gateway.set({ maxDeltaMessages: 10 })).rejects.toThrow(/settings service is unavailable/)
   })
 })
 
@@ -355,17 +357,31 @@ describe('set validation (Config schema, unknown-key rejection unchanged)', () =
 // ---------------------------------------------------------------------------
 
 describe('hard gate regression (resolveAdvisorConfig stays the SSOT)', () => {
-  it('set-enabled without provider/model still resolves to disabled-with-reason', async () => {
+  it('tolerates the legacy `enabled` key in a patch but never persists it (2026-09-27 ruling)', async () => {
     const ctx = new Context()
     const entry = new MemoryEntryConfig(entryConfig())
     const bridge = installAdvisorSettings(ctx, entry.config)
     const gateway = new AdvisorConfigGateway(ctx, bridge)
-    await provideSettingsDouble(ctx, entry)
+    const settings = await provideSettingsDouble(ctx, entry)
     await waitCaptured(ctx, gateway)
 
-    // The schema accepts an enabled-without-pair patch (the gate is a READ
-    // resolution, not a write gate — the user may configure in stages).
-    await gateway.set({ enabled: true })
+    // Stored-profile parity: the removed key passes validation (a stored
+    // profile carrying `enabled:` loads cleanly) but is STRIPPED from the
+    // write payload — the row toggle replaced it, so the dead key must not be
+    // re-persisted. The valid pair in the same patch lands normally.
+    await gateway.set({ enabled: true, provider: 'deepseek', model: 'deepseek-chat' } as never)
+    expect(settings.update).toHaveBeenCalledWith('advisor', { provider: 'deepseek', model: 'deepseek-chat' })
+    // The landed write resolves through the gate: the pair made it enabled.
+    const config = gateway.get().config
+    expect(config.enabled).toBe(true)
+    expect(config.provider).toBe('deepseek')
+  })
+
+  it('a pairless entry resolves to disabled-with-reason through get', async () => {
+    const ctx = new Context()
+    const entry = new MemoryEntryConfig(entryConfig())
+    const gateway = new AdvisorConfigGateway(ctx, installAdvisorSettings(ctx, entry.config))
+
     const config = gateway.get().config
     expect(config.enabled).toBe(false)
     expect(config.disabledReason).toMatch(/provider and model are missing/)
@@ -382,7 +398,9 @@ describe('hard gate regression (resolveAdvisorConfig stays the SSOT)', () => {
     await provideSettingsDouble(ctx, entry)
     await waitCaptured(ctx, gateway)
 
-    await gateway.set({ enabled: true, provider: '', model: '' })
+    // The gate is a READ resolution, not a write gate — the user may
+    // configure in stages; the empty pair simply resolves disabled.
+    await gateway.set({ provider: '', model: '' })
     const config = gateway.get().config
     expect(config.enabled).toBe(false)
     expect(config.disabledReason).toBeTruthy()
@@ -482,13 +500,14 @@ describe('typertGateway endpoint claims + payload contract', () => {
           systemPrompt: 'entry prompt',
           immuneTurns: 5,
           maxDeltaMessages: 60,
+          disabledReason: expect.any(String),
         },
       },
     })
 
     const setResult = await connection.handler!(
       'advisor/set',
-      { args: { patch: { enabled: true, provider: 'deepseek', model: 'deepseek-chat' } } },
+      { args: { patch: { provider: 'deepseek', model: 'deepseek-chat' } } },
       signal,
     )
     expect(setResult.ok).toBe(true)
@@ -590,6 +609,7 @@ describe('composed plugin (apply wires the gateway)', () => {
       systemPrompt: 'entry prompt',
       immuneTurns: 5,
       maxDeltaMessages: 60,
+      disabledReason: expect.any(String),
     })
 
     // The set child may activate a tick after the plugin loads; the waitFor
@@ -598,7 +618,7 @@ describe('composed plugin (apply wires the gateway)', () => {
       const result = await ctx.typertGateway.invoke({
         namespace: 'advisor',
         method: 'set',
-        args: { patch: { enabled: true, provider: 'deepseek', model: 'deepseek-chat' } },
+        args: { patch: { provider: 'deepseek', model: 'deepseek-chat' } },
       }) as { config: ResolvedAdvisorConfig }
       expect(result.config.enabled).toBe(true)
       expect(result.config.provider).toBe('deepseek')

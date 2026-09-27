@@ -30,17 +30,18 @@
  * cast goes through `unknown`) and could cause host-side misrender rather than
  * a compile error — re-verify against the dsh-TUI repo when bumping.
  *
- * Field subset (grill-me locked): the section covers the five SAFE §5.1 keys
- * (`enabled` / `provider` / `model` / `immuneTurns` / `maxDeltaMessages`).
- * `systemPrompt` is intentionally NOT a field — the TUI `text` control is
- * single-line, and editing a multi-line prompt there would truncate/replace
- * it (data loss). It stays editable via the web card or the profile's
- * `cordis.patch.yml`. The TUI seam has no cross-field validation
- * (upstream behavior, recorded): a save may set `enabled: true` with empty
- * `provider`/`model`, which the S4 explicit model gate (spec §5.2) resolves
- * to disabled-with-reason at runtime; the settings-service schema
- * re-validation on mutate is the value-level backstop (a non-schema value
- * fails the whole save before persist).
+ * Field subset (2026-09-26): the section covers the four §5.1 keys
+ * (`provider` / `model` / `immuneTurns` / `maxDeltaMessages`). `enabled` is
+ * gone with the config-level switch it edited (the plugin-row toggle is the
+ * master switch), and `systemPrompt` is intentionally NOT a field — the TUI
+ * `text` control is single-line, and editing a multi-line prompt there would
+ * truncate/replace it (data loss). It stays editable via the web card or the
+ * profile's `cordis.patch.yml`. The TUI seam has no cross-field validation
+ * (upstream behavior, recorded): a save may leave `provider`/`model` empty,
+ * which the S4 explicit model gate (spec §5.2) resolves to
+ * disabled-with-reason at runtime; the settings-service schema re-validation
+ * on mutate is the value-level backstop (a non-schema value fails the whole
+ * save before persist).
  *
  * @module dsh-advisor/tui-settings
  */
@@ -129,9 +130,9 @@ export const TUI_SETTINGS_SECTIONS = 'tuiSettingsSections'
 export const ADVISOR_TUI_SETTINGS_NS = 'advisor'
 
 /** The declared "Advisor" section for the dsh-tui `/settings` screen: the
- * five safe §5.1 keys (enabled/provider/model/immuneTurns/maxDeltaMessages)
- * with zh/en labels + hints. Field paths are single-element §5.1 flat keys,
- * so staged edits map 1:1 onto the namespace `mutate` paths. */
+ * four §5.1 keys (provider/model/immuneTurns/maxDeltaMessages) with zh/en
+ * labels + hints. Field paths are single-element §5.1 flat keys, so staged
+ * edits map 1:1 onto the namespace `mutate` paths. */
 export const ADVISOR_TUI_SETTINGS_SECTION: TuiSettingsSection = {
   ns: ADVISOR_SETTINGS_NAMESPACE,
   title: 'Advisor',
@@ -141,20 +142,12 @@ export const ADVISOR_TUI_SETTINGS_SECTION: TuiSettingsSection = {
   },
   fields: [
     {
-      path: ['enabled'],
-      kind: 'boolean',
-      label: 'Enabled',
-      descriptions: { zh: '启用', en: 'Enabled' },
-      hint: 'Master switch for the advisor.',
-      hintDescriptions: { zh: '顾问总开关。', en: 'Master switch for the advisor.' },
-    },
-    {
       path: ['provider'],
       kind: 'text',
       label: 'Provider',
       descriptions: { zh: 'Provider', en: 'Provider' },
-      hint: 'Provider route; required (non-empty) when enabled.',
-      hintDescriptions: { zh: 'Provider 路由；启用时必须非空。', en: 'Provider route; required (non-empty) when enabled.' },
+      hint: 'Provider route; required (non-empty).',
+      hintDescriptions: { zh: 'Provider 路由；必须非空。', en: 'Provider route; required (non-empty).' },
       placeholder: 'e.g. deepseek-official',
     },
     {
@@ -162,8 +155,8 @@ export const ADVISOR_TUI_SETTINGS_SECTION: TuiSettingsSection = {
       kind: 'text',
       label: 'Model',
       descriptions: { zh: 'Model', en: 'Model' },
-      hint: 'Model id; required (non-empty) when enabled.',
-      hintDescriptions: { zh: '模型 ID；启用时必须非空。', en: 'Model id; required (non-empty) when enabled.' },
+      hint: 'Model id; required (non-empty).',
+      hintDescriptions: { zh: '模型 ID；必须非空。', en: 'Model id; required (non-empty).' },
       placeholder: 'e.g. deepseek-flash',
     },
     {

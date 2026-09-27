@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Advisor",
+    "description": "Configure the advisor reviewer model that observes the primary transcript and injects severity-ranked advice."
+  }
+}

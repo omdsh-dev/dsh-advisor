@@ -963,13 +963,16 @@ describe('AdvisorRuntime — composed with a real LlmRuntime + registered adapte
     expect('purpose' in adapter.requests[0]!).toBe(false)
   })
 
-  it('never starts a model call when the config is disabled (explicit gate, S4)', async () => {
+  it('never starts a model call when the pair gate blocks (explicit gate, S4)', async () => {
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)
     const adapter = new RecordingAdapter([...textReply('{"note":"should never be called"}')])
     ctx.llm.registerAdapter(['test-provider'], adapter)
 
-    apply(ctx, { enabled: false } as AdvisorConfig)
+    // No config-level switch anymore (2026-09-26 — the row toggle is the
+    // switch): a pairless entry resolves to disabled-with-reason, and the
+    // gate drops every delta before a call could start.
+    apply(ctx, { systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 })
 
     // A full stepped turn would otherwise render a delta and dispatch a call.
     const events = buildEvents(minimalTurn())

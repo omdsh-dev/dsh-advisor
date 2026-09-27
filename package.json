@@ -13,6 +13,7 @@
   ],
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
+  "icon": "./icon.svg",
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
@@ -22,10 +23,13 @@
       "types": "./lib/client.d.ts",
       "default": "./lib/client.js"
     },
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
+    "locale",
+    "icon.svg",
     "cordis.patch.yml",
     "scripts"
   ],
@@ -61,7 +65,6 @@
     "@deepseek-ai/dsh-client-ui-conversation": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-client-store": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-client-ui-plugin-manager": "^0.1.7-rc.2",
-    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-client-ui-renderer": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-client-ui-settings": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.7-rc.2",

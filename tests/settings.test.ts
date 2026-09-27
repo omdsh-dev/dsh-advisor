@@ -13,7 +13,7 @@
  *    emitted — the loader double in `support/memory-settings.ts`) is
  *    reflected in `source()` and fires `onChange`; the event carries the
  *    changed paths and the listener sees the ALREADY-committed values.
- * ④ Hard gate regression: enabled without provider/model still resolves to
+ * ④ Hard gate regression: a pairless entry still resolves to
  *    disabled-with-reason (no model call).
  * ⑤ Unknown config keys ride along and are still rejected by the hard gate;
  *    the entry id stays the exact `advisor` literal.
@@ -29,7 +29,6 @@ import type { AdvisorConfig } from '../src/config'
 /** Full entry (plugin-row) config shape, merged over the schema defaults. */
 function entryConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
   return {
-    enabled: false,
     systemPrompt: '',
     immuneTurns: 3,
     maxDeltaMessages: 60,
@@ -52,7 +51,7 @@ function emitVolatileUpdate(ctx: Context, paths: string[][]): void {
 describe('plain-value entry (integration harness form, behavior identical to today)', () => {
   it('bridge.source() is exactly the entry config', () => {
     const ctx = new Context()
-    const entry = entryConfig({ enabled: true, provider: 'deepseek', model: 'deepseek-chat', immuneTurns: 5 })
+    const entry = entryConfig({ provider: 'deepseek', model: 'deepseek-chat', immuneTurns: 5 })
     const bridge = installAdvisorSettings(ctx, entry)
     expect(bridge.source()).toEqual(entry)
     // The source still passes through the hard gate — the SSOT is unchanged.
@@ -82,10 +81,9 @@ describe('plain-value entry (integration harness form, behavior identical to tod
 describe('volatile-reference entry (source() unwraps { get() } references)', () => {
   it('source() returns the plain-valued config behind the references', () => {
     const ctx = new Context()
-    const entry = new MemoryEntryConfig(entryConfig({ enabled: true, provider: 'deepseek', model: 'deepseek-chat', immuneTurns: 5 }))
+    const entry = new MemoryEntryConfig(entryConfig({ provider: 'deepseek', model: 'deepseek-chat', immuneTurns: 5 }))
     const bridge = installAdvisorSettings(ctx, entry.config)
     expect(bridge.source()).toEqual({
-      enabled: true,
       provider: 'deepseek',
       model: 'deepseek-chat',
       systemPrompt: '',
@@ -100,7 +98,6 @@ describe('volatile-reference entry (source() unwraps { get() } references)', () 
     const ctx = new Context()
     const provider = mutableReference<string | undefined>(undefined)
     const bridge = installAdvisorSettings(ctx, {
-      enabled: false,
       provider: provider,
       systemPrompt: '',
       immuneTurns: 3,
@@ -128,12 +125,11 @@ describe('loader/volatile-update commit (source reflects the write, onChange fir
 
     // Loader-style commit: values are written BEFORE the event dispatches, so
     // the listener observes the committed state (not a pending one).
-    entry.commit(ctx, { enabled: true, provider: 'deepseek', model: 'deepseek-chat' })
+    entry.commit(ctx, { provider: 'deepseek', model: 'deepseek-chat' })
 
     expect(listener).toHaveBeenCalledTimes(1)
     expect(second).toHaveBeenCalledTimes(1)
     expect(bridge.source()).toEqual({
-      enabled: true,
       provider: 'deepseek',
       model: 'deepseek-chat',
       // entry values the patch did not touch are kept
@@ -177,13 +173,13 @@ describe('loader/volatile-update commit (source reflects the write, onChange fir
 // ---------------------------------------------------------------------------
 
 describe('hard gate regression (resolveAdvisorConfig stays the SSOT)', () => {
-  it('a volatile-enabled entry without provider/model still resolves to disabled-with-reason', () => {
+  it('a pairless volatile entry resolves to disabled-with-reason', () => {
     const ctx = new Context()
     const entry = new MemoryEntryConfig(entryConfig())
     const bridge = installAdvisorSettings(ctx, entry.config)
 
-    entry.commit(ctx, { enabled: true })
-
+    // No config-level switch since 2026-09-26: the gate keys purely on the
+    // pair, so the pairless entry resolves disabled-with-reason.
     const resolved = resolveAdvisorConfig(bridge.source())
     expect(resolved.enabled).toBe(false)
     expect(resolved.disabledReason).toMatch(/provider and model are missing/)
@@ -191,7 +187,7 @@ describe('hard gate regression (resolveAdvisorConfig stays the SSOT)', () => {
 
   it('a committed empty provider trips the gate (no model call)', () => {
     const ctx = new Context()
-    const entry = new MemoryEntryConfig(entryConfig({ enabled: true, provider: 'deepseek', model: 'deepseek-chat' }))
+    const entry = new MemoryEntryConfig(entryConfig({ provider: 'deepseek', model: 'deepseek-chat' }))
     const bridge = installAdvisorSettings(ctx, entry.config)
 
     // The edit overrides the provider with an empty value — the gate must

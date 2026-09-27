@@ -180,7 +180,11 @@ export type AdvisorModelSource = 'session' | 'global'
  * The per-session overrides consulted by the runtime gate and the effective
  * resolver (`src/index.ts`):
  *
- * - enable: `override ?? config.enabled` (`/advisor on|off|toggle`);
+ * - enable: `override ?? true` (`/advisor on|off|toggle`) — there is no
+ *   config-level switch anymore (2026-09-26: the config `enabled` key was
+ *   removed; a running plugin row IS enabled, and the row toggle turns every
+ *   session off at once), so the default is ON and only an explicit
+ *   `/advisor off` override suppresses a session;
  * - model: the complete session pair ?? the composed global pair — the pair
  *   is atomic, so the two levels are never merged (spec §5.3);
  * - generation: a per-session counter that fences async model work — a newer
@@ -199,21 +203,9 @@ export class AdvisorSessionOverrides {
   private readonly models = new Map<string, AdvisorModelPair>()
   private readonly generations = new Map<string, number>()
 
-  constructor(private configEnabled: boolean) {}
-
-  /** Effective switch for one session: `override ?? config.enabled`. */
+  /** Effective switch for one session: `override ?? true` (a running row is on). */
   effective(sessionId: string): boolean {
-    return this.enables.get(sessionId) ?? this.configEnabled
-  }
-
-  /**
-   * Update the config-level fallback switch (live config — settings onChange,
-   * plan dsh-advisor-settings-n2 T1). Sessions with an explicit override keep
-   * it; every other session follows the new switch, so a Settings-page edit
-   * takes effect for new sessions without touching the override mechanism.
-   */
-  setConfigEnabled(enabled: boolean): void {
-    this.configEnabled = enabled
+    return this.enables.get(sessionId) ?? true
   }
 
   /** Set the enable override for one session. */
@@ -295,7 +287,7 @@ export class AdvisorSessionOverrides {
  * the override state.
  */
 export interface AdvisorSessionStatus {
-  /** Effective switch for this session (`override ?? config.enabled`). */
+  /** Effective switch for this session (`override ?? true` — row on = on). */
   readonly enabled: boolean
   /**
    * Present iff the session is effectively enabled but the S4 explicit gate
@@ -435,7 +427,7 @@ export function modelResetText(outcome: AdvisorResetModelOutcome): string {
  * (`AdvisorSessionStatus`); config and status are separate.
  */
 export interface AdvisorComposedConfig {
-  /** Config-level composed switch — NOT the per-session override. */
+  /** Post-gate pair flag — not the per-session override. */
   readonly enabled: boolean
   /** Present iff the composed config is disabled by the explicit gate. */
   readonly disabledReason?: string
@@ -600,7 +592,8 @@ export const MODEL_USAGE = [
  * "Enabled" outcome text — mentions the S4 gate when it blocks model calls.
  * Callers pass the status AFTER the override flip, so the caveat appears when
  * the flip itself is what trips the gate (qc2 W-2 / qc3 I-2 — the pre-flip
- * status cannot know the gate yet: the gate only fires when enabled).
+ * status cannot know the gate yet: the gate only fires on an incomplete
+ * provider/model pair).
  */
 function enableText(status: AdvisorSessionStatus): string {
   if (status.disabledReason === undefined) return 'Advisor on for this session.'
@@ -635,9 +628,8 @@ function createAdvisorCommandHandler(controller: AdvisorCommandController) {
         }
         controller.setEnabled(sessionId, true, invocation.agent.session.seq)
         // Reply from the POST-flip status: when the override flip trips the
-        // S4 gate (config-off + missing provider/model), the reply must say
-        // the advisor did not start and why, not a bare "Advisor on" (qc2
-        // W-2 / qc3 I-2).
+        // S4 gate (missing provider/model), the reply must say the advisor
+        // did not start and why, not a bare "Advisor on" (qc2 W-2 / qc3 I-2).
         return { kind: 'success', text: enableText(controller.getStatus(sessionId)) }
       }
       case 'off': {

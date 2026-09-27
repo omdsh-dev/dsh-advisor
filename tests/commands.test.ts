@@ -167,7 +167,7 @@ class GateTripController extends FakeController {
     this.status = enabled
       ? baseStatus({
         enabled: false,
-        disabledReason: 'enabled but provider and model are missing — configure both to enable the advisor',
+        disabledReason: 'provider and model are missing — configure both to enable the advisor',
       })
       : baseStatus({ enabled: false })
   }
@@ -228,21 +228,20 @@ describe('parseAdvisorCommand (parse of the text after /advisor)', () => {
 // AdvisorSessionOverrides — the override mechanism
 // ---------------------------------------------------------------------------
 
-describe('AdvisorSessionOverrides (per-session override ?? config.enabled)', () => {
-  it('defaults to the config switch when no override is set', () => {
-    expect(new AdvisorSessionOverrides(false).effective('s1')).toBe(false)
-    expect(new AdvisorSessionOverrides(true).effective('s1')).toBe(true)
+describe('AdvisorSessionOverrides (per-session override ?? the running-row default on)', () => {
+  it('defaults to ON when no override is set (a running row is enabled — no config switch since 2026-09-26)', () => {
+    expect(new AdvisorSessionOverrides().effective('s1')).toBe(true)
   })
 
   it('an override flips the effective switch for that session only', () => {
-    const overrides = new AdvisorSessionOverrides(false)
-    overrides.set('s1', true)
-    expect(overrides.effective('s1')).toBe(true)
-    expect(overrides.effective('s2')).toBe(false) // other sessions untouched
+    const overrides = new AdvisorSessionOverrides()
+    overrides.set('s1', false)
+    expect(overrides.effective('s1')).toBe(false)
+    expect(overrides.effective('s2')).toBe(true) // other sessions keep the default
   })
 
-  it('clear removes the override, falling back to the config switch', () => {
-    const overrides = new AdvisorSessionOverrides(true)
+  it('clear removes the override, falling back to the running-row default (on)', () => {
+    const overrides = new AdvisorSessionOverrides()
     overrides.set('s1', false)
     expect(overrides.effective('s1')).toBe(false)
     overrides.clear('s1')
@@ -357,7 +356,7 @@ describe('/advisor handler — toggle / on / off flip the runtime gate', () => {
   it('on with a config lacking provider/model reports the S4 gate reason', () => {
     const controller = new FakeController(baseStatus({
       enabled: false,
-      disabledReason: 'enabled but provider and model are missing — configure both to enable the advisor',
+      disabledReason: 'provider and model are missing — configure both to enable the advisor',
     }))
     const handler = registerAndGetHandler(controller)
     const result = invoke(handler, ' on')
@@ -429,7 +428,7 @@ describe('advisorStatusText (the /advisor status surface, spec §6)', () => {
   it('shows disabled-with-reason when the S4 gate blocks model calls', () => {
     const text = advisorStatusText({
       enabled: true,
-      disabledReason: 'enabled but provider and model are missing — configure both to enable the advisor',
+      disabledReason: 'provider and model are missing — configure both to enable the advisor',
       runtimeStatus: 'disabled',
       pendingCount: 0,
     })
@@ -506,10 +505,10 @@ describe('advisorConfigText (the /advisor config surface, composed session-less 
 
   it('renders disabled-with-reason when the gate blocks, without a Model line', () => {
     const text = advisorConfigText(baseConfig({
-      disabledReason: 'enabled but provider and model are missing — configure both to enable the advisor',
+      disabledReason: 'provider and model are missing — configure both to enable the advisor',
     }))
     expect(text).toContain('Advisor config: disabled')
-    expect(text).toContain('Reason: enabled but provider and model are missing — configure both to enable the advisor')
+    expect(text).toContain('Reason: provider and model are missing — configure both to enable the advisor')
     expect(text).not.toContain('Model:')
     expect(text).toContain('systemPrompt: <default>')
   })
@@ -704,7 +703,7 @@ describe('apply wiring — /advisor config tuiSettingsAvailable reflects the tui
 
   /** Full plugin-row config shape for the apply wiring test. */
   function entryConfig(): AdvisorConfig {
-    return { enabled: true, provider: 'openai', model: 'gpt-4o', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 }
+    return { provider: 'openai', model: 'gpt-4o', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 }
   }
 
   /** Minimal apply()-shaped ctx that ACTIVATES the `commands` inject child
@@ -816,7 +815,7 @@ describe('parseModelSetArgs (atomic-pair validation, spec §5.3)', () => {
 
 describe('AdvisorSessionOverrides — model pair API (spec §5.3)', () => {
   it('absence inherits; setModel commits an atomic pair; clearModel deletes', () => {
-    const overrides = new AdvisorSessionOverrides(false)
+    const overrides = new AdvisorSessionOverrides()
     expect(overrides.model('s1')).toBeUndefined()
     overrides.setModel('s1', { provider: 'p', model: 'm' })
     expect(overrides.model('s1')).toEqual({ provider: 'p', model: 'm' })
@@ -827,7 +826,7 @@ describe('AdvisorSessionOverrides — model pair API (spec §5.3)', () => {
   })
 
   it('generations fence model work: begin bumps, clear resets to 0', () => {
-    const overrides = new AdvisorSessionOverrides(false)
+    const overrides = new AdvisorSessionOverrides()
     expect(overrides.modelGeneration('s1')).toBe(0)
     const g1 = overrides.beginModelGeneration('s1')
     expect(g1).toBe(1)
@@ -838,39 +837,41 @@ describe('AdvisorSessionOverrides — model pair API (spec §5.3)', () => {
   })
 
   it('generations are per-session', () => {
-    const overrides = new AdvisorSessionOverrides(false)
+    const overrides = new AdvisorSessionOverrides()
     expect(overrides.beginModelGeneration('s1')).toBe(1)
     expect(overrides.beginModelGeneration('s2')).toBe(1)
     expect(overrides.modelGeneration('s1')).toBe(1)
   })
 
   it('clear wipes enable + pair + generation together (dispose)', () => {
-    const overrides = new AdvisorSessionOverrides(false)
-    overrides.set('s1', true)
+    const overrides = new AdvisorSessionOverrides()
+    overrides.set('s1', false)
     overrides.setModel('s1', { provider: 'p', model: 'm' })
     overrides.beginModelGeneration('s1')
     overrides.clear('s1')
-    expect(overrides.effective('s1')).toBe(false)
+    // The enable override is wiped with the rest: the effective switch falls
+    // back to the running-row default (on).
+    expect(overrides.effective('s1')).toBe(true)
     expect(overrides.model('s1')).toBeUndefined()
     expect(overrides.modelGeneration('s1')).toBe(0)
   })
 
   it('disposeAll wipes every session (owner teardown invalidates all fences)', () => {
-    const overrides = new AdvisorSessionOverrides(false)
-    overrides.set('s1', true)
+    const overrides = new AdvisorSessionOverrides()
+    overrides.set('s1', false)
     overrides.setModel('s1', { provider: 'p', model: 'm' })
     overrides.beginModelGeneration('s1')
     overrides.beginModelGeneration('s2')
     overrides.disposeAll()
-    expect(overrides.effective('s1')).toBe(false)
+    expect(overrides.effective('s1')).toBe(true)
     expect(overrides.model('s1')).toBeUndefined()
     expect(overrides.modelGeneration('s1')).toBe(0)
     expect(overrides.modelGeneration('s2')).toBe(0)
   })
 
   it('overrideSessionIds enumerates sessions holding enable and/or pair state', () => {
-    const overrides = new AdvisorSessionOverrides(false)
-    overrides.set('a', true)
+    const overrides = new AdvisorSessionOverrides()
+    overrides.set('a', false)
     overrides.setModel('b', { provider: 'p', model: 'm' })
     expect([...overrides.overrideSessionIds()].sort()).toEqual(['a', 'b'])
     overrides.clearModel('b')
@@ -937,7 +938,7 @@ describe('advisorModelText / modelSetText / modelResetText (the /advisor model r
       kind: 'reset',
       status: baseStatus({
         enabled: true,
-        disabledReason: 'enabled but provider and model are missing — configure both to enable the advisor',
+        disabledReason: 'provider and model are missing — configure both to enable the advisor',
         runtimeStatus: 'disabled',
       }),
     })

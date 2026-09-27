@@ -34,6 +34,7 @@ import { installAdvisorSettings } from '../src/settings'
 import { AdvisorConfigGateway } from '../src/gateway'
 import type { AdvisorSessionGatewayFace, AdvisorSessionRpcResult, AdvisorSessionSnapshotWire } from '../src/gateway'
 import type { AdvisorConfig } from '../src/config'
+import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
 
 // n4 QC F-6: the single-reviewer guard is process-global; the composed tests
 // mount the real plugin, so the flag must reset between cases.
@@ -44,7 +45,6 @@ beforeEach(() => {
 /** Full entry (plugin-row) config shape, merged over the schema defaults. */
 function entryConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
   return {
-    enabled: false,
     systemPrompt: '',
     immuneTurns: 3,
     maxDeltaMessages: 60,
@@ -139,13 +139,14 @@ function agentDouble(sessionId: string, seq = 7): unknown {
 interface Harness {
   ctx: Context
   resolveModelInfo: ReturnType<typeof vi.fn>
+  entry: MemoryEntryConfig
 }
 
 /**
- * Compose the real plugin over a pairless-but-enabled global default: the
- * entry gate blocks (enabled: true without provider/model), which is exactly
- * the state where a session pin must satisfy the gate and a reset must report
- * the blocked state truthfully.
+ * Compose the real plugin over a pairless global default: the entry gate
+ * blocks (no provider/model — no config-level switch since 2026-09-26), which
+ * is exactly the state where a session pin must satisfy the gate and a reset
+ * must report the blocked state truthfully.
  */
 async function compose(): Promise<Harness> {
   const ctx = new Context()
@@ -155,12 +156,12 @@ async function compose(): Promise<Harness> {
   const resolveModelInfo = vi.fn(async () => ({ provider: 'deepseek', model: 'deepseek-chat' }))
   ctx.provide('agents', { get: (id: string) => (id === 'sess-1' ? agentDouble(id) : undefined) } as never)
   ctx.provide('llm', { stream: async () => {}, resolveModelInfo } as never)
-  const entry = new MemoryEntryConfig(entryConfig({ enabled: true }))
+  const entry = new MemoryEntryConfig(entryConfig())
   await ctx.plugin(harnessAdvisorPlugin(), entry.config)
   await vi.waitFor(() => {
     expect(ctx.reflect.props['advisor']).toEqual({ type: 'service' })
   })
-  return { ctx, resolveModelInfo }
+  return { ctx, resolveModelInfo, entry }
 }
 
 describe('composed session endpoints (apply wiring)', () => {
@@ -177,6 +178,53 @@ describe('composed session endpoints (apply wiring)', () => {
         enabled: false,
         lifetime: 'live-session',
         disabledReason: expect.any(String),
+      },
+    })
+  })
+
+  it('getSession for a session turned off by its own override carries no gate reason (off ≠ gate-blocked)', async () => {
+    const { ctx, entry } = await compose()
+    // Compose a commands registry after the plugin (lazy inject child — the
+    // same pattern the integration suite uses) and flip the session override
+    // off with the REAL handler.
+    const definitions: CommandDefinition[] = []
+    ctx.provide('commands', {
+      register: (definition: CommandDefinition): (() => void) => {
+        definitions.push(definition)
+        return () => {}
+      },
+    } as never)
+    await vi.waitFor(() => expect(definitions).toHaveLength(1))
+    // Land a pair first so `/advisor off` actually writes the override (a
+    // pairless row reports already-off without touching the override), then
+    // clear the pair: the session stays off by its OWN override while the
+    // global turns gate-blocked.
+    entry.commit(ctx, { provider: 'deepseek', model: 'deepseek-chat' })
+    const off = definitions[0]!.handler({
+      commandId: 'cmd-off' as never,
+      agent: { id: 'sess-1', session: { id: 'sess-1', seq: 7 } } as never,
+      rawInput: ' off',
+      attachments: [],
+      signal: new AbortController().signal,
+    } as never)
+    if (off instanceof Promise) throw new Error('test: /advisor handler must be synchronous')
+    expect((off as { text?: string }).text).toContain('Advisor off')
+    // Clear the pair with null (the loader double stores raw values; the
+    // bridge unwrap normalizes null → undefined, so the wire omits the keys
+    // entirely — '' would read as a DEFINED-but-empty pair on the status).
+    entry.commit(ctx, { provider: null, model: null })
+
+    const readback = await ctx.typertGateway.invoke({
+      namespace: 'advisor', method: 'getSession', args: { sessionId: 'sess-1' },
+    })
+    // The session is off by its OWN override: plain disabled — the snapshot
+    // must NOT carry the S4 gate reason (that describes the persisted pair,
+    // which the off session is not asking about).
+    expect(readback).toEqual({
+      snapshot: {
+        sessionId: 'sess-1',
+        enabled: false,
+        lifetime: 'live-session',
       },
     })
   })
@@ -274,7 +322,7 @@ describe('composed session endpoints (apply wiring)', () => {
     ctx.provide('agents', { get: (id: string) => (id === 'sess-1' ? agentDouble(id) : undefined) } as never)
     const resolveModelInfo = vi.fn(async () => { throw new Error('unknown route') })
     ctx.provide('llm', { stream: async () => {}, resolveModelInfo } as never)
-    const entry = new MemoryEntryConfig(entryConfig({ enabled: true }))
+    const entry = new MemoryEntryConfig(entryConfig())
     await ctx.plugin(harnessAdvisorPlugin(), entry.config)
     await vi.waitFor(() => expect(ctx.reflect.props['advisor']).toEqual({ type: 'service' }))
 

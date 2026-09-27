@@ -17,10 +17,16 @@
     "emitDeclarationOnly": true,
     "declaration": true,
     "sourceMap": false,
-    "rootDir": "src/client",
-    "outDir": "lib/client"
+    // rootDir is the whole src/ (not just src/client) because the flat card
+    // imports the SSOT prompt constant from src/prompts.ts (the textarea
+    // placeholder — plan dsh-advisor-web-config-flat-n10); a src/client
+    // rootDir would reject that import (TS6059). src/ keeps the emitted
+    // layout stable: src/client/** still lands in lib/client/**, and the
+    // shared prompts.ts emits only its (main build-identical) declaration.
+    "rootDir": "src",
+    "outDir": "lib"
   },
-  "include": ["src/client"],
+  "include": ["src/client", "src/prompts.ts"],
   // The base program excludes src/client (node side); this client program
   // re-includes it, so the inherited exclude must be cleared.
   "exclude": []

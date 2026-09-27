@@ -67,6 +67,11 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     const bundle = readFileSync(resolve(repo, 'lib/client.js'), 'utf8')
     expect(bundle).toContain('window.__ModuleLoader__.load(')
     expect(bundle).toContain(BUNDLE_ID)
+    // plan dsh-advisor-web-config-flat-n10 (2026-09-26): the textarea
+    // placeholder IS the built-in reviewer prompt (SSOT src/prompts.ts,
+    // inlined by esbuild as a pure string constant) — a feature-text probe
+    // pins the inlining.
+    expect(bundle).toContain('independent reviewer')
   })
 
   it('is classic-script-safe: no import.meta and no top-level ESM statements', () => {
@@ -81,6 +86,12 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
       .map((match) => match[1] as string)
     const offenders = [...new Set(requires)].filter((specifier) => !CLIENT_EXTERNALS.includes(specifier))
     expect(offenders, 'no @deepseek-ai value import outside the frozen externals table').toEqual([])
+    // plan dsh-advisor-web-config-flat-n10 (2026-09-26): the flat card no
+    // longer value-imports the native primitives library (the chevron icon
+    // died with the collapsible chrome) — the vendor requirement pins the
+    // absence, not just the purity allow-list.
+    expect(bundle, 'no require of @deepseek-ai/dsh-client-ui-primitives')
+      .not.toContain('require("@deepseek-ai/dsh-client-ui-primitives')
     // The type-only packages must never surface as runtime requires.
     for (const forbidden of [
       'dsh-client-connection', 'dsh-client-locale', 'dsh-client-ui-settings', 'dsh-client-ui-plugin-manager',
@@ -136,17 +147,20 @@ describe('client bundle contract (scripts/build-client.mjs)', () => {
     expect(bundle).toContain('dsh-advisor/advisor-card.module.css')
     // Hashed class-map export ([hash]_[local]): the card classes reach the
     // bundle as hashed names, and the map keys preserve the local names —
-    // plan dsh-advisor-plugin-config-card-ux, task 1: the chrome classes
-    // (header/body/footer/chevron/chevronOpen) replace the removed
-    // title/intro/editorActions classes; the form-field classes stay. The
-    // hash charset is lightningcss-internal and filename-dependent (the
+    // plan dsh-advisor-web-config-flat-n10 (2026-09-26): the collapsible
+    // chrome classes (card/header/chevron/pending) are GONE with the flat
+    // rebuild; the pin moves to the flat layout classes (field/footer/save).
+    // The hash charset is lightningcss-internal and filename-dependent (the
     // absolute build path feeds it), so the prefix is matched loosely.
-    expect(bundle).toMatch(/_card/)
-    expect(bundle).toMatch(/_(card|header|body|footer|chevron|field|input)/)
-    expect(bundle).toMatch(/"card": "[A-Za-z0-9_]+_card"/)
-    expect(bundle).toContain('"card"')
-    expect(bundle).toContain('"header"')
-    expect(bundle).toContain('"chevronOpen"')
+    expect(bundle).toMatch(/_(field|footer|save|input|textarea)/)
+    expect(bundle).toMatch(/"field": "[A-Za-z0-9_]+_field"/)
+    expect(bundle).toContain('"field"')
+    expect(bundle).toContain('"footer"')
+    expect(bundle).toContain('"save"')
+    // The collapsed-chrome classes must not resurface.
+    expect(bundle).not.toContain('"card"')
+    expect(bundle).not.toContain('"header"')
+    expect(bundle).not.toContain('"chevronOpen"')
   })
 
   it('declares the dsh.client client-bundle contract', () => {

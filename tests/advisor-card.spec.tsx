@@ -1,20 +1,21 @@
 // @vitest-environment jsdom
 /**
- * Advisor settings card (plan dsh-advisor-plugin-config-card-ux, task 1) —
- * component behavior over a scripted wire face (fake `settings`/`llm` api for
- * the provider directory + a fake connection RPC caller for the `advisor`
- * gateway channel), mirroring the dsh-private ui-models component specs
- * (preloaded store + @testing-library/react). This spec extends the
- * card-form suite (plan dsh-advisor-plugin-config-card) with the upstream
- * PluginCard chrome contract (plan dsh-advisor-plugin-config-card-ux, KD-U1):
- * the card is a collapsible box — a header button (name over description,
- * dirty "unsaved" pill, rotating chevron, aria-expanded/aria-label), a
- * divider under the header, then the form content and a footer with the
- * failed message + Discard/Save (upstream disabled semantics: save =
- * `!dirty || invalid || saving`, discard = `!dirty || saving`). Degraded /
- * error / loading states keep the same chrome and put the notice/error +
- * retry in the body (KD-U3, AC-3) — the documented divergence from
- * upstream's unavailable→nothing.
+ * Advisor settings card (plan dsh-advisor-plugin-config-card-ux, task 1;
+ * flat rebuild 2026-09-26 — plan dsh-advisor-web-config-flat-n10) — component
+ * behavior over a scripted wire face (fake `settings`/`llm` api for the
+ * provider directory + a fake connection RPC caller for the `advisor` gateway
+ * channel), mirroring the dsh-private ui-models component specs (preloaded
+ * store + @testing-library/react). The layout is the official settings-page
+ * language: NO collapsible box. The page renders the plugin title/description
+ * above the card (the locale meta files), so the fields tile directly —
+ * provider select, model select (ALWAYS rendered: the config-level `enabled`
+ * switch is gone, the row toggle is the switch), system-prompt textarea
+ * (placeholder = the built-in reviewer prompt), the paired number inputs —
+ * then the footer with the failed message + Discard/Save (upstream disabled
+ * semantics: save = `!dirty || invalid || saving`, discard = `!dirty ||
+ * saving`; save additionally carries `!writable`). Degraded / error states
+ * render their notice/error + retry as always-on flat blocks (KD-U3, AC-3) —
+ * there is no derived-open disclosure left, so nothing can hide them.
  *
  * The advisor config is NOT part of `settings.describe` — the card
  * reads/writes it through `rpc.call('/api', 'advisor/get' | 'advisor/set')`
@@ -25,9 +26,8 @@
  * `plugins.bundle.config` keyed slot ledger (key 'dsh-advisor' — the bundle
  * package name the Plugins page dispatches, locale 'settings.advisor') with a
  * business-face-only inject (controller + the `hooks.snapshot` store — no
- * `t`); the old
- * `settings.section` advisor registration is gone, so the section ledger
- * never holds an advisor entry (nav removal regression).
+ * `t`); the old `settings.section` advisor registration is gone, so the
+ * section ledger never holds an advisor entry (nav removal regression).
  *
  * Note on the dev-time `bindSnapshotSelector` stand-in: the host renderer
  * binds the card's `hooks.snapshot` store to its `useSnapshot` prop inside
@@ -55,6 +55,7 @@ import { AdvisorSettingsStore, refreshIfLoaded } from '../src/client/advisor-sto
 import type { AdvisorConfigView, AdvisorSettingsState, AdvisorStoreRemote } from '../src/client/advisor-store'
 import { apply, inject } from '../src/client/index'
 import { en, zh } from '../src/client/locales'
+import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from '../src/prompts'
 
 afterEach(cleanup)
 
@@ -78,10 +79,10 @@ const t: AdvisorCardProps['t'] = key => en[key as keyof typeof en]
  * Full card props the renderer would bind: the registrant's business inject
  * face (controller + useSnapshot), the framework-synthesized `t` seat, and the
  * owner's `view` — ui-plugin-manager renders `plugins.bundle.config` with
- * `view: 'page'` only, and the card is self-chromed for that one view. The
- * global standard seat (`useWorkspaces` — merged into GlobalStandardProps by
- * ui-conversation, whose SlotMap types this program pulls for the B2
- * session-header registration) is a never-called stub: the card never reads it.
+ * `view: 'page'` only. The global standard seat (`useWorkspaces` — merged
+ * into GlobalStandardProps by ui-conversation, whose SlotMap types this
+ * program pulls for the B2 session-header registration) is a never-called
+ * stub: the card never reads it.
  */
 function cardProps(controller: AdvisorSettingsStore, useSnapshot: SnapshotSelectorHook<AdvisorSettingsState>): AdvisorCardProps {
   return {
@@ -110,6 +111,11 @@ function failResult(message: string): RpcResult<unknown> {
 /** The wire config the gateway returns when nothing is configured. */
 function defaultConfig(): AdvisorConfigView {
   return { enabled: false, systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 }
+}
+
+/** A complete, gate-passing wire config (the pair is required — no switch). */
+function pairedConfig(): AdvisorConfigView {
+  return { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 }
 }
 
 const DEEPSEEK: LlmConfigurableProvider = {
@@ -215,23 +221,6 @@ async function mountCard(options: Parameters<typeof scriptedApi>[0] = {}, preloa
   const props = cardProps(controller, bindSnapshotSelector(controller.store))
   const view = render(<AdvisorCard {...props} />)
   return { view, controller, scripted, props }
-}
-
-/**
- * The card's header disclosure button. The accessible name is the upstream
- * aria-label — `collapse/expand: title` — which flips with the open state.
- */
-function headerButton(open: boolean): HTMLElement {
-  const label = `${open ? en.collapse : en.expand}: ${en.title}`
-  return screen.getByRole('button', { name: new RegExp(`^${label}$`) })
-}
-
-/** Toggle the card open/closed through its header button. */
-function toggleCard(): void {
-  const button = screen.getByRole('button', {
-    name: new RegExp(`^(${en.expand}|${en.collapse}): ${en.title}$`),
-  })
-  fireEvent.click(button)
 }
 
 /**
@@ -427,8 +416,6 @@ describe('AdvisorCard invalidation refresh (plan 003 / residual R3)', () => {
     expect(scripted.describe).not.toHaveBeenCalled()
   })
 
-
-
   it('empties the remote/reset handler sets when the effect disposer runs (teardown)', () => {
     const scripted = scriptedApi()
     const { effectDisposers, remoteHandlers, resetHandlers } = applyAndController(scripted)
@@ -448,76 +435,41 @@ describe('AdvisorCard invalidation refresh (plan 003 / residual R3)', () => {
   })
 })
 
-describe('AdvisorCard chrome (upstream PluginCard contract)', () => {
-  it('renders collapsed by default: the header copy and chevron, no form', async () => {
-    const { view, props } = await mountCard()
-    // Collapsed: only the header button — name over description + chevron.
-    const header = headerButton(false)
-    expect(header.getAttribute('aria-expanded')).toBe('false')
-    expect(header.getAttribute('aria-label')).toBe(`${en.expand}: ${en.title}`)
-    expect(within(header).getByText(en.title)).toBeTruthy()
-    expect(within(header).getByText(en.intro)).toBeTruthy()
-    // The chevron rotation is a CSS-module class toggle — jsdom resolves the
-    // module to `{}`, so the literal `chevronOpen` class is asserted at the
-    // bundle level (client-build.test.ts class-map assertion) and through the
-    // substitutes here: the svg presence + aria-expanded + the body toggle
-    // (M-1, T1 task review — the class rotation itself is not DOM-assertable
-    // in jsdom).
-    expect(header.querySelector('svg')).toBeTruthy() // the chevron icon
-    expect(screen.queryByLabelText(en.enabled)).toBeNull()
-    expect(screen.queryByRole('button', { name: en.save })).toBeNull()
-    expect(screen.queryByRole('button', { name: en.discard })).toBeNull()
-
-    // Expanding reveals the plain fields and the footer actions.
-    toggleCard()
-    view.rerender(<AdvisorCard {...props} />)
-    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
-    expect(headerButton(true).getAttribute('aria-label')).toBe(`${en.collapse}: ${en.title}`)
-    const toggle = screen.getByLabelText(en.enabled) as HTMLInputElement
-    expect(toggle.checked).toBe(false)
+describe('AdvisorCard flat layout (official settings-page language)', () => {
+  it('tiles the form directly: no header, no disclosure, no enable checkbox', async () => {
+    const { view } = await mountCard()
+    // Flat: the fields render without any interaction — no disclosure chrome
+    // of any kind (nothing to expand), no enable checkbox (the config-level
+    // switch is gone; the row toggle is the switch), and provider/model are
+    // ALWAYS present.
+    expect(view.container.querySelector('[aria-expanded]')).toBeNull()
+    // No checkbox input exists anywhere (the enable toggle is gone).
+    expect(view.container.querySelector('input[type="checkbox"]')).toBeNull()
+    expect(screen.getByLabelText(en.provider)).toBeTruthy()
+    expect(screen.getByLabelText(en.model)).toBeTruthy()
     expect(screen.getByLabelText(en.systemPrompt)).toBeTruthy()
     expect(screen.getByLabelText(en.immuneTurns)).toBeTruthy()
     expect(screen.getByLabelText(en.maxDeltaMessages)).toBeTruthy()
-    expect(screen.queryByLabelText(en.provider)).toBeNull()
-    expect(screen.queryByLabelText(en.model)).toBeNull()
+    expect(screen.getByRole('button', { name: en.save })).toBeTruthy()
+    expect(screen.getByRole('button', { name: en.discard })).toBeTruthy()
+    // The hint under the textarea carries the leave-empty contract.
+    expect(screen.getByText(en.systemPromptHint)).toBeTruthy()
   })
 
-  it('flips aria-expanded and toggles the body on repeated header clicks', async () => {
-    await mountCard()
-    expect(headerButton(false).getAttribute('aria-expanded')).toBe('false')
-    toggleCard()
-    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getByLabelText(en.enabled)).toBeTruthy()
-    toggleCard()
-    expect(headerButton(false).getAttribute('aria-expanded')).toBe('false')
-    expect(screen.queryByLabelText(en.enabled)).toBeNull()
-  })
-
-  it('shows the unsaved pill after an edit and keeps it while collapsed', async () => {
-    const { view, props } = await mountCard()
-    toggleCard()
-    fireEvent.change(screen.getByLabelText(en.systemPrompt), { target: { value: 'review terser' } })
+  it('renders nothing while the first load is in flight (no chrome to hold the space)', async () => {
+    const { view, controller, props } = await mountCard({}, false)
+    // Idle → the mount triggers load() and the flat card renders null until
+    // the snapshot settles (KD-U3's empty body died with the chrome).
+    expect(view.container.textContent).toBe('')
+    await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
     view.rerender(<AdvisorCard {...props} />)
-    expect(screen.getByText(en.unsaved)).toBeTruthy()
-    // Staged edits outlive collapsing — the pill rides the header (upstream).
-    toggleCard()
-    expect(screen.getByText(en.unsaved)).toBeTruthy()
-  })
-
-  it('clears the unsaved pill after discard', async () => {
-    const { view, props } = await mountCard()
-    toggleCard()
-    fireEvent.change(screen.getByLabelText(en.systemPrompt), { target: { value: 'review terser' } })
-    view.rerender(<AdvisorCard {...props} />)
-    expect(screen.getByText(en.unsaved)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: en.discard }))
-    view.rerender(<AdvisorCard {...props} />)
-    expect(screen.queryByText(en.unsaved)).toBeNull()
+    expect(screen.getByLabelText(en.provider)).toBeTruthy()
   })
 
   it('disables Save and Discard when clean, enables both once the draft is dirty', async () => {
-    const { view, props } = await mountCard()
-    toggleCard()
+    // A gate-passing seed (complete pair): the dirty terms are the only
+    // blockers, so the upstream semantics are observable in isolation.
+    const { view, props } = await mountCard({ config: pairedConfig() })
     // Clean (no edits): neither action is offered (upstream semantics —
     // save = !dirty || invalid || saving; discard = !dirty || saving).
     expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(true)
@@ -527,6 +479,15 @@ describe('AdvisorCard chrome (upstream PluginCard contract)', () => {
     view.rerender(<AdvisorCard {...props} />)
     expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false)
     expect((screen.getByRole('button', { name: en.discard }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('shows the placeholder as the built-in reviewer prompt (SSOT src/prompts.ts)', async () => {
+    await mountCard()
+    const prompt = screen.getByLabelText(en.systemPrompt) as HTMLTextAreaElement
+    expect(prompt.placeholder).toBe(DEFAULT_ADVISOR_SYSTEM_PROMPT)
+    expect(prompt.placeholder).toContain('independent reviewer')
+    // The hint below spells out the leave-empty contract.
+    expect(screen.getByText(en.systemPromptHint)).toBeTruthy()
   })
 })
 
@@ -539,79 +500,32 @@ describe('AdvisorCard', () => {
     await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
   })
 
-  it('starts collapsed on a real first mount (idle store): header only, no body', async () => {
-    // I-1 regression (T1 task review): the mount-time snapshot is the store
-    // default — 'idle' with advisorPresent=false — and the old mount-time
-    // useState initializer read that as "cannot render the form", starting the
-    // healthy card OPEN with an empty body. On a real first mount (no
-    // preload) the card must render COLLAPSED (AC-1, Task 3 GUI ①): the
-    // header button only, aria-expanded=false, no body/form at all.
-    await mountCard({}, false)
-    const header = headerButton(false)
-    expect(header.getAttribute('aria-expanded')).toBe('false')
-    expect(header.getAttribute('aria-label')).toBe(`${en.expand}: ${en.title}`)
-    expect(header.querySelector('svg')).toBeTruthy() // the chevron icon
-    expect(screen.queryByLabelText(en.enabled)).toBeNull()
-    expect(screen.queryByRole('button', { name: en.save })).toBeNull()
-    expect(screen.queryByRole('button', { name: en.discard })).toBeNull()
-    expect(screen.queryByText(en.namespaceUnavailable)).toBeNull()
-    expect(screen.queryByText(`${en.loadFailed}:`)).toBeNull()
-  })
-
-  it('keeps the healthy card collapsed through load; the form appears only on header click', async () => {
-    // I-1 regression: a real first mount (idle store) stays collapsed while
-    // the load is in flight AND after it resolves to a healthy ready state —
-    // the form appears only once the user clicks the header (AC-1).
-    const { view, controller, props } = await mountCard({}, false)
-    // While the load is in flight: header only, no open empty body (M-2).
-    expect(headerButton(false).getAttribute('aria-expanded')).toBe('false')
-    expect(screen.queryByLabelText(en.enabled)).toBeNull()
-    // The load resolves to ready + advisorPresent → still collapsed (no click
-    // yet — the derived open must not follow the load result).
-    await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
-    view.rerender(<AdvisorCard {...props} />)
-    expect(headerButton(false).getAttribute('aria-expanded')).toBe('false')
-    expect(screen.queryByLabelText(en.enabled)).toBeNull()
-    expect(screen.queryByText(en.namespaceUnavailable)).toBeNull()
-    // The user's click reveals the form.
-    toggleCard()
-    view.rerender(<AdvisorCard {...props} />)
-    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getByLabelText(en.enabled)).toBeTruthy()
-  })
-
-  it('shows the gateway notice open without any click on a real first mount when get fails', async () => {
-    // I-1 regression + AC-3: on a real first mount (idle store) whose gateway
-    // get fails, the card must end up with the notice body VISIBLE without any
-    // interaction (derived open — the notice must appear without a click) —
-    // and the header click must NOT hide it (the degraded body is always
-    // visible; the documented divergence from upstream's unavailable→nothing).
+  it('shows the gateway notice without any click when get fails (KD-G5, always-on)', async () => {
+    // The gateway channel is down: the card must not present defaults + a
+    // writable Save that the host would refuse — the flat notice replaces the
+    // form on every render (AC-3: no interaction, no disclosure to hide it).
     const { view, controller, props } = await mountCard({ config: null }, false)
     await waitFor(() => {
       expect(controller.store.getSnapshot().status).toBe('ready')
       expect(controller.store.getSnapshot().advisorPresent).toBe(false)
     })
     view.rerender(<AdvisorCard {...props} />)
-    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
     expect(screen.queryByRole('button', { name: en.save })).toBeNull()
-    // Clicking the header cannot collapse the degraded notice away.
-    toggleCard()
-    view.rerender(<AdvisorCard {...props} />)
-    expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
-    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
+    expect(screen.queryByLabelText(en.provider)).toBeNull()
+    // Retry is the only action.
+    expect(screen.getByRole('button', { name: en.retry })).toBeTruthy()
   })
 
   it('keeps the degraded notice visible through a background refresh (qc1 S-2)', async () => {
     // A pushed invalidation refresh flips a degraded card to status 'loading';
-    // the derived open must NOT collapse the AC-3 notice for the refresh
-    // window — the store's latched `degraded` holds the disclosure open until
-    // the refresh settles back to degraded.
+    // the store's latched `degraded` keeps the notice up for the refresh
+    // window — there is no disclosure left, so the flat branch derives from
+    // the latch exactly as before.
     const scripted = scriptedApi({ config: null })
     const controller = new AdvisorSettingsStore(scripted.remote, scripted.rpc, schema)
     await controller.load() // settled degraded: ready + advisorPresent=false
     const view = render(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
-    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
 
     // The invalidation refresh: hold the gateway get pending so the snapshot
@@ -621,10 +535,9 @@ describe('AdvisorCard', () => {
       new Promise<RpcResult<{ config: AdvisorConfigView }>>((resolve) => { releaseGet = resolve }),
     )
     refreshIfLoaded(controller)
-    // load() flipped status synchronously; the latch keeps the notice open.
+    // load() flipped status synchronously; the latch keeps the notice up.
     expect(controller.store.getSnapshot().status).toBe('loading')
     view.rerender(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
-    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
 
     // The refresh settles back to degraded: the notice persists.
@@ -632,41 +545,79 @@ describe('AdvisorCard', () => {
     await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
     view.rerender(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
     expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
-    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
   })
 
-  it('does not latch userOpen when the header is clicked while degraded — recovery stays collapsed (qc3 S-1)', async () => {
-    // While degraded the derived open is forced true and the header click is
-    // a NO-OP: it must not silently toggle userOpen (which would pre-open the
-    // recovered form) and aria-expanded must stay true (no false
-    // collapse announcement).
+  it('recovers from the degraded notice straight to the flat form when the gateway comes back', async () => {
     const scripted = scriptedApi({ config: null })
     const controller = new AdvisorSettingsStore(scripted.remote, scripted.rpc, schema)
     await controller.load()
     const view = render(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
-    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
-    // Clicking the header while degraded changes nothing.
-    toggleCard()
-    view.rerender(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
-    expect(headerButton(true).getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getByText(en.namespaceUnavailable)).toBeTruthy()
-    // The gateway recovers: the healthy card must still start collapsed —
-    // userOpen stayed false through the degraded clicks.
+    // The gateway recovers: the healthy form renders without any interaction
+    // (no disclosure state could have latched it away — the chrome is gone).
     scripted.get.mockImplementation(() => Promise.resolve(okResult({ config: defaultConfig() })))
     await controller.load()
     view.rerender(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
-    expect(headerButton(false).getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByText(en.namespaceUnavailable)).toBeNull()
-    expect(screen.queryByLabelText(en.enabled)).toBeNull()
+    expect(screen.getByLabelText(en.provider)).toBeTruthy()
+    expect(screen.getByLabelText(en.model)).toBeTruthy()
   })
 
-  it('reveals required provider/model selects when enabled and blocks Save with the gate copy', async () => {
-    const { view, props } = await mountCard()
-    toggleCard()
-    fireEvent.click(screen.getByLabelText(en.enabled))
+  it('holds the mounted form through a background refresh (fields disabled, no unmount blink)', async () => {
+    const { controller, scripted, props, view } = await mountCard({ config: pairedConfig() })
+    expect(screen.getByLabelText(en.provider)).toBeTruthy()
+    // Hold the refresh's gateway get pending: the snapshot flips to 'loading'
+    // while the last settled providers/draft stay in place.
+    let releaseGet!: (value: RpcResult<{ config: AdvisorConfigView }>) => void
+    scripted.get.mockReturnValueOnce(
+      new Promise<RpcResult<{ config: AdvisorConfigView }>>((resolve) => { releaseGet = resolve }),
+    )
+    refreshIfLoaded(controller)
+    expect(controller.store.getSnapshot().status).toBe('loading')
     view.rerender(<AdvisorCard {...props} />)
-    expect(screen.getByLabelText(en.enabled)).toBeTruthy()
+    // The form did NOT unmount for the refresh window: the provider select is
+    // still in the document and disabled for the hold.
+    expect((screen.getByLabelText(en.provider) as HTMLSelectElement).disabled).toBe(true)
+    expect(screen.getByLabelText(en.model)).toBeTruthy()
+    expect(screen.getByRole('button', { name: en.save })).toBeTruthy()
+    // The refresh settles: the form returns to interactive.
+    releaseGet(okResult({ config: pairedConfig() }))
+    await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
+    view.rerender(<AdvisorCard {...props} />)
+    expect((screen.getByLabelText(en.provider) as HTMLSelectElement).disabled).toBe(false)
+  })
+
+  it('keeps the saved notice visible through the post-apply reload window', async () => {
+    const { controller, scripted, props, view } = await mountCard({ config: pairedConfig() })
+    // The post-apply reload's get hangs: apply() sets 'saved' BEFORE the
+    // reload, and the store keeps applyState through the loading window —
+    // the hold branch must keep both the notice and the form mounted.
+    let releaseGet!: (value: RpcResult<{ config: AdvisorConfigView }>) => void
+    scripted.get.mockReturnValueOnce(
+      new Promise<RpcResult<{ config: AdvisorConfigView }>>((resolve) => { releaseGet = resolve }),
+    )
+    controller.setModel('ds-b')
+    const applying = controller.apply()
+    await waitFor(() => {
+      expect(controller.store.getSnapshot().applyState.kind).toBe('saved')
+      expect(controller.store.getSnapshot().status).toBe('loading')
+    })
+    view.rerender(<AdvisorCard {...props} />)
+    expect(screen.getByRole('status').textContent).toBe(en.saved)
+    expect(screen.getByLabelText(en.provider)).toBeTruthy()
+    expect((screen.getByLabelText(en.provider) as HTMLSelectElement).disabled).toBe(true)
+    // The reload settles: healthy ready again, the landed feedback still up.
+    releaseGet(okResult({ config: { ...pairedConfig(), model: 'ds-b' } }))
+    await applying
+    await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
+    view.rerender(<AdvisorCard {...props} />)
+    expect(screen.getByRole('status').textContent).toBe(en.saved)
+  })
+
+  it('renders the provider/model selects unconditionally and blocks Save with the gate copy', async () => {
+    const { view, props } = await mountCard()
+    // No enable toggle to flip — the selects are always here, and the
+    // unconditional KD-S4 gate blocks Save while the pair is incomplete.
     expect(screen.getByLabelText(en.provider)).toBeTruthy()
     expect(screen.getByLabelText(en.model)).toBeTruthy()
     // Progressive hints: the provider hint leads while both are missing; the
@@ -677,10 +628,7 @@ describe('AdvisorCard', () => {
   })
 
   it('lists only configured providers from the store join', async () => {
-    const { view, props } = await mountCard()
-    toggleCard()
-    fireEvent.click(screen.getByLabelText(en.enabled))
-    view.rerender(<AdvisorCard {...props} />)
+    await mountCard()
     const select = screen.getByLabelText(en.provider) as HTMLSelectElement
     const labels = within(select).getAllByRole('option').map(option => option.textContent)
     expect(labels).toContain('DeepSeek')
@@ -689,10 +637,7 @@ describe('AdvisorCard', () => {
   })
 
   it('shows the no-configured-providers guidance when the join is empty', async () => {
-    const { view, props } = await mountCard({ entries: [ZOMBIE] })
-    toggleCard()
-    fireEvent.click(screen.getByLabelText(en.enabled))
-    view.rerender(<AdvisorCard {...props} />)
+    await mountCard({ entries: [ZOMBIE] })
     expect(screen.getByText(en.noProviders)).toBeTruthy()
   })
 
@@ -702,7 +647,6 @@ describe('AdvisorCard', () => {
     const { view, props } = await mountCard({
       config: { enabled: true, provider: 'zombie', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    toggleCard()
     expect(screen.getByText(en.staleProvider)).toBeTruthy()
     // The warning does not gate the save: once an edit is staged the save is
     // enabled even while the provider is stale (keep or reselect — the
@@ -717,10 +661,9 @@ describe('AdvisorCard', () => {
   })
 
   it('warns when the stored model is no longer offered by the chosen provider', async () => {
-    const { view, controller, props } = await mountCard({
+    const { controller, props, view } = await mountCard({
       config: { enabled: true, provider: 'deepseek-official', model: 'ds-c', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
-    toggleCard()
     // load() kicks the model resolution for the stored provider; wait for it.
     await waitFor(() => {
       expect(controller.store.getSnapshot().modelsByProvider['deepseek-official']?.length).toBe(2)
@@ -731,10 +674,7 @@ describe('AdvisorCard', () => {
   })
 
   it('links the model select to the chosen provider and shows guidance when it has no models', async () => {
-    const { view, controller, props } = await mountCard()
-    toggleCard()
-    fireEvent.click(screen.getByLabelText(en.enabled))
-    view.rerender(<AdvisorCard {...props} />)
+    const { controller, props, view } = await mountCard()
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek-official' } })
     view.rerender(<AdvisorCard {...props} />)
     await waitFor(() => {
@@ -756,10 +696,7 @@ describe('AdvisorCard', () => {
   })
 
   it('applies the full flow and shows the saved feedback with the gateway set payload', async () => {
-    const { view, controller, scripted, props } = await mountCard()
-    toggleCard()
-    fireEvent.click(screen.getByLabelText(en.enabled))
-    view.rerender(<AdvisorCard {...props} />)
+    const { controller, scripted, props, view } = await mountCard()
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek-official' } })
     view.rerender(<AdvisorCard {...props} />)
     // The model select only enables once its options resolve.
@@ -774,9 +711,10 @@ describe('AdvisorCard', () => {
     fireEvent.click(screen.getByRole('button', { name: en.save }))
     await waitFor(() => expect(scripted.set).toHaveBeenCalled())
     // The write is a minimal patch over the gateway channel: only the changed
-    // keys (enabled + the new pair); the untouched scalars stay out.
+    // keys (the new pair — there is no `enabled` key to write); the untouched
+    // scalars stay out.
     expect(scripted.call).toHaveBeenCalledWith('/api', 'advisor/set', {
-      args: { patch: { enabled: true, provider: 'deepseek-official', model: 'ds-b' } },
+      args: { patch: { provider: 'deepseek-official', model: 'ds-b' } },
     })
     await waitFor(() => expect(controller.store.getSnapshot().applyState.kind).toBe('saved'))
     view.rerender(<AdvisorCard {...props} />)
@@ -792,12 +730,9 @@ describe('AdvisorCard', () => {
     // saving) pins the N-2 invariant — Discard is disabled while the gateway
     // write is pending, so a mid-apply discard cannot be triggered from the
     // UI.
-    const { view, controller, scripted, props } = await mountCard()
+    const { controller, scripted, props, view } = await mountCard()
     let release!: (value: RpcResult<{ config: AdvisorConfigView }>) => void
     scripted.set.mockReturnValueOnce(new Promise<RpcResult<{ config: AdvisorConfigView }>>((resolve) => { release = resolve }))
-    toggleCard()
-    fireEvent.click(screen.getByLabelText(en.enabled))
-    view.rerender(<AdvisorCard {...props} />)
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek-official' } })
     view.rerender(<AdvisorCard {...props} />)
     await waitFor(() => {
@@ -813,30 +748,24 @@ describe('AdvisorCard', () => {
     expect((screen.getByRole('button', { name: en.discard }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: en.saving }) as HTMLButtonElement).disabled).toBe(true)
     // Release the write; the flow completes to saved.
-    release(okResult({ config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 } }))
+    release(okResult({ config: pairedConfig() }))
     await waitFor(() => expect(controller.store.getSnapshot().applyState.kind).toBe('saved'))
   })
 
   it('discards the draft edits back to the last-known host config', async () => {
-    // The store seed pins enabled+provider+model; the user edits the provider
-    // and toggles enabled off — discard must rewind the draft to the seed (no
-    // gateway write).
-    const { view, controller, scripted, props } = await mountCard({
-      config: { enabled: true, provider: 'deepseek-official', model: 'ds-a', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    // The store seed pins provider+model; the user edits the provider —
+    // discard must rewind the draft to the seed (no gateway write).
+    const { controller, scripted, props, view } = await mountCard({
+      config: pairedConfig(),
     })
-    toggleCard()
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'openai' } })
     view.rerender(<AdvisorCard {...props} />)
-    fireEvent.click(screen.getByLabelText(en.enabled))
-    view.rerender(<AdvisorCard {...props} />)
-    expect(controller.store.getSnapshot().draft.enabled).toBe(false)
     expect(controller.store.getSnapshot().draft.provider).toBe('openai')
     // The discard button is disabled while the form is clean (!dirty ||
-    // saving); the edits above make the draft dirty, enabling the click that
+    // saving); the edit above makes the draft dirty, enabling the click that
     // rewinds the draft.
     fireEvent.click(screen.getByRole('button', { name: en.discard }))
     view.rerender(<AdvisorCard {...props} />)
-    expect(controller.store.getSnapshot().draft.enabled).toBe(true)
     expect(controller.store.getSnapshot().draft.provider).toBe('deepseek-official')
     expect(controller.store.getSnapshot().draft.model).toBe('ds-a')
     // Discard is a client-side rewind — no gateway write happened.
@@ -849,11 +778,8 @@ describe('AdvisorCard', () => {
   })
 
   it('shows the wire failure message when Save is rejected', async () => {
-    const { view, controller, scripted, props } = await mountCard()
+    const { controller, scripted, props, view } = await mountCard()
     scripted.set.mockReturnValueOnce(Promise.resolve(failResult('host refused')))
-    toggleCard()
-    fireEvent.click(screen.getByLabelText(en.enabled))
-    view.rerender(<AdvisorCard {...props} />)
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek-official' } })
     view.rerender(<AdvisorCard {...props} />)
     // The model select only enables once its options resolve.
@@ -874,16 +800,8 @@ describe('AdvisorCard', () => {
     expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('shows the system-prompt placeholder telling the user empty means default', async () => {
-    await mountCard()
-    toggleCard()
-    const prompt = screen.getByLabelText(en.systemPrompt) as HTMLTextAreaElement
-    expect(prompt.placeholder).toBe(en.systemPromptPlaceholder)
-  })
-
   it('keeps a cleared number input empty instead of forcing 0', async () => {
-    const { view, props } = await mountCard()
-    toggleCard()
+    const { props, view } = await mountCard()
     const input = screen.getByLabelText(en.immuneTurns) as HTMLInputElement
     expect(input.value).toBe('3')
     fireEvent.change(input, { target: { value: '' } })
@@ -896,22 +814,20 @@ describe('AdvisorCard', () => {
     expect((screen.getByLabelText(en.maxDeltaMessages) as HTMLInputElement).value).toBe('')
   })
 
-  it('shows the read-only notice in the body and disables writes when the settings provider is read-only', async () => {
+  it('shows the read-only notice flat and disables writes when the settings provider is read-only', async () => {
     await mountCard({ writable: false })
-    toggleCard()
     expect(screen.getByText(en.readOnly)).toBeTruthy()
     expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByLabelText(en.enabled) as HTMLInputElement).disabled).toBe(true)
+    expect((screen.getByLabelText(en.provider) as HTMLSelectElement).disabled).toBe(true)
   })
 
-  it('shows the config-channel notice in the card chrome and never offers Save when the gateway is unreachable', async () => {
+  it('shows the config-channel notice flat and never offers Save when the gateway is unreachable', async () => {
     // The gateway channel is down (get fails — no settings service on the
     // host, or the channel is unreachable): the card must not present
     // defaults + a writable Save that the host would refuse — the notice
-    // replaces it (KD-G5, the n2-era C-1 mitigation). The card stays visible
-    // with the chrome and the notice in the body (KD-U3/AC-3, documented
-    // divergence from upstream's unavailable→nothing).
-    await mountCard({ config: null })
+    // replaces it (KD-G5, the n2-era C-1 mitigation), rendered as an
+    // always-on flat block (KD-U3/AC-3).
+    const { view } = await mountCard({ config: null })
     const notice = screen.getByText(en.namespaceUnavailable)
     expect(notice).toBeTruthy()
     expect(notice.textContent).not.toMatch(/not exposed|未暴露/)
@@ -923,7 +839,8 @@ describe('AdvisorCard', () => {
     expect(notice.textContent).toMatch(/cannot supply provider\/model/i)
     expect(screen.queryByRole('button', { name: en.save })).toBeNull()
     expect(screen.queryByRole('button', { name: en.discard })).toBeNull()
-    expect(screen.queryByLabelText(en.enabled)).toBeNull()
+    // No checkbox input exists anywhere (the enable toggle is gone).
+    expect(view.container.querySelector('input[type="checkbox"]')).toBeNull()
     expect(screen.queryByLabelText(en.provider)).toBeNull()
   })
 
@@ -942,14 +859,13 @@ describe('AdvisorCard', () => {
     // saved line — the notice explains the channel is down, the write is not
     // silently masked.
     const scripted = scriptedApi()
-    // get call 1 (initial load) succeeds; the post-apply reload get fails.
-    scripted.get.mockImplementationOnce(() => Promise.resolve(okResult({ config: defaultConfig() })))
+    // get call 1 (initial load) succeeds with a gate-passing pair; the
+    // post-apply reload get fails.
+    scripted.get.mockImplementationOnce(() => Promise.resolve(okResult({ config: pairedConfig() })))
     scripted.get.mockImplementationOnce(() => Promise.resolve(failResult('advisor gateway is not ready')))
     const controller = new AdvisorSettingsStore(scripted.remote, scripted.rpc, schema)
     await controller.load()
-    controller.setEnabled(true)
-    controller.setProvider('deepseek-official')
-    controller.setModel('ds-a')
+    controller.setModel('ds-b') // a real edit so the patch is non-empty
     await controller.apply()
     render(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
     expect(screen.getByText(en.saved)).toBeTruthy()
@@ -957,7 +873,7 @@ describe('AdvisorCard', () => {
     expect(screen.queryByRole('button', { name: en.save })).toBeNull()
   })
 
-  it('renders the load failure in the card chrome with a working retry', async () => {
+  it('renders the load failure flat with a working retry that recovers the form', async () => {
     const scripted = scriptedApi()
     scripted.describe.mockRejectedValueOnce(new Error('transport down'))
     const controller = new AdvisorSettingsStore(scripted.remote, scripted.rpc, schema)
@@ -967,15 +883,9 @@ describe('AdvisorCard', () => {
     fireEvent.click(screen.getByRole('button', { name: en.retry }))
     await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
     view.rerender(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
-    // The error body was derived-open while degraded; once the retry recovers
-    // the healthy card, the derivation no longer forces it open (I-1 — the
-    // disclosure follows userOpen for a healthy card), so the card is
-    // collapsed again until the user expands it.
-    expect(headerButton(false).getAttribute('aria-expanded')).toBe('false')
-    expect(screen.queryByLabelText(en.enabled)).toBeNull()
-    // The recovered form is still reachable through the header.
-    toggleCard()
-    view.rerender(<AdvisorCard {...cardProps(controller, bindSnapshotSelector(controller.store))} />)
-    expect(screen.getByLabelText(en.enabled)).toBeTruthy()
+    // The recovered healthy card renders its flat form directly.
+    expect(screen.queryByText(`${en.loadFailed}:`)).toBeNull()
+    expect(screen.getByLabelText(en.provider)).toBeTruthy()
+    expect(screen.getByLabelText(en.model)).toBeTruthy()
   })
 })

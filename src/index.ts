@@ -31,11 +31,14 @@
  * (`ctx.get('tuiSettingsSections') !== undefined`), so the hint names the TUI
  * `/settings` Advisor section as a write path exactly while the seam is
  * mounted; the readback itself stays session-less and read-only.
- * Settings (plan dsh-advisor-settings-n2): the plugin-row entry config's six
+ * Settings (plan dsh-advisor-settings-n2): the plugin-row entry config's five
  * live fields are schema-volatile (`src/config.ts`), read live through the
  * bridge source (`src/settings.ts`); committed volatile edits (Loader
  * `loader/volatile-update`) re-apply derived state (immuneTurns /
- * maxDeltaMessages / per-session runtimes) without a restart.
+ * maxDeltaMessages / per-session runtimes) without a restart. There is no
+ * config-level `enabled` key (2026-09-26): the plugin-row enable/disable
+ * toggle IS the master switch, and the per-session `/advisor` override
+ * defaults to ON (`override ?? true`).
  * Config gateway (plan dsh-advisor-settings-gateway-n5): `apply` also
  * registers the host-side `AdvisorConfigGateway` (`src/gateway.ts`) — the
  * `/api/advisor/get` + `/api/advisor/set` endpoints (explicit
@@ -169,7 +172,7 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // plugin row at load; the gate resolves to disabled-with-reason instead.
   //
   // T1-settings (plan dsh-advisor-settings-n2): the plugin-row entry config's
-  // six live fields are schema-volatile (0.1.7-rc.1). The runtime reads the
+  // five live fields are schema-volatile (0.1.7-rc.1). The runtime reads the
   // LIVE values through the bridge source (per-field volatile reference
   // unwrap); the Loader commits edits into those references without a remount
   // and announces them via `loader/volatile-update`. The hard gate is applied
@@ -263,21 +266,31 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   }
   // Spec §5.3 — the ONE effective resolver: (1) the global shape is validated
   // first (a malformed entry still throws → safeFallback: fail closed for
-  // every session); (2) enable = session enable override ?? global; (3) route
-  // = the session's COMPLETE modelOverride pair ?? the composed global pair —
-  // the pair is atomic, so the levels are never merged; (4) the explicit pair
-  // gate (§5.2) applies AFTER this resolution on the effective values: a
-  // complete session pair satisfies a pairless global default, while an
-  // invalid global schema can never be bypassed.
+  // every session); (2) enable = session enable override ?? true — a running
+  // row is enabled (no config-level switch since its 2026-09-26 removal), so
+  // only an explicit `/advisor off` override forces `enabled: false` on the
+  // POST-gate resolution; (3) route = the session's COMPLETE modelOverride
+  // pair ?? the composed global pair — the pair is atomic, so the levels are
+  // never merged; (4) the explicit pair gate (§5.2) applies on the effective
+  // values: a complete session pair satisfies a pairless global default, while
+  // an invalid global schema can never be bypassed.
   const safeEffective = (sessionId: string): ResolvedAdvisorConfig => {
     try {
       const source = sourceConfig()
       const pair = overrides.model(sessionId)
-      return resolveAdvisorConfig({
+      const resolved = resolveAdvisorConfig({
         ...source,
-        enabled: effectiveEnabled(sessionId),
         ...(pair === undefined ? {} : { provider: pair.provider, model: pair.model }),
       })
+      // A session turned off by its own override carries NO gate reason: the
+      // S4 reason describes the persisted pair, which the off session isn't
+      // asking about (`/advisor status` shows "disabled" plainly; the global
+      // readback — safeResolved — keeps the reason). Destructure-strip so the
+      // off branch's contract is the absence of the key, not an
+      // undefined-valued one.
+      if (effectiveEnabled(sessionId)) return resolved
+      const { disabledReason: _unused, ...rest } = resolved
+      return { ...rest, enabled: false }
     } catch (error) {
       return safeFallback(error instanceof Error ? error.message : String(error))
     }
@@ -288,18 +301,16 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   })
 
   // T7: the per-session override mechanism — `/advisor on|off|toggle` write
-  // here and the runtime gate consults `override ?? config.enabled`, so the
+  // here and the runtime gate consults `override ?? true` (a running row is
+  // enabled; no config-level switch since its 2026-09-26 removal), so the
   // commands start/stop per-session runtimes WITHOUT touching the persisted
   // config (spec §4 mapping — omp `/advisor` semantics). Ephemeral: entries
-  // are cleared on `agent/disposed` / `session/disposed` below. Seeded with
-  // the LIVE config switch read through the bridge (the raw `config` fields
-  // are volatile references on a Loader composition — an unwrapped snapshot
-  // shares the source with `safeResolved`): a config-enabled-but-gate-blocked
-  // session (enabled without provider/model) then re-derives the
-  // disabled-with-reason through the resolver, so `/advisor status` shows the
-  // reason (spec §5.2; qc3 I-1) — the gate itself still blocks every runtime
-  // (the resolver is the SSOT for the gate).
-  const overrides = new AdvisorSessionOverrides(bridge.source().enabled)
+  // are cleared on `agent/disposed` / `session/disposed` below. A session
+  // enabled without a usable pair re-derives the disabled-with-reason through
+  // the resolver, so `/advisor status` shows the reason (spec §5.2; qc3 I-1)
+  // — the gate itself still blocks every runtime (the resolver is the SSOT
+  // for the gate).
+  const overrides = new AdvisorSessionOverrides()
   const effectiveEnabled = (sessionId: string): boolean => overrides.effective(sessionId)
   // Live-path alias: every consumer reads the effective config through the
   // safe wrapper (qc2 W-1 — a throwing resolver must not break the
@@ -548,24 +559,15 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // (qc3 W-1 / qc1 W-2: an immuneTurns/maxDeltaMessages-only edit must not
   // abort in-flight advisor calls or drop backlogs). The S4 gate is
   // re-applied by the resolver on every read, so a config edit can never
-  // start a gated model call (SSOT unchanged); the config-level fallback
-  // switch follows the live source so new sessions pick up an enabled edit
-  // immediately. An entry config the resolver rejects (qc2 W-1 — unknown
-  // key) stops the advisor without wedging the re-apply path, and the
-  // last-good latches stay until the config is repaired.
+  // start a gated model call (SSOT unchanged). An entry config the resolver
+  // rejects (qc2 W-1 — unknown key) stops the advisor without wedging the
+  // re-apply path, and the last-good latches stay until the config is
+  // repaired.
   bridge.onChange(() => {
     let next: ResolvedAdvisorConfig
     try {
       next = resolveAdvisorConfig(sourceConfig())
     } catch (error) {
-      // The raw source is still readable for the switch even when the
-      // resolver rejects the composed value; if even that fails, keep the
-      // current config-level switch (the gate below still blocks runtimes).
-      try {
-        overrides.setConfigEnabled(sourceConfig().enabled)
-      } catch {
-        // unreadable source — the effective switch stays as-is
-      }
       for (const sessionId of [...runtimes.keys()]) disposeRuntime(sessionId)
       ctx.logger('advisor').warn('settings change: invalid advisor config — advisor stopped', {
         disabledReason: error instanceof Error ? error.message : String(error),
@@ -574,7 +576,6 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     }
     delivery.setImmuneTurns(next.immuneTurns)
     observer.setMaxDeltaMessages(next.maxDeltaMessages)
-    overrides.setConfigEnabled(sourceConfig().enabled)
     // Candidates = live runtimes ∪ sessions holding an override. The second
     // set covers an `/advisor on`-enabled session whose runtime is ABSENT
     // because it was gate-blocked: when the defaults become usable (a global
@@ -905,7 +906,7 @@ export function apply(ctx: Context, config: AdvisorConfig) {
 
   // T1 (plan dsh-advisor-tui-settings-n9): the dsh-tui settings-section seam —
   // the `tuiSettingsSections` "Advisor" section (editable `/settings` screen
-  // fields: enabled/provider/model/immuneTurns/maxDeltaMessages). Runs AFTER
+  // fields: provider/model/immuneTurns/maxDeltaMessages). Runs AFTER
   // the single-reviewer claim like `installTuiClient`, so the section
   // registers at most once per process (duplicate-ns registration is
   // contained inside the module). The inject is conditional: profiles without

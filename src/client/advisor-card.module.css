@@ -1,281 +1,85 @@
-/* Advisor settings card — chrome aligned to the upstream PluginCard
- * (packages/client/ui-plugin-config/src/client/PluginCard.module.css, shape
- * snapshot 5d49d016), form-field styles kept from the card-form design
- * language. Every color resolves through a `--dsw-alias-*` token (light/dark
- * adaptive); bare `--border` / `--surface` / `--text-*` names, which nothing
- * in this app defines, would render the light-mode literals written as their
- * fallbacks and stay light under the dark theme.
- *
- * The card is the whole body of its bundle's configuration section on the
- * Plugins page (`plugins.bundle.config`; the owner owns the column width); the
- * chrome is the upstream contract: a bordered box whose header is a button
- * (name over description, dirty pill, rotating chevron) and whose open state
- * shows a divided body — divider, readOnly / form content, footer divider with
- * the failed message + Discard/Save. */
+/* Advisor settings card — flat alignment to the official settings-form
+ * language (ui-primitives settings-form: fields.module.css +
+ * SettingsForm.module.css, values snapshot 2026-09): the fields tile directly
+ * under the page's plugin title/description — NO collapsible box, no header
+ * chrome (the former PluginCard-mirror chrome died with the config-level
+ * `enabled` switch, plan dsh-advisor-web-config-flat-n10). Every color
+ * resolves through a `--dsw-alias-*` token (light/dark adaptive); bare
+ * `--border` / `--surface` / `--text-*` names, which nothing in this app
+ * defines, would render the light-mode literals written as their fallbacks
+ * and stay light under the dark theme. */
 
-/* The card box. */
-.card {
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
-  background: var(--dsw-alias-bg-layer-3);
-  transition: border-color .16s, background .16s;
-}
-
-.card:hover {
-  border-color: var(--dsw-alias-label-dimmed);
-}
-
-/* An open card reads as the one being worked on, not merely taller. */
-.cardOpen {
-  background: var(--dsw-alias-bg-layer-2);
-  border-color: var(--dsw-alias-label-dimmed);
-}
-
-/* The disclosure header: a full-width button stacking name over description. */
-.header {
-  width: 100%;
-  appearance: none;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border-radius: 12px;
-}
-
-.header:focus-visible {
-  outline: 2px solid var(--dsw-alias-brand-primary);
-  outline-offset: -2px;
-}
-
-/* Name over description: the description is what tells two plugins apart, so
-   it gets its own line rather than trailing the name. */
-.headText {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.name {
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.4;
-  color: var(--dsw-alias-label-primary);
-}
-
-.description {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.chevron {
-  flex: none;
-  color: var(--dsw-alias-label-tertiary);
-  transition: transform .16s;
-}
-
-.chevronOpen {
-  transform: rotate(180deg);
-}
-
-/* The open body: a divider under the header, then the card content. */
-.body {
-  border-top: 1px solid var(--dsw-alias-border-l2);
-  margin: 0 16px;
-  padding-bottom: 8px;
-}
-
+/* Body-level notices: tertiary for read-only, warn-toned for the
+   config-channel notice, success for the saved feedback, error tone for the
+   load error. Flat and always-on — there is no derived-open surface left to
+   hide them behind. */
 .readOnly {
-  margin: 12px 0 0;
+  margin: 0 0 12px;
   font-size: 12px;
   line-height: 1.5;
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* Carried on the header so a collapsed card still says it holds edits. */
-.pending {
-  flex: none;
-  border-radius: 999px;
-  padding: 1px 8px;
-  font-size: 11px;
-  line-height: 17px;
-  font-weight: 500;
-  white-space: nowrap;
-  background: var(--dsw-alias-bg-module-platform);
-  color: var(--dsw-alias-label-secondary);
-}
-
-.footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 0 4px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
-}
-
-.failed {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-error);
-}
-
-.discard,
-.save {
-  appearance: none;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  padding: 5px 14px;
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.5;
-  cursor: pointer;
-}
-
-.discard {
-  border-color: var(--dsw-alias-border-l2);
-  background: none;
-  color: var(--dsw-alias-label-secondary);
-}
-
-.discard:hover:not(:disabled) {
-  color: var(--dsw-alias-label-primary);
-  border-color: var(--dsw-alias-label-dimmed);
-}
-
-.save {
-  background: var(--dsw-alias-label-primary);
-  color: var(--dsw-alias-bg-layer-3);
-}
-
-.discard:disabled,
-.save:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.discard:focus-visible,
-.save:focus-visible {
-  outline: 2px solid var(--dsw-alias-brand-primary);
-  outline-offset: 1px;
-}
-
-/* Body-level notices (KD-U3: degraded/error states keep the card chrome and
-   put the notice/error in the body): warn-toned for the config-channel
-   notice, success for the saved feedback, error tone for the load error. */
 .notice {
-  margin: 12px 0 0;
+  margin: 0 0 12px;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 1.5;
   color: var(--dsw-alias-state-warn-label);
 }
 
 .savedNotice {
-  margin: 12px 0 0;
+  margin: 0 0 12px;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 1.5;
   color: var(--dsw-alias-state-success-primary);
 }
 
 .error {
-  margin: 12px 0 0;
+  margin: 0 0 12px;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 1.5;
   color: var(--dsw-alias-state-error-primary);
 }
 
-/* The form fields sit directly in the card body (the upstream cards stack
-   their controls in the body); the container only paces them below the
-   divider. */
+/* The fields tile directly; the container only stacks them (the official
+   form carries no extra padding — each field paces itself). */
 .form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 12px 0 0;
 }
 
-/* The enabled switch: a real checkbox, tinted with the brand accent so it
-   matches the rest of the panel while staying a native control. */
-.checkboxRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.checkLabel {
-  font-size: 14px;
-  line-height: 22px;
-  font-weight: 500;
-  color: var(--dsw-alias-label-primary);
-}
-
-.checkbox {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--dsw-alias-brand-primary);
-  cursor: pointer;
-}
-
-.checkbox:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.checkbox:focus-visible {
-  outline: 2px solid var(--dsw-alias-border-l3);
-  outline-offset: 2px;
-}
-
-/* The provider/model group is a fieldset (no legend: the enabled toggle
-   above it is the group's question). */
-.fieldset {
-  margin: 0;
-  padding: 0;
-  border: none;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
+/* One settings field: 12px vertical padding, hairline separator between
+   adjacent fields (official fields.module.css). Scoped to direct children so
+   the paired number fields inside .numberFields stay separator-free. */
 .field {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  padding: 12px 0;
+}
+
+.form > .field + .field {
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .fieldLabel {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 13px;
   font-weight: 500;
-  color: var(--dsw-alias-label-secondary);
+  line-height: 1.5;
+  color: var(--dsw-alias-label-primary);
 }
 
 .input {
   box-sizing: border-box;
   width: 100%;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
+  height: 34px;
+  padding: 0 12px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md);
   font: inherit;
-  font-size: 14px;
-  line-height: 22px;
-  background: var(--dsw-alias-bg-layer-1);
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--dsw-alias-bg-layer-3);
   color: var(--dsw-alias-label-primary);
 }
 
@@ -286,9 +90,9 @@ select.input {
   cursor: pointer;
 }
 
-.input:focus {
+.input:focus-visible {
   outline: none;
-  border-color: var(--dsw-alias-brand-primary);
+  border-color: var(--dsw-alias-state-business-primary);
 }
 
 .input::placeholder {
@@ -296,7 +100,7 @@ select.input {
 }
 
 .input:disabled {
-  opacity: 0.6;
+  color: var(--dsw-alias-label-tertiary);
   cursor: default;
 }
 
@@ -315,52 +119,125 @@ select.input {
 }
 
 /* The system prompt: same field chrome as .input, but a multiline surface —
-   taller by default, vertically resizable. */
+   taller by default, vertically resizable. The placeholder is the built-in
+   reviewer prompt, so the dimmed placeholder color keeps it readable as
+   ghost text rather than content. */
 .textarea {
   box-sizing: border-box;
   width: 100%;
   min-height: 96px;
-  padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
+  padding: 8px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md);
   font: inherit;
-  font-size: 14px;
-  line-height: 22px;
-  background: var(--dsw-alias-bg-layer-1);
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--dsw-alias-bg-layer-3);
   color: var(--dsw-alias-label-primary);
   resize: vertical;
 }
 
-.textarea:focus {
+.textarea:focus-visible {
   outline: none;
-  border-color: var(--dsw-alias-brand-primary);
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+.textarea::placeholder {
+  color: var(--dsw-alias-label-dimmed);
 }
 
 .textarea:disabled {
-  opacity: 0.6;
+  color: var(--dsw-alias-label-tertiary);
   cursor: default;
 }
 
 /* The two short numeric fields (immune turns / max delta messages) sit side
-   by side, each keeping a full-width field of its own column. */
+   by side, each keeping a full-width field of its own column; the group
+   closes the field run, so it carries the hairline separator itself. */
 .numberFields {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
+  padding: 12px 0;
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 
-/* Inline guidance under a field: tertiary for stale-value / no-option hints,
-   warn for the required-when-enabled gate. */
+.numberFields .field {
+  padding: 0;
+}
+
+/* Inline guidance under a field: tertiary for hints, warn for the required
+   pair gate (official 12px hint). */
 .hint {
   margin: 0;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 1.5;
   color: var(--dsw-alias-label-tertiary);
 }
 
 .warnHint {
   margin: 0;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 1.5;
   color: var(--dsw-alias-state-warn-label);
+}
+
+/* Footer: the failed message flexes wide, then the action pair (official
+   SettingsForm.module.css — 16px top padding, no divider: the field padding
+   above provides the air). */
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 16px;
+}
+
+.failed {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-error);
+}
+
+.discard,
+.save {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: var(--dsw-radius-md);
+  padding: 5px 14px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.discard {
+  border-color: var(--dsw-alias-border-l2);
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.discard:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-label-dimmed);
+}
+
+/* Save is the dark solid primary action (official SettingsForm). */
+.save {
+  background: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-bg-layer-3);
+}
+
+.discard:disabled,
+.save:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.discard:focus-visible,
+.save:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
 }

@@ -18,7 +18,7 @@ import type { AdvisorConfig, ResolvedAdvisorConfig } from 'dsh-advisor'
 | `name` | `'dsh-advisor'`（string 常量） | 插件名。 |
 | `inject` | `['sessions', 'agents', 'llm']` | 插件消费的服务；行在全部可用后加载。 |
 | `Config` | schemastery schema（value） | Loader schema（严格：默认值 + 类型/边界校验），由 cordis Loader 校验插件行 config。见 [配置指南](configuration.md#配置字段)。 |
-| `AdvisorConfig` | type | 插件行 config 契约（`enabled` / `provider` / `model` / `systemPrompt` / `immuneTurns` / `maxDeltaMessages`）。 |
+| `AdvisorConfig` | type | 插件行 config 契约（`provider` / `model` / `systemPrompt` / `immuneTurns` / `maxDeltaMessages`——`enabled` 键已移除，2026-09-26：插件行开关即总开关）。 |
 | `ResolvedAdvisorConfig` | type | 显式模型门禁（S4）之后的运行时契约（含可选的 `disabledReason`）。 |
 | `apply(ctx, config)` | function | 插件 apply：为 entry 的 volatile live 字段建立 settings bridge（`loader/volatile-update` 驱动）、注册 `AdvisorConfigGateway` 与 typert 端点（条件 `ctx.inject(['typert'], ...)`）、组合 observer / runtime / delivery、在组合 command registry 时注册 `/advisor` 指令（条件 `ctx.inject(['commands'], ...)`）。 |
 
@@ -87,7 +87,7 @@ import type { AdvisorSessionActionProps, AdvisorSessionModelController, AdvisorS
 （其它输入）        → usage 文本
 ```
 
-- **会话级且临时**：`on` / `off` / `toggle` 翻转的是按会话的启用 override（`AdvisorSessionOverrides`，`override ?? config.enabled`），**从不修改持久化配置**；`/advisor on` 开启一个 config 缺少 `provider`/`model` 的会话不会发起模型调用 —— 回复与 `/advisor status` 都会显示 S4 门禁原因；
+- **会话级且临时**：`on` / `off` / `toggle` 翻转的是按会话的启用 override（`AdvisorSessionOverrides`，`override ?? true`——运行中的插件行即启用），**从不修改持久化配置**；`/advisor on` 开启一个 config 缺少 `provider`/`model` 的会话不会发起模型调用 —— 回复与 `/advisor status` 都会显示 S4 门禁原因；
 - **会话级模型覆盖**：`model set` / `model reset` 读写同一会话级机制内的运行时 `modelOverride: { provider, model }` 原子对（生存期、解析顺序、校验细节 → [配置指南 · 会话级评审模型覆盖](configuration.md#会话级评审模型覆盖运行时临时)）——同样**从不写入持久化配置**；`set` 只作用于发起调用的会话（无 session-id 参数，模型 id 可含 `/`），提交前经 `resolveModelInfo` 校验（60 秒、可取消、无自动重试）；`reset` 重新继承当前全局默认且从不触碰启用开关；
 - **`/advisor on` 是手动恢复路径**：恢复 `quota_exhausted`（KD-5 无自动恢复定时器）并**全新重建** `halted`（永久性模型错误）的会话 runtime；开启时把 observer 游标 seed 到当前 transcript 长度（KD-5 seed-on-enable，不做全史重放）；
 - **`/advisor status`** 状态面（`src/commands.ts` `AdvisorSessionStatus` + `advisorStatusText`）：`enabled`（有效开关）、`disabledReason`（S4 门禁阻挡时）、`provider` / `model`（**有效**路由——会话覆盖优先于全局默认——即使禁用也显示）、`modelSource`（`session` | `global`）、`runtimeStatus`（`running` | `paused` | `quota_exhausted` | `halted` | `disabled`）、`pendingCount`（待 drain 的 delta 数）、`lastActivityAt`（最后一次 accepted-note 的 ISO 时间，之前为 `never`）。`/advisor config` 保持**全局默认值**回读（会话级覆盖不改变它的输出）。

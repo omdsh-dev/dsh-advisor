@@ -2,21 +2,28 @@
  * dsh-advisor plugin configuration contract (spec §5 / S4).
  *
  * The exported schemastery `Config` schema is what the cordis Loader uses to
- * validate the plugin row config: it applies defaults (`enabled` false,
- * `immuneTurns` 3, `maxDeltaMessages` 60, `systemPrompt` "") and enforces
- * types/bounds (integers ≥ 0). All six live fields are declared `.volatile()`:
+ * validate the plugin row config: it applies defaults (`immuneTurns` 3,
+ * `maxDeltaMessages` 60, `systemPrompt` "") and enforces types/bounds
+ * (integers ≥ 0). All five live fields are declared `.volatile()`:
  * the Loader commits edits to them into the running fiber's references WITHOUT
  * a remount (dsh 0.1.7-rc.1 — the settings.yaml user layer is gone), so
  * `apply` receives each field as a `{ get() }` reference and every read must
  * unwrap it first — {@link unwrapAdvisorConfig}, which tolerates plain values
  * too (integration harnesses pass plain objects).
  *
- * `resolveAdvisorConfig(raw)` additionally enforces the explicit model gate:
- * when `enabled` is true but `provider` or `model` is missing or empty, it
- * resolves to a disabled-with-reason config — the advisor never starts a model
- * call (hard gate, not a warning). The volatile unwrap happens BEFORE the gate:
- * an unwrapped reference object is truthy, so the enabled/provider/model reads
- * would silently pass the gate on the reference objects themselves.
+ * `resolveAdvisorConfig(raw)` additionally enforces the explicit model gate.
+ * There is NO config-level `enabled` key (2026-09-26 user ruling: the
+ * plugin-row enable/disable toggle IS the switch, so a config key would be
+ * redundant) — the gate keys purely on the pair: `provider` AND `model`
+ * non-empty → enabled; otherwise it resolves to a disabled-with-reason config
+ * — the advisor never starts a model call (hard gate, not a warning). The
+ * volatile unwrap happens BEFORE the gate: an unwrapped reference object is
+ * truthy, so the provider/model reads would silently pass the gate on the
+ * reference objects themselves. A legacy `enabled` key arriving in a raw
+ * config (a stored profile predating the removal) is TOLERATED and silently
+ * dropped — accepted but never persisted or read (2026-09-27 user ruling:
+ * the stored row must not reject the plugin); every other unknown key is
+ * still rejected (spec §5.2 strict schema).
  *
  * @module dsh-advisor/config
  */
@@ -25,11 +32,9 @@ import z from '@deepseek-ai/schemastery'
 
 /** Raw plugin row config after Loader defaults — spec §5.1. */
 export interface AdvisorConfig {
-  /** Master switch; default false. */
-  readonly enabled: boolean
-  /** Provider route; REQUIRED (non-empty) when enabled. */
+  /** Provider route; REQUIRED (non-empty) for the advisor to run. */
   readonly provider?: string
-  /** Model id; REQUIRED (non-empty) when enabled. */
+  /** Model id; REQUIRED (non-empty) for the advisor to run. */
   readonly model?: string
   /** Optional system prompt override; "" = built-in reviewer prompt (T4). */
   readonly systemPrompt: string
@@ -41,6 +46,11 @@ export interface AdvisorConfig {
 
 /** Config after the explicit model gate (spec §5.2) — consumed by T4/T6. */
 export interface ResolvedAdvisorConfig {
+  /**
+   * Post-gate switch: true iff the pair is complete — NOT a config key (the
+   * row toggle is the switch; a session `/advisor off` override flips this
+   * to false downstream, `src/index.ts` `safeEffective`).
+   */
   readonly enabled: boolean
   readonly provider?: string
   readonly model?: string
@@ -58,7 +68,6 @@ export interface ResolvedAdvisorConfig {
  * — same pattern as `resolveSessionTitleLlmConfig` in the dsh repo.
  */
 const CONFIG_KEYS: ReadonlySet<string> = new Set([
-  'enabled',
   'provider',
   'model',
   'systemPrompt',
@@ -67,10 +76,27 @@ const CONFIG_KEYS: ReadonlySet<string> = new Set([
 ])
 
 /**
+ * Removed config keys the strict unknown-key rejection TOLERATES — accepted
+ * into a raw config but stripped from every snapshot/write so they are never
+ * read and never re-persisted. Only the 2026-09-26-removed `enabled` lives
+ * here: the plugin-row enable/disable toggle replaced the config-level master
+ * switch, and stored profiles still carrying `enabled: false/true` must load
+ * cleanly instead of being rejected (2026-09-27 user ruling — the stored line
+ * is simply ignored; no compatibility surface beyond dropping the dead key).
+ * Every other unknown key stays a hard reject (spec §5.2).
+ */
+const LEGACY_KEYS: ReadonlySet<string> = new Set([
+  'enabled',
+])
+
+/**
  * Loader schema (strict): defaults + type/bounds validation for the plugin
  * row config. The explicit gate is intentionally NOT here — `provider`/`model`
- * stay optional so an enabled-without-pair config validates and then resolves
- * to disabled-with-reason instead of failing to load.
+ * stay optional so a pairless config validates and then resolves to
+ * disabled-with-reason instead of failing to load. There is no `enabled`
+ * field: the plugin-row enable/disable toggle is the master switch, and a
+ * stored `enabled:` key is tolerated and dropped by the resolver
+ * ({@link LEGACY_KEYS}) — never read, never persisted.
  *
  * Volatile (dsh 0.1.7-rc.1): every field is a LIVE field. The Loader commits
  * edits into the running fiber's references without remounting the plugin
@@ -86,7 +112,6 @@ const CONFIG_KEYS: ReadonlySet<string> = new Set([
  * exported contracts plain-valued.
  */
 export const Config = z.object({
-  enabled: z.boolean().default(false).volatile(),
   provider: z.string().volatile(),
   model: z.string().volatile(),
   systemPrompt: z.string().default('').volatile(),
@@ -111,7 +136,6 @@ function isNonEmptyString(value: string | undefined): value is string {
  * Loader).
  */
 export interface VolatileAdvisorConfig {
-  readonly enabled: unknown
   readonly provider?: unknown
   readonly model?: unknown
   readonly systemPrompt: unknown
@@ -138,19 +162,26 @@ function unwrapReference<T>(value: unknown): T {
  * the plain value it is on non-Loader paths), and `null` — which schemastery
  * passes through for fields without a default — is normalized to `undefined`
  * so the resolved contract is null-free and the gate treats null exactly like
- * a missing value. Keys outside the schema ride along untouched (the
- * schemastery object resolver merges unknown keys through; they are never
- * volatile-declared, so they are never references) — the hard gate's
- * unknown-key rejection must keep seeing them.
+ * a missing value. Legacy keys ({@link LEGACY_KEYS}) are STRIPPED before the
+ * rest-spread: the schema-removed `enabled` may arrive on a stored profile
+ * (or an integration entry), and the snapshot must never carry it — no
+ * consumer reads it and no snapshot-derived write can re-persist it. Every
+ * other key outside the schema rides along untouched (the schemastery object
+ * resolver merges unknown keys through; they are never volatile-declared, so
+ * they are never references) — the hard gate's unknown-key rejection must
+ * keep seeing them.
  *
  * This is a snapshot read, NOT a validation: the result is the RAW composed
  * config `resolveAdvisorConfig` consumes.
  */
 export function unwrapAdvisorConfig(raw: VolatileAdvisorConfig): AdvisorConfig {
-  const { enabled, provider, model, systemPrompt, immuneTurns, maxDeltaMessages, ...rest } = raw
+  // The raw side is loose on purpose: the schema-removed `enabled` is not a
+  // VolatileAdvisorConfig member but can arrive on any plain entry — the cast
+  // widens only to let the destructure strip it.
+  const { enabled, provider, model, systemPrompt, immuneTurns, maxDeltaMessages, ...rest } =
+    raw as VolatileAdvisorConfig & { readonly enabled?: unknown }
   return {
     ...rest,
-    enabled: unwrapReference<boolean>(enabled),
     provider: unwrapReference<string | undefined>(provider) ?? undefined,
     model: unwrapReference<string | undefined>(model) ?? undefined,
     systemPrompt: unwrapReference<string>(systemPrompt),
@@ -163,9 +194,14 @@ export function unwrapAdvisorConfig(raw: VolatileAdvisorConfig): AdvisorConfig {
  * Resolve the raw config into the runtime contract.
  *
  * - Rejects unknown keys (strict schema, spec §5.2) and non-object input.
- * - Applies the explicit model gate (S4): `enabled: true` with `provider` or
- *   `model` missing/empty → disabled-with-reason, never throws, no model call.
- * - `provider`/`model` are ignored while disabled.
+ *   The 2026-09-26-removed `enabled` is the ONE tolerated exception
+ *   ({@link LEGACY_KEYS}): a stored profile still carrying it loads cleanly,
+ *   the key is stripped from the snapshot and never persisted (2026-09-27
+ *   user ruling — the row toggle replaced it; ignoring the stored line is the
+ *   whole migration surface). Every other unknown key is still a hard reject.
+ * - Applies the explicit model gate (S4): `provider` or `model` missing/empty
+ *   → disabled-with-reason, never throws, no model call. Both present →
+ *   `enabled: true` (the post-gate flag).
  *
  * The volatile unwrap happens FIRST (before any gate read): a reference
  * object is truthy regardless of the value behind it, so gating on the raw
@@ -176,20 +212,19 @@ export function resolveAdvisorConfig(raw: unknown): ResolvedAdvisorConfig {
     throw new TypeError('dsh-advisor: configuration must be a plain object')
   }
   for (const key of Object.keys(raw)) {
-    if (!CONFIG_KEYS.has(key)) {
+    if (!CONFIG_KEYS.has(key) && !LEGACY_KEYS.has(key)) {
       throw new Error(`dsh-advisor: unknown config key "${key}"`)
     }
   }
   // Config(raw) resolves each `.volatile()` field to its reference; unwrap
   // into the plain contract the gate (and every consumer) reads.
   const normalized = unwrapAdvisorConfig(Config(raw))
-  if (!normalized.enabled) return normalized
   const missing: string[] = []
   if (!isNonEmptyString(normalized.provider)) missing.push('provider')
   if (!isNonEmptyString(normalized.model)) missing.push('model')
-  if (missing.length === 0) return normalized
+  if (missing.length === 0) return { ...normalized, enabled: true }
   const disabledReason = missing.length === 2
-    ? 'enabled but provider and model are missing — configure both to enable the advisor'
-    : `enabled but ${missing[0]} is missing or empty — configure provider and model`
+    ? 'provider and model are missing — configure both to enable the advisor'
+    : `${missing[0]} is missing or empty — configure provider and model`
   return { ...normalized, enabled: false, disabledReason }
 }

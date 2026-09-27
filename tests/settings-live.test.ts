@@ -11,7 +11,7 @@
  * volatile references, and every edit is driven the way the Loader drives it
  * — write the references, then emit `loader/volatile-update` — so the full
  * wiring — volatile commit → bridge source → `onChange` → re-apply
- * (setImmuneTurns / setMaxDeltaMessages / setConfigEnabled / dispose+ensure
+ * (setImmuneTurns / setMaxDeltaMessages / dispose+ensure
  * per-session runtimes) — is exercised end to end. `commit` writes the values
  * BEFORE emitting, so the synchronous re-apply has settled when the call
  * returns — that is the settle point for every write below.
@@ -32,9 +32,10 @@
  * - maxDeltaMessages = 20: one turn appending 22 messages to a live renderer
  *   is truncated to the last 20 with the marker (the pre-edit bound of 60
  *   would render all 22).
- * - hard gate: an entry edit that disables the advisor (and a re-enable with
- *   an empty provider/model pair) still blocks runtime creation — no model
- *   call can ever start through the live source (the resolver stays the SSOT).
+ * - hard gate: an entry edit that empties the provider/model pair still
+ *   blocks runtime creation — no model call can ever start through the live
+ *   source (the resolver stays the SSOT; there is no config-level switch
+ *   since 2026-09-26).
  *
  * Events are synthetic but shaped exactly like dsh emits (same builders as the
  * T8 integration suite); `feed` mirrors the cordis `session/event` listener.
@@ -162,7 +163,6 @@ interface AdapterProbe {
 /** Merge test config over the schema defaults (full `AdvisorConfig` shape). */
 function fullConfig(overrides: Partial<AdvisorConfig> = {}): AdvisorConfig {
   return {
-    enabled: false,
     systemPrompt: '',
     immuneTurns: 3,
     maxDeltaMessages: 60,
@@ -349,7 +349,7 @@ async function registerCommands(ctx: Context): Promise<CommandDefinition['handle
 describe('settings live re-apply — latched config + runtime rebuild (Important-1)', () => {
   it('re-applies immuneTurns and rebuilds the session runtime with the edited provider/model/systemPrompt', async () => {
     const { ctx, adapter, entry } = await composeLiveHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [
         [...textReply('{"note":"pre write nit","severity":"nit"}')],
         // Eight distinct concern replies: one steer (arms the fence) + six
@@ -375,7 +375,7 @@ describe('settings live re-apply — latched config + runtime rebuild (Important
 
     // Committed volatile edit: values written, then `loader/volatile-update`
     // — the synchronous onChange re-apply (setImmuneTurns(7) /
-    // setMaxDeltaMessages(20) / setConfigEnabled(true) / dispose + ensure for
+    // setMaxDeltaMessages(20) / dispose + ensure for
     // every live session runtime) has fully run when this call returns.
     entry.commit(ctx, {
       provider: 'other',
@@ -424,7 +424,7 @@ describe('settings live re-apply — latched config + runtime rebuild (Important
 describe('settings live re-apply — observer maxDeltaMessages (Important-1)', () => {
   it('applies the edited delta window to an already-live per-session renderer', async () => {
     const { ctx, adapter, entry } = await composeLiveHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [
         [...textReply('{"note":"first nit","severity":"nit"}')],
         [...textReply('{"note":"bulk nit","severity":"nit"}')],
@@ -476,9 +476,9 @@ describe('settings live re-apply — observer maxDeltaMessages (Important-1)', (
 // ---------------------------------------------------------------------------
 
 describe('settings live re-apply — hard gate through the live source (Important-1)', () => {
-  it('a settings edit that disables the advisor still blocks runtime creation; re-enabling without a provider/model pair is gated too', async () => {
+  it('a settings edit that empties the pair still blocks runtime creation (the live gate re-applies)', async () => {
     const { ctx, adapter, entry } = await composeLiveHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [[...textReply('{"note":"first nit","severity":"nit"}')]],
     )
     const { agent } = makeFakeAgent('s1')
@@ -489,18 +489,13 @@ describe('settings live re-apply — hard gate through the live source (Importan
     feed(ctx, session, log, simpleTurn(1, 'first request', 'first reply'))
     await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
 
-    // Settings-page switch off: the live gate (effectiveEnabled) drops every
-    // delta — no model call, and the onChange rebuild loop disposes the runtime.
-    entry.commit(ctx, { enabled: false })
+    // An edit that empties the provider/model pair: the live gate (the
+    // resolver, re-applied by onChange) resolves disabled-with-reason and the
+    // rebuild loop disposes the runtime — every later delta is dropped, no
+    // model call (no config-level switch since 2026-09-26; the pair IS the
+    // on/off state).
+    entry.commit(ctx, { provider: '', model: '' })
     feed(ctx, session, log, simpleTurn(2, 'second request', 'second reply'))
-    await flush()
-    expect(adapter.requests).toHaveLength(1)
-
-    // Even re-enabled, an empty provider/model pair trips the S4 gate through
-    // the live source (resolveAdvisorConfig stays the SSOT) — an edit can
-    // never start a gated model call.
-    entry.commit(ctx, { enabled: true, provider: '', model: '' })
-    feed(ctx, session, log, simpleTurn(3, 'third request', 'third reply'))
     await flush()
     expect(adapter.requests).toHaveLength(1)
   })
@@ -518,7 +513,7 @@ describe('settings live re-apply — conditional runtime rebuild (qc3 W-1 / qc1 
     const note = '{"note":"same note","severity":"nit"}'
     const gated = new GatedAdapter([...textReply(note)])
     const { ctx, adapter, entry } = await composeLiveHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [],
       gated,
     )
@@ -552,7 +547,7 @@ describe('settings live re-apply — conditional runtime rebuild (qc3 W-1 / qc1 
 
   it('a systemPrompt-only edit rebuilds the runtime: the next call carries the new prompt', async () => {
     const { ctx, adapter, entry } = await composeLiveHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [
         [...textReply('{"note":"before edit","severity":"nit"}')],
         [...textReply('{"note":"after edit","severity":"nit"}')],
@@ -584,7 +579,7 @@ describe('settings live re-apply — conditional runtime rebuild (qc3 W-1 / qc1 
 describe('settings live re-apply — unknown-key user layer containment (qc2 W-1)', () => {
   it('an unknown key never wedges live reads: no throw, no model call, /advisor status shows disabled-with-reason', async () => {
     const { ctx, adapter, entry } = await composeLiveHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model' },
+      { provider: 'stub', model: 'stub-model' },
       [[...textReply('{"note":"never delivered","severity":"nit"}')]],
     )
     const handler = await registerCommands(ctx)
@@ -614,31 +609,66 @@ describe('settings live re-apply — unknown-key user layer containment (qc2 W-1
 })
 
 // ---------------------------------------------------------------------------
-// 6. Commit-time switch re-apply: a committed volatile edit re-derives the
-//    config-level fallback switch, so sessions created AFTER the commit pick
-//    it up (the old attach-ordering case rode the inject child's microtask
-//    activation — gone with the 0.1.7-rc.1 registration-free model).
+// 6. Commit-time re-apply: a committed volatile edit completes the pair, so
+//    a gate-blocked session runs from the FIRST turn without a restart (the
+//    old attach-ordering case rode the inject child's microtask activation —
+//    gone with the 0.1.7-rc.1 registration-free model). No fallback switch
+//    anymore (removed 2026-09-26): the pair completion IS the unblock.
 // ---------------------------------------------------------------------------
 
-describe('settings live re-apply — config switch follows the committed entry', () => {
-  it('boots with the entry switch off: after a committed enable, the FIRST turn already runs a session runtime without any further edit', async () => {
+describe('settings live re-apply — a committed pair unblocks the gate', () => {
+  it('boots pairless (gate-blocked): after a committed provider/model pair, the FIRST turn already runs a session runtime without any further edit', async () => {
     const { ctx, adapter, entry } = await composeLiveHarness(
-      { enabled: false }, // entry switch off at load
+      {}, // pairless entry: gate-blocked at load
       [[...textReply('{"note":"boot nit","severity":"nit"}')]],
     )
     const { agent, inject } = makeFakeAgent('s1')
     ctx.emit('agent/created', { agent, source: 'startup' })
     const { session, log } = makeSession('s1')
 
-    // One committed enable + provider/model pair: the onChange re-apply
-    // flipped overrides.setConfigEnabled(true), so the first turn runs a
-    // session runtime and calls the model — no restart, no second commit.
-    entry.commit(ctx, { enabled: true, provider: 'stub', model: 'stub-model' })
+    // One committed provider/model pair: the onChange re-apply re-derives the
+    // post-gate resolution, so the first turn runs a session runtime and calls
+    // the model — no restart, no second commit.
+    entry.commit(ctx, { provider: 'stub', model: 'stub-model' })
     feed(ctx, session, log, simpleTurn(1, 'first request', 'first reply'))
     await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
     expect(adapter.requests[0]!.provider).toBe('stub')
     expect(adapter.requests[0]!.model).toBe('stub-model')
     await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 8. Off-session status contract: a session disabled by its OWN override
+//    reports plain disabled — the S4 gate reason describes the persisted
+//    pair, which the off session is not asking about (safeEffective strips
+//    the reason on the off branch; the global readback keeps it).
+// ---------------------------------------------------------------------------
+
+describe('/advisor status — off session carries no gate reason (safeEffective off branch)', () => {
+  it('pairless global + own-override off: status shows plain disabled, the config readback keeps the reason', async () => {
+    const { ctx, entry } = await composeLiveHarness(
+      { provider: 'stub', model: 'stub-model' },
+      [],
+    )
+    const handler = await registerCommands(ctx)
+    const { session } = makeSession('s1')
+
+    // Land the pair first so `/advisor off` actually writes the override (a
+    // pairless row reports already-off without touching the override), then
+    // clear the pair: the session stays off by its OWN override while the
+    // global turns gate-blocked.
+    invokeAdvisor(handler, ' off', session)
+    entry.commit(ctx, { provider: '', model: '' })
+
+    const status = invokeAdvisor(handler, ' status', session)
+    expect(status.text).toContain('Advisor: disabled')
+    expect(status.text).not.toContain('Reason:')
+
+    // The global readback (safeResolved) is untouched: it keeps the S4 reason.
+    const config = invokeAdvisor(handler, ' config', session)
+    expect(config.text).toContain('Advisor config: disabled')
+    expect(config.text).toContain('Reason: provider and model are missing')
   })
 })
 
@@ -653,7 +683,7 @@ describe('settings live re-apply — config switch follows the committed entry',
 describe('/advisor config — session-less composed readback (T2)', () => {
   it('reports the composed entry config and ignores the per-session override', async () => {
     const { ctx, entry } = await composeLiveHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model', systemPrompt: 'custom prompt\nsecond line' },
+      { provider: 'stub', model: 'stub-model', systemPrompt: 'custom prompt\nsecond line' },
       [],
     )
     const handler = await registerCommands(ctx)
@@ -698,7 +728,6 @@ describe('/advisor config — session-less composed readback (T2)', () => {
     const longFirstLine = `line-one-${'x'.repeat(100)}` // 109 chars
     const { ctx, entry } = await composeLiveHarness(
       {
-        enabled: true,
         provider: 'stub',
         model: 'stub-model',
         systemPrompt: `${longFirstLine}\nsecond line must never appear`,
@@ -722,7 +751,7 @@ describe('/advisor config — session-less composed readback (T2)', () => {
     // seed immuneTurns/maxDeltaMessages/systemPrompt from it (web-card
     // readConfig S1 parity) instead of the hardcoded 3/60/'' defaults.
     const { ctx, entry } = await composeLiveHarness(
-      { enabled: true, provider: 'stub', model: 'stub-model', immuneTurns: 5, maxDeltaMessages: 20, systemPrompt: 'keep me' },
+      { provider: 'stub', model: 'stub-model', immuneTurns: 5, maxDeltaMessages: 20, systemPrompt: 'keep me' },
       [],
     )
     const handler = await registerCommands(ctx)
