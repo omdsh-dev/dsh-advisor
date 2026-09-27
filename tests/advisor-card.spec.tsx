@@ -563,6 +563,57 @@ describe('AdvisorCard', () => {
     expect(screen.getByLabelText(en.model)).toBeTruthy()
   })
 
+  it('holds the mounted form through a background refresh (fields disabled, no unmount blink)', async () => {
+    const { controller, scripted, props, view } = await mountCard({ config: pairedConfig() })
+    expect(screen.getByLabelText(en.provider)).toBeTruthy()
+    // Hold the refresh's gateway get pending: the snapshot flips to 'loading'
+    // while the last settled providers/draft stay in place.
+    let releaseGet!: (value: RpcResult<{ config: AdvisorConfigView }>) => void
+    scripted.get.mockReturnValueOnce(
+      new Promise<RpcResult<{ config: AdvisorConfigView }>>((resolve) => { releaseGet = resolve }),
+    )
+    refreshIfLoaded(controller)
+    expect(controller.store.getSnapshot().status).toBe('loading')
+    view.rerender(<AdvisorCard {...props} />)
+    // The form did NOT unmount for the refresh window: the provider select is
+    // still in the document and disabled for the hold.
+    expect((screen.getByLabelText(en.provider) as HTMLSelectElement).disabled).toBe(true)
+    expect(screen.getByLabelText(en.model)).toBeTruthy()
+    expect(screen.getByRole('button', { name: en.save })).toBeTruthy()
+    // The refresh settles: the form returns to interactive.
+    releaseGet(okResult({ config: pairedConfig() }))
+    await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
+    view.rerender(<AdvisorCard {...props} />)
+    expect((screen.getByLabelText(en.provider) as HTMLSelectElement).disabled).toBe(false)
+  })
+
+  it('keeps the saved notice visible through the post-apply reload window', async () => {
+    const { controller, scripted, props, view } = await mountCard({ config: pairedConfig() })
+    // The post-apply reload's get hangs: apply() sets 'saved' BEFORE the
+    // reload, and the store keeps applyState through the loading window —
+    // the hold branch must keep both the notice and the form mounted.
+    let releaseGet!: (value: RpcResult<{ config: AdvisorConfigView }>) => void
+    scripted.get.mockReturnValueOnce(
+      new Promise<RpcResult<{ config: AdvisorConfigView }>>((resolve) => { releaseGet = resolve }),
+    )
+    controller.setModel('ds-b')
+    const applying = controller.apply()
+    await waitFor(() => {
+      expect(controller.store.getSnapshot().applyState.kind).toBe('saved')
+      expect(controller.store.getSnapshot().status).toBe('loading')
+    })
+    view.rerender(<AdvisorCard {...props} />)
+    expect(screen.getByRole('status').textContent).toBe(en.saved)
+    expect(screen.getByLabelText(en.provider)).toBeTruthy()
+    expect((screen.getByLabelText(en.provider) as HTMLSelectElement).disabled).toBe(true)
+    // The reload settles: healthy ready again, the landed feedback still up.
+    releaseGet(okResult({ config: { ...pairedConfig(), model: 'ds-b' } }))
+    await applying
+    await waitFor(() => expect(controller.store.getSnapshot().status).toBe('ready'))
+    view.rerender(<AdvisorCard {...props} />)
+    expect(screen.getByRole('status').textContent).toBe(en.saved)
+  })
+
   it('renders the provider/model selects unconditionally and blocks Save with the gate copy', async () => {
     const { view, props } = await mountCard()
     // No enable toggle to flip — the selects are always here, and the

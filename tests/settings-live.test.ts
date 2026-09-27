@@ -639,6 +639,40 @@ describe('settings live re-apply — a committed pair unblocks the gate', () => 
 })
 
 // ---------------------------------------------------------------------------
+// 8. Off-session status contract: a session disabled by its OWN override
+//    reports plain disabled — the S4 gate reason describes the persisted
+//    pair, which the off session is not asking about (safeEffective strips
+//    the reason on the off branch; the global readback keeps it).
+// ---------------------------------------------------------------------------
+
+describe('/advisor status — off session carries no gate reason (safeEffective off branch)', () => {
+  it('pairless global + own-override off: status shows plain disabled, the config readback keeps the reason', async () => {
+    const { ctx, entry } = await composeLiveHarness(
+      { provider: 'stub', model: 'stub-model' },
+      [],
+    )
+    const handler = await registerCommands(ctx)
+    const { session } = makeSession('s1')
+
+    // Land the pair first so `/advisor off` actually writes the override (a
+    // pairless row reports already-off without touching the override), then
+    // clear the pair: the session stays off by its OWN override while the
+    // global turns gate-blocked.
+    invokeAdvisor(handler, ' off', session)
+    entry.commit(ctx, { provider: '', model: '' })
+
+    const status = invokeAdvisor(handler, ' status', session)
+    expect(status.text).toContain('Advisor: disabled')
+    expect(status.text).not.toContain('Reason:')
+
+    // The global readback (safeResolved) is untouched: it keeps the S4 reason.
+    const config = invokeAdvisor(handler, ' config', session)
+    expect(config.text).toContain('Advisor config: disabled')
+    expect(config.text).toContain('Reason: provider and model are missing')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 7. /advisor config — session-less composed readback (plan
 //    dsh-advisor-tui-client-n8 T2). The REAL wiring reads `safeResolved()`
 //    (the live entry config with the hard gate applied), never the

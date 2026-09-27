@@ -282,7 +282,15 @@ export function apply(ctx: Context, config: AdvisorConfig) {
         ...source,
         ...(pair === undefined ? {} : { provider: pair.provider, model: pair.model }),
       })
-      return effectiveEnabled(sessionId) ? resolved : { ...resolved, enabled: false }
+      // A session turned off by its own override carries NO gate reason: the
+      // S4 reason describes the persisted pair, which the off session isn't
+      // asking about (`/advisor status` shows "disabled" plainly; the global
+      // readback — safeResolved — keeps the reason). Destructure-strip so the
+      // off branch's contract is the absence of the key, not an
+      // undefined-valued one.
+      if (effectiveEnabled(sessionId)) return resolved
+      const { disabledReason: _unused, ...rest } = resolved
+      return { ...rest, enabled: false }
     } catch (error) {
       return safeFallback(error instanceof Error ? error.message : String(error))
     }

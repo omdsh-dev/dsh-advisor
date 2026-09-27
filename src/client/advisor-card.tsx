@@ -52,6 +52,10 @@
  * cannot render its form shows that state on every render, including through
  * a background refresh of a degraded card (the store's latched `degraded`
  * keeps the notice up while `status === 'loading'`, qc1 S-2 fix wave).
+ * A healthy card holds its form through the same refresh window (fields
+ * disabled — the store keeps the last settled providers/draft/applyState
+ * until the ready update), so a post-apply reload never unmounts the form or
+ * blinks the saved notice away.
  * When the last load could not reach the `advisor.get` gateway endpoint (the
  * gateway channel is down or not ready on this host), the form is replaced
  * by the `namespaceUnavailable` notice and Save is never offered, so the
@@ -174,10 +178,17 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
       </>
     )
   }
-  if (state.status !== 'ready') {
-    // Loading (or the idle→loading transition): nothing yet — the flat card
-    // has no header chrome to hold the space (the former empty body died
-    // with the chrome).
+  // Healthy-card refresh HOLD: while a background refresh is in flight
+  // (status 'loading' after a previously settled healthy ready state — the
+  // store retains the last settled providers/draft/applyState until the ready
+  // update replaces them), the flat form stays MOUNTED with every field
+  // disabled. Unmounting for the refresh window would drop focus and blink
+  // the saved notice away during a post-apply reload (qc3 N-1 keeps that
+  // feedback visible exactly there). The FIRST load (loading with nothing
+  // settled — advisorPresent still false) renders nothing: the store defaults
+  // carry no real data to show.
+  const refreshHold = state.status === 'loading' && state.advisorPresent === true
+  if (state.status !== 'ready' && !refreshHold) {
     return null
   }
   const { draft, providers, writable, applyState } = state
@@ -189,7 +200,9 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
   // form can only save a complete pair.
   const gateFailed = providerEmpty || modelEmpty
   const saving = applyState.kind === 'saving'
-  const busy = !writable || saving
+  // Refresh-hold fields are read-only: the snapshot under them is mid-refresh
+  // (same rationale as the W-1 read-only disable).
+  const busy = !writable || saving || state.status === 'loading'
   const selectedModels = draft.provider === undefined
     ? []
     : state.modelsByProvider[draft.provider] ?? []
