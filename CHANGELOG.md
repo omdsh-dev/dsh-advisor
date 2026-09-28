@@ -2,6 +2,10 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.5.3] - 2026-09-28
+
+- 978ca72 chore(deps): 升级 dsh peers 到 0.2.0-rc.1 / upgrade dsh peers to 0.2.0-rc.1 (#100)
+
 ## [0.5.2] - 2026-09-27
 
 - 5b24ad1 feat: flat advisor settings card, localized plugin meta, drop the config-level enabled switch (#98)
