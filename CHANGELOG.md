@@ -2,6 +2,11 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.5.4] - 2026-09-29
+
+- dd9b75f Merge pull request #104 from omdsh-dev/feat/issue-102-output-resilience
+- 752dc16 chore(deps): 升级 dsh peers 到 0.2.0-rc.2 / upgrade dsh peers to 0.2.0-rc.2 (#103)
+
 ## [0.5.3] - 2026-09-28
 
 - 978ca72 chore(deps): 升级 dsh peers 到 0.2.0-rc.1 / upgrade dsh peers to 0.2.0-rc.1 (#100)
