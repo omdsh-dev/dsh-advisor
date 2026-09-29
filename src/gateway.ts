@@ -31,9 +31,10 @@
  * resolvable from a fiber that declares it.
  *
  * The returned config is normalized to the typertGateway JSON wire boundary:
- * absent keys (provider/model/disabledReason) are OMITTED, never
- * present-as-undefined (the gateway's result validation rejects undefined
- * values).
+ * absent keys (provider/model/disabledReason, and maxTokens/proseFallback
+ * when the raw entry omits them on the S1 containment path) are OMITTED,
+ * never present-as-undefined (the gateway's result validation rejects
+ * undefined values).
  *
  * @module dsh-advisor/gateway
  */
@@ -320,8 +321,9 @@ export class AdvisorConfigGateway extends TypertRemoteService {
    * disabled-with-reason carrying the message — the gateway never fails the
    * RPC on a bad config, and gate semantics hold (no model call can start).
    * S1: when the raw source is still readable, the fallback seeds its scalar
-   * latches (systemPrompt / immuneTurns / maxDeltaMessages) instead of
-   * hardcoded defaults, so an invalid config only drops the offending keys.
+   * latches (systemPrompt / immuneTurns / maxDeltaMessages / maxTokens /
+   * proseFallback) instead of hardcoded defaults, so an invalid config only
+   * drops the offending keys.
    */
   private readConfig(): ResolvedAdvisorConfig {
     let config: ResolvedAdvisorConfig
@@ -339,17 +341,25 @@ export class AdvisorConfigGateway extends TypertRemoteService {
         systemPrompt: raw?.systemPrompt ?? '',
         immuneTurns: raw?.immuneTurns ?? 3,
         maxDeltaMessages: raw?.maxDeltaMessages ?? 60,
+        maxTokens: raw?.maxTokens,
+        proseFallback: raw?.proseFallback,
         disabledReason: error instanceof Error ? error.message : String(error),
       }
     }
     // typertGateway wire boundary: absent keys are omitted, never
     // present-as-undefined (the result validator rejects undefined values).
+    // The seven persisted keys (qc1 W-1, issue #102): maxTokens/proseFallback
+    // ride the same resolved source — present whenever the resolver defined
+    // them (the schema defaults fill 768/false on the normal path), omitted
+    // only when the S1 fallback's raw entry lacked them.
     const wire: Record<string, unknown> = {
       enabled: config.enabled,
       systemPrompt: config.systemPrompt,
       immuneTurns: config.immuneTurns,
       maxDeltaMessages: config.maxDeltaMessages,
     }
+    if (config.maxTokens !== undefined) wire.maxTokens = config.maxTokens
+    if (config.proseFallback !== undefined) wire.proseFallback = config.proseFallback
     if (config.provider !== undefined) wire.provider = config.provider
     if (config.model !== undefined) wire.model = config.model
     if (config.disabledReason !== undefined) wire.disabledReason = config.disabledReason

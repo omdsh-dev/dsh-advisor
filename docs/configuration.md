@@ -1,10 +1,10 @@
 # 配置指南（advisor entry config）
 
-`dsh-advisor` 的配置就是**插件自己 entry 的 config**——profile 补丁层（如 `profiles/web/cordis.patch.yml`）里 `id: advisor` 那一行的 `config` 字段。dsh ≥ 0.1.7-rc.1 起全部五个字段都声明为 schema-volatile 的 **live 字段**：Loader 把编辑提交进运行中 fiber 的引用，**无需重挂载**（旧的全局 `$DSH_HOME/settings.yaml` user layer 已移除——dsh 首次启动时把该文件导入活跃 profile 并改名 `.imported`；`src/settings.ts` 的 bridge 读取的正是 entry config 的 live 引用）。三个并行的编辑路径读写同一份存储：
+`dsh-advisor` 的配置就是**插件自己 entry 的 config**——profile 补丁层（如 `profiles/web/cordis.patch.yml`）里 `id: advisor` 那一行的 `config` 字段。dsh ≥ 0.1.7-rc.1 起全部七个字段都声明为 schema-volatile 的 **live 字段**：Loader 把编辑提交进运行中 fiber 的引用，**无需重挂载**（旧的全局 `$DSH_HOME/settings.yaml` user layer 已移除——dsh 首次启动时把该文件导入活跃 profile 并改名 `.imported`；`src/settings.ts` 的 bridge 读取的正是 entry config 的 live 引用）。三个并行的编辑路径读写同一份存储：
 
 1. **插件行 config** —— 上面的补丁层字段本体，配置就存放在这里（`src/config.ts` 的 `Config` schema 即该 entry 的 Loader schema）。
 2. **web「插件」页 —— dsh-advisor 组合包自己页面上的 Advisor 卡片**（bundle key `dsh-advisor`，经 `plugins.bundle.config` keyed slot 注册）—— 卡片把编辑结果写进**同一份 entry config**（经 `settings.update('advisor', …)` → config editor → Loader 落盘到 profile 补丁层）；保存后运行中的会话立即生效，无需重启（运行时 live 读取 entry 引用，见 [live 重应用](#live-重应用)）。
-3. **dsh-tui `/settings` 屏幕**（dsh-tui ≥ v0.8.0，随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供；旧版 dsh-tui 干净地 no-op）—— `/settings` 里的 **Advisor** 分节编辑同样的四个键（`provider` / `model` / `immuneTurns` / `maxDeltaMessages`，各带中英文标签与提示）。编辑先暂存，保存时经 revision 栅栏保护的 `settings.mutate` 写入同一份 entry config，live 重应用、无需重启。`systemPrompt` 不是 TUI 字段（TUI text 控件为单行；多行 prompt 会被截断）——经 web 卡片或 profile 补丁层编辑。
+3. **dsh-tui `/settings` 屏幕**（dsh-tui ≥ v0.8.0，随 v0.8.0+ 组合包的 `dsh-tui-settings-sections` 行提供；旧版 dsh-tui 干净地 no-op）—— `/settings` 里的 **Advisor** 分节编辑同样的六个键（`provider` / `model` / `immuneTurns` / `maxDeltaMessages` / `maxTokens` / `proseFallback`，各带中英文标签与提示）。编辑先暂存，保存时经 revision 栅栏保护的 `settings.mutate` 写入同一份 entry config，live 重应用、无需重启。`systemPrompt` 不是 TUI 字段（TUI text 控件为单行；多行 prompt 会被截断）——经 web 卡片或 profile 补丁层编辑。
 
 三条路径对等（web 卡片、TUI `/settings`、profile 补丁层读写同一组键、同一份 entry config）。**保存行为差异（如实记录）**：web 卡片在 `provider`/`model` 缺失时**阻止保存**（无条件的 pair 门禁——没有 enabled 开关可使它变为条件性）；TUI seam 没有跨字段校验（上游行为），一次保存可能把空 `provider`/`model` 写入——S4 显式模型门禁（spec §5.2）会把该配置解析为 disabled-with-reason，可见于 `/advisor status` 与 `/advisor config`（见 [显式模型门禁（S4）](#显式模型门禁s4)）。因此**完全清除已存储的 pair 无法从 web 卡片完成**（清空会标记未保存但保存被门禁拒绝）——走 TUI `/settings` 保存空值，或直接编辑 profile 补丁层。
 
@@ -25,8 +25,10 @@
 | `systemPrompt` | string | `""` | 覆盖内置评审 prompt（严重度定义 + JSON-frame 输出契约，`src/prompts.ts` `DEFAULT_ADVISOR_SYSTEM_PROMPT`）。`""` = 用内置。 |
 | `immuneTurns` | number（整数 ≥ 0） | `3` | 冷却步数：实际 steer 过一次 concern/blocker 后，接下来 N 个完成的 stepped 主 turn 必须走完，另一条打断性 note 才可再次 steer；窗口内的 note 降级为 inject。 |
 | `maxDeltaMessages` | number（整数 ≥ 0） | `60` | 有界的 advisor 输入窗口。超过 N 的 delta 以 `… <earlier messages omitted>` 标记截断；`0` = 无上限。 |
+| `maxTokens` | number（整数 128..16384） | `768` | 单次评审调用的 token 预算（issue #102）。默认 768 = 既有用户指示超驰链终值（256 → 5120 → 768）；思考型模型（尤其第三方网关后无法关 thinking 的模型）把预算耗在 reasoning 上导致空回复时调高——见[思考型模型调优](#思考型模型调优)。 |
+| `proseFallback` | boolean | `false` | Opt-in 散文容错（issue #102）：开启后，未产出有效 note（无可解析 JSON 帧，或帧的 note 为空/非法）但正文非空的回复经清理（trim → 剥外围 markdown 围栏 → 768 字符截断）作为 `severity: 'nit'` 的 note 走正常 guard/投递管线。可用的帧 note 始终优先；默认关闭时同样回复仍被丢弃。 |
 
-> 默认值即 `Config` schema 的默认值（`z.string().default('')`、`z.number().step(1).min(0).default(3)` / `.default(60)`，`src/config.ts`）。`provider` / `model` 在 schema 上没有默认值 —— 保持可选是为了让缺 pair 的配置能通过 Loader 校验、再由门禁解析为 disabled-with-reason（而不是加载失败）。`enabled` 键已移除（2026-09-26）——宿主 UI 的插件行开关即总开关；存储值中残留的 `enabled:` 会被静默忽略（2026-09-27 裁决：接受但剥离，永不读取、永不回写）。
+> 默认值即 `Config` schema 的默认值（`z.string().default('')`、`z.number().step(1).min(0).default(3)` / `.default(60)`、`z.number().step(1).min(128).max(16384).default(768)`、`z.boolean().default(false)`，`src/config.ts`）。`provider` / `model` 在 schema 上没有默认值 —— 保持可选是为了让缺 pair 的配置能通过 Loader 校验、再由门禁解析为 disabled-with-reason（而不是加载失败）。`enabled` 键已移除（2026-09-26）——宿主 UI 的插件行开关即总开关；存储值中残留的 `enabled:` 会被静默忽略（2026-09-27 裁决：接受但剥离，永不读取、永不回写）。`maxTokens` / `proseFallback` 为 2026-09-29 新增（issue #102）。
 
 ### 示例 YAML
 
@@ -39,6 +41,8 @@
     systemPrompt: ""            # 可选；"" = 内置评审 prompt
     immuneTurns: 3              # 整数 ≥ 0，默认 3 —— 打断性送达后的冷却步数
     maxDeltaMessages: 60        # 整数 ≥ 0，默认 60 —— delta 窗口；0 = 无上限
+    maxTokens: 768              # 整数 128..16384，默认 768 —— 单次评审的 token 预算（issue #102）
+    proseFallback: false        # 布尔，默认 false —— 无有效 note（含帧 note 为空/非法）时将散文回复作为 nit note 投递（opt-in）
 ```
 
 ## 显式模型门禁（S4）
@@ -53,7 +57,7 @@
 
 ## 会话级评审模型覆盖（运行时，临时）
 
-除上表五个**持久化的全局默认值**键外，插件还支持一个**运行时、内存态、按会话**的评审模型覆盖：`modelOverride: { provider, model }` 原子对。它**绝不**写入 entry config、绝不持久化（持久化 schema 冻结在上述五键），由 `/advisor model` 指令面驱动：
+除上表七个**持久化的全局默认值**键外，插件还支持一个**运行时、内存态、按会话**的评审模型覆盖：`modelOverride: { provider, model }` 原子对。它**绝不**写入 entry config、绝不持久化（持久化 schema 冻结在上述七键），由 `/advisor model` 指令面驱动：
 
 | 指令 | 行为 |
 |---|---|
@@ -100,11 +104,31 @@ schema 默认值（.volatile() live 字段）→ entry config（插件行本体�
 ### 评审运行策略（`src/advisor-runtime.ts`）
 
 - 每个会话一个 `AdvisorRuntime`；delta 进有界 FIFO 队列（默认 32，满时丢最新并记日志），串行异步 drain —— **主循环永不被 park**；
-- 每次 `llm.stream` 调用：`{ provider, model, system, messages: [user delta], maxTokens: 768 }`（768 = 用户指示的 256 → 5120 → 768 超驰链终值：thinking-off 为默认后无需 reasoning 余量；`purpose` 不设置，KD-5）。`reasoningEffort: 'off'` 仅在所配置模型的 adapter 声明该档位时发送（`src/advisor-runtime.ts` `resolveModelInfo` 能力查询）；
+- 每次 `llm.stream` 调用：`{ provider, model, system, messages: [user delta], maxTokens }`（`maxTokens` 可配置、整数 128..16384、默认 768 = 用户指示的 256 → 5120 → 768 超驰链终值；2026-09-29 起经 `maxTokens` 配置键可调——issue #102：第三方网关后无法关 thinking 的模型会把固定预算耗在 reasoning 上、正文为空；`purpose` 不设置，KD-5）。`reasoningEffort: 'off'` 仅在所配置模型的 adapter 声明该档位时发送（`src/advisor-runtime.ts` `resolveModelInfo` 能力查询）；
 - 每次调用有 60s 整调用 deadline（超时按 transient 处理，KD-5 retry → drop）；
 - **failure policy（KD-5）**：transient → 1 次重试（1s backoff）→ drop；连续 3 次 drop → 冲刷积压 backlog（不 stall）；quota/rate-limit → `quota_exhausted` 暂停（批次保留，**无自动恢复定时器** —— `/advisor on` 手动恢复）；permanent（`invalid_request_error` / model-not-found / "is not supported when" / does not exist）→ `halted`（原地终止；`/advisor on` 为该会话全新重建）；
-- **KD-2 抽取**：解析回复中第一个平衡 JSON 帧（容忍 prose/fence）为 `{note, severity}`；`note` 非空否则 drop+log；`severity` 缺失/非法默认 `nit`；不做解析重试；note 文本有界（768 字符，`ADVISOR_NOTE_MAX_CHARS`）；
+- **KD-2 抽取**：解析回复中第一个平衡 JSON 帧（容忍 prose/fence）为 `{note, severity}`；`note` 非空否则 drop+log；`severity` 缺失/非法默认 `nit`；不做解析重试；note 文本有界（768 字符，`ADVISOR_NOTE_MAX_CHARS`）。开启 `proseFallback` 时，未产出有效 note——无可解析帧，或帧的 note 为空/非法——但正文非空的回复经 `extractProseFallbackNote` 清理后作为 `nit` note 投递（可用帧 note 优先不变）；丢弃按 empty / unparsed 分类计数 + 时间戳，非零时见 `/advisor status` 的 `Dropped:` 行（KD-I3，issue #102）；
 - **T5 emission guard**（`src/emission-guard.ts`）：normalize（等价拼写归一到同一身份）、content-free 短语抑制（stop / done / complete / no issue continue / lgtm / nothing to add）、跨 update 去重（允许 nit → concern → blocker 升级）、每次 update 至多一条 note、FIFO 有界去重历史（默认 4096）；compaction / surface 重写清空历史与 latch。
+
+### 思考型模型调优（issue #102）
+
+**症状**：advisor 已启用、runtime 状态正常，但从不产出任何建议。根因通常是模型侧输出被静默丢弃（issue #102 实证的两类，此前仅 debug 日志可见）：
+
+- **空回复（empty）**：思考型模型——尤其第三方 OpenAI 兼容网关后、未声明 thinking-off 能力的模型——把 token 预算耗在 reasoning 上，正文为空（`finish: max-tokens`），被 KD-2 抽取丢弃；
+- **散文回复（unparsed）**：模型无视 JSON 帧规约、以纯散文作答，严格帧解析失败，被丢弃。
+
+**排查**：运行 `/advisor status`——任一计数非零时追加一行 `Dropped:`（按类计数 + 各类最近一次丢弃的 ISO 时间戳 + 修复提示）：
+
+```text
+Dropped: 3 empty (last 2026-09-29T08:15:42.000Z) — consider raising the maxTokens setting; 12 unparsed (last 2026-09-29T08:51:17.000Z) — consider enabling the proseFallback setting
+```
+
+**处置**（与运行时 warn-once 日志的提示一致）：
+
+- **empty 计数增长** → 调高 `maxTokens`（整数 128..16384；issue 报告者实测 4096 可恢复产出）。默认 768 适配 thinking-off 生效的 deepseek 模型；reasoning 无法关闭的模型需要更大预算。上限 16384 是失控成本保险——注入体积不随之放大（note 仍受 768 字符截断 + emission guard 约束），放大的只是模型调用的生成预算。
+- **unparsed 计数增长** → 开启 `proseFallback`（默认关闭）：未产出有效 note（无可解析帧，或帧的 note 为空/非法）但正文非空的回复经清理（trim → 剥外围 markdown 围栏 → `ADVISOR_NOTE_MAX_CHARS` 截断）后作为 `severity: 'nit'` 的 note 走正常 guard / `immuneTurns` / 投递管线。可用帧 note 始终优先；默认关闭时同样的回复仍被丢弃（opt-in 兼容层，默认行为不变）。
+
+两类丢弃首次发生时各 warn 一次（带同样的修复提示），此后仅 debug 级记录。计数自 runtime 创建起累计；编辑 `maxTokens` / `proseFallback` 属运行时构造期常量，会触发 runtime 重建（见 [live 重应用](#live-重应用)）并清零计数。
 
 ### 双模式触发与自审排除（`src/transcript.ts`）
 
@@ -115,7 +139,7 @@ schema 默认值（.volatile() live 字段）→ entry config（插件行本体�
 
 ### Live 重应用
 
-每次 Loader 提交的 volatile 编辑（`loader/volatile-update`）经 `bridge.onChange` 重派生（`src/index.ts`）：`immuneTurns` / `maxDeltaMessages` 原地更新（delivery / observer）；每个会话 runtime 仅在其「运行影响签名」（provider / model / systemPrompt）变化时重建 —— 只改免疫/窗口的编辑不会中断在途调用或丢弃 backlog。S4 门禁每次读取都经解析器重放，配置编辑永远无法启动被门禁阻挡的模型调用。
+每次 Loader 提交的 volatile 编辑（`loader/volatile-update`）经 `bridge.onChange` 重派生（`src/index.ts`）：`immuneTurns` / `maxDeltaMessages` 原地更新（delivery / observer）；每个会话 runtime 仅在其「运行影响签名」（provider / model / systemPrompt / maxTokens / proseFallback）变化时重建 —— 只改免疫/窗口的编辑不会中断在途调用或丢弃 backlog。S4 门禁每次读取都经解析器重放，配置编辑永远无法启动被门禁阻挡的模型调用。
 
 ## Web 卡片行为（`src/client`）
 

@@ -311,12 +311,33 @@ export interface AdvisorSessionStatus {
   readonly pendingCount: number
   /** Epoch-ms of the last accepted note; undefined before the first (T4). */
   readonly lastActivityAt?: number
+  /**
+   * Empty replies dropped since the runtime was created (KD-I3, issue #102) —
+   * the classic case is a thinking model exhausting the token budget (empty
+   * body, finish: max-tokens). 0 for a session without a live runtime.
+   */
+  readonly emptyReplies: number
+  /**
+   * Replies dropped since the runtime was created because they carried a body
+   * but no parseable JSON note and the opt-in prose fallback did not rescue
+   * them (KD-I3, issue #102). 0 for a session without a live runtime.
+   */
+  readonly unparsedReplies: number
+  /** Epoch-ms of the last empty-reply drop; undefined before the first. */
+  readonly lastEmptyReplyAt?: number
+  /** Epoch-ms of the last unparsed-reply drop; undefined before the first. */
+  readonly lastUnparsedReplyAt?: number
 }
 
 /**
  * Render the status surface. Kept minimal and truthful: state, the S4 reason
  * when the gate blocks, the resolved provider/model, the runtime status with
- * the pending count, and the last accepted-note activity (ISO, or `never`).
+ * the pending count, the last accepted-note activity (ISO, or `never`), and —
+ * ONLY when a drop counter is non-zero (KD-I3, issue #102) — one `Dropped:`
+ * line with the per-class counts, the ISO timestamp of each class's last drop
+ * when present, and the same repair hints the runtime's warn-once logs carry
+ * (empty → raise maxTokens; unparsed → enable proseFallback). The zero-drop
+ * output stays byte-identical to the pre-issue-#102 surface.
  */
 export function advisorStatusText(status: AdvisorSessionStatus): string {
   const lines: string[] = []
@@ -330,6 +351,24 @@ export function advisorStatusText(status: AdvisorSessionStatus): string {
   const pending = status.pendingCount > 0 ? ` (${status.pendingCount} pending)` : ''
   lines.push(`Runtime: ${status.runtimeStatus}${pending}`)
   lines.push(`Last activity: ${status.lastActivityAt === undefined ? 'never' : new Date(status.lastActivityAt).toISOString()}`)
+  // KD-I3 (issue #102): drop visibility — ONE line, only when something was
+  // actually dropped, so the zero-drop surface stays byte-identical ("minimal
+  // and truthful"). Per class: count, the ISO timestamp of the last drop when
+  // the class has fired, and the repair hint matching the runtime's warn-once.
+  const dropped: string[] = []
+  if (status.emptyReplies > 0) {
+    const last = status.lastEmptyReplyAt === undefined
+      ? ''
+      : ` (last ${new Date(status.lastEmptyReplyAt).toISOString()})`
+    dropped.push(`${status.emptyReplies} empty${last} — consider raising the maxTokens setting`)
+  }
+  if (status.unparsedReplies > 0) {
+    const last = status.lastUnparsedReplyAt === undefined
+      ? ''
+      : ` (last ${new Date(status.lastUnparsedReplyAt).toISOString()})`
+    dropped.push(`${status.unparsedReplies} unparsed${last} — consider enabling the proseFallback setting`)
+  }
+  if (dropped.length > 0) lines.push(`Dropped: ${dropped.join('; ')}`)
   return lines.join('\n')
 }
 
@@ -439,6 +478,18 @@ export interface AdvisorComposedConfig {
   readonly immuneTurns: number
   /** Delta window; 0 = unbounded (KD-3). */
   readonly maxDeltaMessages: number
+  /**
+   * Token budget for one advisor call (KD-I1, issue #102). Present when the
+   * composed read carries the key (the schema default fills 768 on the
+   * resolved path); absent on a fallback-shaped read — the renderer shows the
+   * line only when present, never a defaulted value for an absent key.
+   */
+  readonly maxTokens?: number
+  /**
+   * Opt-in prose fallback switch (KD-I2, issue #102); same presence rule as
+   * {@link AdvisorComposedConfig.maxTokens}.
+   */
+  readonly proseFallback?: boolean
   /** True when the composed config carries a custom system prompt ("" = unset). */
   readonly systemPromptSet: boolean
   /**
@@ -488,6 +539,13 @@ export function advisorConfigText(config: AdvisorComposedConfig): string {
   }
   lines.push(`immuneTurns: ${config.immuneTurns}`)
   lines.push(`maxDeltaMessages: ${config.maxDeltaMessages === 0 ? 'unbounded' : config.maxDeltaMessages}`)
+  // The issue-#102 keys (qc1 S-1) render only when the composed read carries
+  // them: a fallback-shaped read omits the optional keys, and inventing a
+  // default marker there would misreport a store whose real values differ —
+  // the same lie class the gateway wire fix (qc1 W-1) removes. Absent = no
+  // line, matching the Model/Reason lines' conditional style.
+  if (config.maxTokens !== undefined) lines.push(`maxTokens: ${config.maxTokens}`)
+  if (config.proseFallback !== undefined) lines.push(`proseFallback: ${config.proseFallback ? 'on' : 'off'}`)
   // The set-vs-default signal is systemPromptSet, NOT the summary: a custom
   // prompt whose first line is empty (e.g. '\nsecond line') summarizes to ''
   // but must still read as set, not <default> (qc2 F-3).

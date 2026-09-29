@@ -99,6 +99,17 @@ export interface AdvisorConfigView {
   immuneTurns: number
   /** Delta window; integer ≥ 0, 0 = unbounded. */
   maxDeltaMessages: number
+  /**
+   * Token budget for one advisor call (KD-I1, issue #102); integer
+   * 128..16384. Absent on plain-object entries → the runtime default
+   * `ADVISOR_MAX_TOKENS` (768), mirroring src/config.ts.
+   */
+  maxTokens?: number
+  /**
+   * Opt-in prose fallback switch (KD-I2, issue #102). Absent on plain-object
+   * entries → the runtime default false, mirroring src/config.ts.
+   */
+  proseFallback?: boolean
   /** Present iff the advisor is disabled by the explicit model gate. */
   disabledReason?: string
 }
@@ -133,7 +144,10 @@ export type ModelsEmptyReason =
   /** No profile models; the catalog has no group for this provider. */
   | 'unavailable'
 
-/** The user-layer draft the form edits (provider/model/systemPrompt/immuneTurns/maxDeltaMessages). */
+/**
+ * The user-layer draft the form edits
+ * (provider/model/systemPrompt/immuneTurns/maxDeltaMessages/maxTokens/proseFallback).
+ */
 export interface AdvisorDraft {
   /** Provider route; required (non-empty). */
   provider?: string
@@ -145,6 +159,14 @@ export interface AdvisorDraft {
   immuneTurns?: number
   /** Delta window; integer ≥ 0, default 60, 0 = unbounded. Cleared input → undefined (left unchanged on apply). */
   maxDeltaMessages?: number
+  /**
+   * Token budget for one advisor call (KD-I1, issue #102); integer
+   * 128..16384, default 768. Cleared input → undefined (left unchanged on
+   * apply).
+   */
+  maxTokens?: number
+  /** Opt-in prose fallback (KD-I2, issue #102); default false. */
+  proseFallback?: boolean
 }
 
 /** Why an Apply failed (copy keys resolve in the card; raw text passes through). */
@@ -235,6 +257,13 @@ function draftOfConfig(config: AdvisorConfigView | undefined): AdvisorDraft {
     systemPrompt: typeof config?.systemPrompt === 'string' ? config.systemPrompt : '',
     immuneTurns: numberField(config?.immuneTurns, 3),
     maxDeltaMessages: numberField(config?.maxDeltaMessages, 60),
+    // The scalar fields show the effective values: the gateway returns the
+    // resolved config, so the wire carries both keys whenever the resolver
+    // defined them (the schema defaults fill 768/false on the normal path);
+    // these fallbacks cover the containment wires whose raw entry omitted
+    // the keys (the gateway's S1 fallback mirrors the raw source verbatim).
+    maxTokens: numberField(config?.maxTokens, 768),
+    proseFallback: typeof config?.proseFallback === 'boolean' ? config.proseFallback : false,
   }
 }
 
@@ -586,6 +615,24 @@ export class AdvisorSettingsStore {
   }
 
   /**
+   * Set the advisor token budget (KD-I1, issue #102: int clamped into
+   * 128..16384 — the schema bounds; non-numeric input keeps the current
+   * value; undefined clears → omitted from patch).
+   */
+  setMaxTokens(value: number | undefined): void {
+    if (value === undefined) {
+      this.clearField('maxTokens')
+      return
+    }
+    this.setField('maxTokens', this.clampInt(value, this.store.getSnapshot().draft.maxTokens ?? 768, 128, 16384))
+  }
+
+  /** Set the opt-in prose fallback (KD-I2, issue #102). */
+  setProseFallback(value: boolean): void {
+    this.setField('proseFallback', value)
+  }
+
+  /**
    * Refuse in a read-only environment (store-side defense-in-depth for the
    * W-1 invariant — a write must never be issued when the UI declares the
    * settings service read-only), then validate the draft (KD-S4 gate) and
@@ -710,7 +757,7 @@ export class AdvisorSettingsStore {
    */
   private patchFor(draft: AdvisorDraft): Record<string, unknown> {
     const patch: Record<string, unknown> = {}
-    const always = ['systemPrompt', 'immuneTurns', 'maxDeltaMessages'] as const
+    const always = ['systemPrompt', 'immuneTurns', 'maxDeltaMessages', 'maxTokens', 'proseFallback'] as const
     for (const key of always) {
       const next = draft[key]
       // A cleared number input (undefined) means "leave the stored value
@@ -769,8 +816,9 @@ export class AdvisorSettingsStore {
     })
   }
 
-  private clampInt(value: number, fallback: number): number {
-    return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback
+  /** A bounded integer clamp (int ≥ min, ≤ max); a non-finite input keeps the fallback. */
+  private clampInt(value: number, fallback: number, min = 0, max = Number.MAX_SAFE_INTEGER): number {
+    return Number.isFinite(value) ? Math.min(max, Math.max(min, Math.floor(value))) : fallback
   }
 }
 

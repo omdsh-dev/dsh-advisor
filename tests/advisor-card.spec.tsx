@@ -10,7 +10,8 @@
  * above the card (the locale meta files), so the fields tile directly —
  * provider select, model select (ALWAYS rendered: the config-level `enabled`
  * switch is gone, the row toggle is the switch), system-prompt textarea
- * (placeholder = the built-in reviewer prompt), the paired number inputs —
+ * (placeholder = the built-in reviewer prompt), the proseFallback checkbox and
+ * the number inputs (immuneTurns / maxDeltaMessages / maxTokens) —
  * then the footer with the failed message + Discard/Save (upstream disabled
  * semantics: save = `!dirty || invalid || saving`, discard = `!dirty ||
  * saving`; save additionally carries `!writable`). Degraded / error states
@@ -443,17 +444,23 @@ describe('AdvisorCard flat layout (official settings-page language)', () => {
     // switch is gone; the row toggle is the switch), and provider/model are
     // ALWAYS present.
     expect(view.container.querySelector('[aria-expanded]')).toBeNull()
-    // No checkbox input exists anywhere (the enable toggle is gone).
-    expect(view.container.querySelector('input[type="checkbox"]')).toBeNull()
     expect(screen.getByLabelText(en.provider)).toBeTruthy()
     expect(screen.getByLabelText(en.model)).toBeTruthy()
     expect(screen.getByLabelText(en.systemPrompt)).toBeTruthy()
     expect(screen.getByLabelText(en.immuneTurns)).toBeTruthy()
     expect(screen.getByLabelText(en.maxDeltaMessages)).toBeTruthy()
+    expect(screen.getByLabelText(en.maxTokens)).toBeTruthy()
+    expect(screen.getByLabelText(en.proseFallback)).toBeTruthy()
     expect(screen.getByRole('button', { name: en.save })).toBeTruthy()
     expect(screen.getByRole('button', { name: en.discard })).toBeTruthy()
-    // The hint under the textarea carries the leave-empty contract.
+    // The hint under the textarea carries the leave-empty contract; the new
+    // issue #102 fields carry their tuning hints.
     expect(screen.getByText(en.systemPromptHint)).toBeTruthy()
+    expect(screen.getByText(en.maxTokensHint)).toBeTruthy()
+    expect(screen.getByText(en.proseFallbackHint)).toBeTruthy()
+    // The proseFallback toggle is the ONLY checkbox (the config-level
+    // `enabled` switch is gone — the row toggle is the master switch).
+    expect(view.container.querySelectorAll('input[type="checkbox"]')).toHaveLength(1)
   })
 
   it('renders nothing while the first load is in flight (no chrome to hold the space)', async () => {
@@ -812,6 +819,38 @@ describe('AdvisorCard', () => {
     fireEvent.change(delta, { target: { value: '' } })
     view.rerender(<AdvisorCard {...props} />)
     expect((screen.getByLabelText(en.maxDeltaMessages) as HTMLInputElement).value).toBe('')
+    // So does the maxTokens input (issue #102).
+    const tokens = screen.getByLabelText(en.maxTokens) as HTMLInputElement
+    expect(tokens.value).toBe('768')
+    fireEvent.change(tokens, { target: { value: '' } })
+    view.rerender(<AdvisorCard {...props} />)
+    expect((screen.getByLabelText(en.maxTokens) as HTMLInputElement).value).toBe('')
+  })
+
+  it('renders maxTokens/proseFallback with the effective defaults and edits both through the store (issue #102)', async () => {
+    const { controller, props, view } = await mountCard({ config: pairedConfig() })
+    // maxTokens seeds the effective budget (768 when the wire omits it) with
+    // the KD-I1 bounds on the input; proseFallback renders the schema default.
+    const maxTokens = screen.getByLabelText(en.maxTokens) as HTMLInputElement
+    expect(maxTokens.type).toBe('number')
+    expect(maxTokens.value).toBe('768')
+    expect(maxTokens.getAttribute('min')).toBe('128')
+    expect(maxTokens.getAttribute('max')).toBe('16384')
+    const toggle = screen.getByLabelText(en.proseFallback) as HTMLInputElement
+    expect(toggle.type).toBe('checkbox')
+    expect(toggle.checked).toBe(false)
+    // Editing maxTokens flows through the store (draft + input value).
+    fireEvent.change(maxTokens, { target: { value: '4096' } })
+    view.rerender(<AdvisorCard {...props} />)
+    expect(controller.store.getSnapshot().draft.maxTokens).toBe(4096)
+    expect((screen.getByLabelText(en.maxTokens) as HTMLInputElement).value).toBe('4096')
+    // Toggling proseFallback flips the draft boolean.
+    fireEvent.click(screen.getByLabelText(en.proseFallback))
+    view.rerender(<AdvisorCard {...props} />)
+    expect(controller.store.getSnapshot().draft.proseFallback).toBe(true)
+    expect((screen.getByLabelText(en.proseFallback) as HTMLInputElement).checked).toBe(true)
+    // Both edits stage a dirty draft — Save is enabled (upstream terms).
+    expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('shows the read-only notice flat and disables writes when the settings provider is read-only', async () => {

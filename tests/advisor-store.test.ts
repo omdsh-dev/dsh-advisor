@@ -33,6 +33,11 @@
  *    pending apply feedback (error/saved) resets to idle, a fresh edit after
  *    discard diff-cleans against the restored seed, and the unseeded first-load
  *    path stays pristine (a later recovery still seeds the REAL config).
+ * ⑧ maxTokens/proseFallback draft fields (issue #102 settings sync): both keys
+ *    seed from the resolved config (effective defaults 768/false when the wire
+ *    omits them), maxTokens edits clamp into 128..16384, proseFallback
+ *    toggles, and both ride the always-list patch semantics (edited keys are
+ *    written, a cleared maxTokens is omitted, untouched keys never churn).
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -248,6 +253,8 @@ describe('providers join (KD-S2 configured determination)', () => {
       systemPrompt: '',
       immuneTurns: 3,
       maxDeltaMessages: 60,
+      maxTokens: 768,
+      proseFallback: false,
     })
   })
 
@@ -583,6 +590,100 @@ describe('apply patch + seed (gateway channel semantics)', () => {
   })
 })
 
+describe('maxTokens + proseFallback draft fields (issue #102 settings sync)', () => {
+  it('seeds both fields from the resolved config (KD-I1/I2)', async () => {
+    const { remote, rpc } = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, maxTokens: 4096, proseFallback: true },
+    })
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    expect(draftOf(store).maxTokens).toBe(4096)
+    expect(draftOf(store).proseFallback).toBe(true)
+    expect(store.store.getSnapshot().dirty).toBe(false)
+  })
+
+  it('seeds the effective defaults (768 / false) when the wire omits the new keys, staying clean', async () => {
+    // A wire without the new keys is a REAL shape, not a pre-#102 relic: the
+    // gateway's S1 containment fallback mirrors a raw entry that omits them
+    // (the resolver never ran, so no schema default filled them). The seed
+    // shows the effective defaults (numberField pattern) and the form opens
+    // clean (draft === seed, no invented diff).
+    const { remote, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    expect(draftOf(store).maxTokens).toBe(768)
+    expect(draftOf(store).proseFallback).toBe(false)
+    expect(store.store.getSnapshot().dirty).toBe(false)
+  })
+
+  it('clamps maxTokens edits into 128..16384 (KD-I1 bounds)', async () => {
+    const { remote, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    store.setMaxTokens(50) // below the lower bound → clamped up to 128
+    expect(draftOf(store).maxTokens).toBe(128)
+    store.setMaxTokens(99999) // above the upper bound → clamped down to 16384
+    expect(draftOf(store).maxTokens).toBe(16384)
+    store.setMaxTokens(4096.9) // fractional input → floored in-bounds
+    expect(draftOf(store).maxTokens).toBe(4096)
+    store.setMaxTokens(Number.NaN) // non-numeric input keeps the current value
+    expect(draftOf(store).maxTokens).toBe(4096)
+  })
+
+  it('toggles proseFallback in the draft (dirty vs the seed, clean when reverted)', async () => {
+    const { remote, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    expect(draftOf(store).proseFallback).toBe(false)
+    store.setProseFallback(true)
+    expect(draftOf(store).proseFallback).toBe(true)
+    expect(store.store.getSnapshot().dirty).toBe(true)
+    store.setProseFallback(false) // back to the seed value → empty diff → clean
+    expect(draftOf(store).proseFallback).toBe(false)
+    expect(store.store.getSnapshot().dirty).toBe(false)
+  })
+
+  it('writes edited maxTokens/proseFallback keys through the always list', async () => {
+    const { remote, rpc, call } = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, maxTokens: 768, proseFallback: false },
+    })
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    store.setMaxTokens(4096)
+    store.setProseFallback(true)
+    await store.apply()
+    const payload = call.mock.calls.find(callArgs => callArgs[1] === 'advisor/set')?.[2] as { args: { patch: Record<string, unknown> } }
+    expect(payload.args.patch).toEqual({ maxTokens: 4096, proseFallback: true })
+  })
+
+  it('omits a cleared maxTokens from the patch (empty input = leave the stored value unchanged)', async () => {
+    const { remote, rpc, call } = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, maxTokens: 4096, proseFallback: false },
+    })
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    store.setMaxTokens(undefined)
+    store.setSystemPrompt('edited')
+    await store.apply()
+    const payload = call.mock.calls.find(callArgs => callArgs[1] === 'advisor/set')?.[2] as { args: { patch: Record<string, unknown> } }
+    expect(payload.args.patch).toEqual({ systemPrompt: 'edited' })
+  })
+
+  it('keeps untouched maxTokens/proseFallback out of a partial apply (no churn)', async () => {
+    // The always list diffs both new keys on EVERY apply: untouched keys equal
+    // the seed and stay out of the patch (the minimal-patch contract holds).
+    const { remote, rpc, call } = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, maxTokens: 4096, proseFallback: true },
+    })
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    store.setSystemPrompt('edited')
+    await store.apply()
+    const payload = call.mock.calls.find(callArgs => callArgs[1] === 'advisor/set')?.[2] as { args: { patch: Record<string, unknown> } }
+    expect(payload.args.patch).toEqual({ systemPrompt: 'edited' })
+  })
+})
+
 describe('invalidations (refreshIfLoaded)', () => {
   it('refetches a loaded store', async () => {
     const { remote, rpc, describe } = scriptedApi()
@@ -734,6 +835,7 @@ describe('gateway availability (KD-G5 — advisorPresent)', () => {
     expect(state.draft).toEqual({
       provider: 'deepseek-official', model: 'ds-a',
       systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
+      maxTokens: 768, proseFallback: false,
     })
   })
 })
@@ -779,6 +881,7 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
     expect(draftOf(store)).toEqual({
       provider: 'deepseek-official', model: 'ds-a',
       systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
+      maxTokens: 768, proseFallback: false,
     })
     // Discard is a client-side rewind — no advisor/set call ever happened.
     expect(set).not.toHaveBeenCalled()
@@ -803,6 +906,7 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
     expect(draftOf(store)).toEqual({
       provider: 'deepseek-official', model: 'ds-a',
       systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60,
+      maxTokens: 768, proseFallback: false,
     })
   })
 
@@ -864,12 +968,16 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
     await store.load()
     expect(store.store.getSnapshot().advisorPresent).toBe(false)
     store.discard()
-    expect(draftOf(store)).toEqual({ systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 })
+    // The rewind target is the default (failed-get) seed — the effective
+    // defaults view, still inventing NO provider/model (the gate/wipe hazard
+    // this pin guards); the recovery below must still seed the REAL config.
+    expect(draftOf(store)).toEqual({ systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, maxTokens: 768, proseFallback: false })
     await store.load()
     expect(store.store.getSnapshot().advisorPresent).toBe(true)
     expect(draftOf(store)).toEqual({
       provider: 'deepseek-official', model: 'ds-a',
       systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
+      maxTokens: 768, proseFallback: false,
     })
   })
 })

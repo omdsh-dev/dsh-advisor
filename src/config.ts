@@ -3,8 +3,9 @@
  *
  * The exported schemastery `Config` schema is what the cordis Loader uses to
  * validate the plugin row config: it applies defaults (`immuneTurns` 3,
- * `maxDeltaMessages` 60, `systemPrompt` "") and enforces types/bounds
- * (integers ≥ 0). All five live fields are declared `.volatile()`:
+ * `maxDeltaMessages` 60, `systemPrompt` "", `maxTokens` 768,
+ * `proseFallback` false) and enforces types/bounds (integers ≥ 0; maxTokens
+ * 128..16384). All seven live fields are declared `.volatile()`:
  * the Loader commits edits to them into the running fiber's references WITHOUT
  * a remount (dsh 0.1.7-rc.1 — the settings.yaml user layer is gone), so
  * `apply` receives each field as a `{ get() }` reference and every read must
@@ -42,6 +43,28 @@ export interface AdvisorConfig {
   readonly immuneTurns: number
   /** Delta window; integer ≥ 0, default 60, 0 = unbounded (KD-3). */
   readonly maxDeltaMessages: number
+  /**
+   * Token budget for one advisor call; integer 128..16384, default 768
+   * (KD-I1, issue #102 — the 2026-09-29 user-directed supersession of KD-6's
+   * code invariant: a thinking model behind a third-party gateway can exhaust
+   * a fixed budget on reasoning and come back empty, so the operator raises
+   * the budget via Settings instead). Optional in the raw contract: the
+   * schema default (768) fills it on the Loader path and plain-object entries
+   * may omit it — the runtime falls back to `ADVISOR_MAX_TOKENS`
+   * (src/advisor-runtime.ts), keeping the default behavior byte-identical.
+   */
+  readonly maxTokens?: number
+  /**
+   * Opt-in prose fallback (KD-I2, issue #102): when true, a reply with no
+   * parseable JSON frame but non-empty text is delivered as a `nit` note
+   * (trimmed, surrounding fence stripped, capped at the note-char bound)
+   * instead of being dropped. JSON-frame priority is unchanged — the fallback
+   * applies ONLY when no frame was found. Optional in the raw contract: the
+   * schema default (false) fills it on the Loader path and plain-object
+   * entries may omit it — the runtime falls back to false (the KD-2 drop
+   * semantics), keeping the default behavior byte-identical.
+   */
+  readonly proseFallback?: boolean
 }
 
 /** Config after the explicit model gate (spec §5.2) — consumed by T4/T6. */
@@ -57,6 +80,10 @@ export interface ResolvedAdvisorConfig {
   readonly systemPrompt: string
   readonly immuneTurns: number
   readonly maxDeltaMessages: number
+  /** Token budget (KD-I1); absent on plain-object entries → runtime default 768. */
+  readonly maxTokens?: number
+  /** Prose fallback switch (KD-I2); absent on plain-object entries → runtime default false. */
+  readonly proseFallback?: boolean
   /** Present iff the advisor is disabled by the explicit model gate. */
   readonly disabledReason?: string
 }
@@ -73,6 +100,8 @@ const CONFIG_KEYS: ReadonlySet<string> = new Set([
   'systemPrompt',
   'immuneTurns',
   'maxDeltaMessages',
+  'maxTokens',
+  'proseFallback',
 ])
 
 /**
@@ -117,6 +146,8 @@ export const Config = z.object({
   systemPrompt: z.string().default('').volatile(),
   immuneTurns: z.number().step(1).min(0).default(3).volatile(),
   maxDeltaMessages: z.number().step(1).min(0).default(60).volatile(),
+  maxTokens: z.number().step(1).min(128).max(16384).default(768).volatile(),
+  proseFallback: z.boolean().default(false).volatile(),
 })
 
 function isNonEmptyString(value: string | undefined): value is string {
@@ -141,6 +172,10 @@ export interface VolatileAdvisorConfig {
   readonly systemPrompt: unknown
   readonly immuneTurns: unknown
   readonly maxDeltaMessages: unknown
+  /** Optional like {@link AdvisorConfig.maxTokens}: plain entries may omit it; the Loader path always carries it. */
+  readonly maxTokens?: unknown
+  /** Optional like {@link AdvisorConfig.proseFallback}: plain entries may omit it; the Loader path always carries it. */
+  readonly proseFallback?: unknown
 }
 
 /**
@@ -178,7 +213,7 @@ export function unwrapAdvisorConfig(raw: VolatileAdvisorConfig): AdvisorConfig {
   // The raw side is loose on purpose: the schema-removed `enabled` is not a
   // VolatileAdvisorConfig member but can arrive on any plain entry — the cast
   // widens only to let the destructure strip it.
-  const { enabled, provider, model, systemPrompt, immuneTurns, maxDeltaMessages, ...rest } =
+  const { enabled, provider, model, systemPrompt, immuneTurns, maxDeltaMessages, maxTokens, proseFallback, ...rest } =
     raw as VolatileAdvisorConfig & { readonly enabled?: unknown }
   return {
     ...rest,
@@ -187,6 +222,8 @@ export function unwrapAdvisorConfig(raw: VolatileAdvisorConfig): AdvisorConfig {
     systemPrompt: unwrapReference<string>(systemPrompt),
     immuneTurns: unwrapReference<number>(immuneTurns),
     maxDeltaMessages: unwrapReference<number>(maxDeltaMessages),
+    maxTokens: unwrapReference<number | undefined>(maxTokens),
+    proseFallback: unwrapReference<boolean | undefined>(proseFallback),
   }
 }
 

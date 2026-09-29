@@ -166,6 +166,17 @@ select.input {
   padding: 0;
 }
 
+/* The boolean toggle (proseFallback, issue #102): the ONLY checkbox on the
+   card. The .input chrome (34px text-field box, full width) must NOT apply to
+   a checkbox, so this keeps the geometry native and tints the control with
+   the shared business token — no new design tokens introduced. */
+.checkboxInput {
+  align-self: flex-start;
+  width: auto;
+  margin: 0;
+  accent-color: var(--dsw-alias-state-business-primary);
+}
+
 /* Inline guidance under a field: tertiary for hints, warn for the required
    pair gate (official 12px hint). */
 .hint {
