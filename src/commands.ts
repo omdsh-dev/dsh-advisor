@@ -311,12 +311,33 @@ export interface AdvisorSessionStatus {
   readonly pendingCount: number
   /** Epoch-ms of the last accepted note; undefined before the first (T4). */
   readonly lastActivityAt?: number
+  /**
+   * Empty replies dropped since the runtime was created (KD-I3, issue #102) —
+   * the classic case is a thinking model exhausting the token budget (empty
+   * body, finish: max-tokens). 0 for a session without a live runtime.
+   */
+  readonly emptyReplies: number
+  /**
+   * Replies dropped since the runtime was created because they carried a body
+   * but no parseable JSON note and the opt-in prose fallback did not rescue
+   * them (KD-I3, issue #102). 0 for a session without a live runtime.
+   */
+  readonly unparsedReplies: number
+  /** Epoch-ms of the last empty-reply drop; undefined before the first. */
+  readonly lastEmptyReplyAt?: number
+  /** Epoch-ms of the last unparsed-reply drop; undefined before the first. */
+  readonly lastUnparsedReplyAt?: number
 }
 
 /**
  * Render the status surface. Kept minimal and truthful: state, the S4 reason
  * when the gate blocks, the resolved provider/model, the runtime status with
- * the pending count, and the last accepted-note activity (ISO, or `never`).
+ * the pending count, the last accepted-note activity (ISO, or `never`), and —
+ * ONLY when a drop counter is non-zero (KD-I3, issue #102) — one `Dropped:`
+ * line with the per-class counts, the ISO timestamp of each class's last drop
+ * when present, and the same repair hints the runtime's warn-once logs carry
+ * (empty → raise maxTokens; unparsed → enable proseFallback). The zero-drop
+ * output stays byte-identical to the pre-issue-#102 surface.
  */
 export function advisorStatusText(status: AdvisorSessionStatus): string {
   const lines: string[] = []
@@ -330,6 +351,24 @@ export function advisorStatusText(status: AdvisorSessionStatus): string {
   const pending = status.pendingCount > 0 ? ` (${status.pendingCount} pending)` : ''
   lines.push(`Runtime: ${status.runtimeStatus}${pending}`)
   lines.push(`Last activity: ${status.lastActivityAt === undefined ? 'never' : new Date(status.lastActivityAt).toISOString()}`)
+  // KD-I3 (issue #102): drop visibility — ONE line, only when something was
+  // actually dropped, so the zero-drop surface stays byte-identical ("minimal
+  // and truthful"). Per class: count, the ISO timestamp of the last drop when
+  // the class has fired, and the repair hint matching the runtime's warn-once.
+  const dropped: string[] = []
+  if (status.emptyReplies > 0) {
+    const last = status.lastEmptyReplyAt === undefined
+      ? ''
+      : ` (last ${new Date(status.lastEmptyReplyAt).toISOString()})`
+    dropped.push(`${status.emptyReplies} empty${last} — consider raising the maxTokens setting`)
+  }
+  if (status.unparsedReplies > 0) {
+    const last = status.lastUnparsedReplyAt === undefined
+      ? ''
+      : ` (last ${new Date(status.lastUnparsedReplyAt).toISOString()})`
+    dropped.push(`${status.unparsedReplies} unparsed${last} — consider enabling the proseFallback setting`)
+  }
+  if (dropped.length > 0) lines.push(`Dropped: ${dropped.join('; ')}`)
   return lines.join('\n')
 }
 

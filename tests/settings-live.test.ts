@@ -573,6 +573,72 @@ describe('settings live re-apply — conditional runtime rebuild (qc3 W-1 / qc1 
 })
 
 // ---------------------------------------------------------------------------
+// 4b. KD-I4 (issue #102): the global maxTokens/proseFallback runtime
+//     construction constants join the runtime signature — an edit rebuilds the
+//     runtime through the existing volatile-update path (the immuneTurns-only
+//     in-place latch path is pinned by the case above and must keep passing).
+// ---------------------------------------------------------------------------
+
+describe('settings live re-apply — maxTokens/proseFallback rebuild (KD-I4, issue #102)', () => {
+  it('a maxTokens-only edit rebuilds the runtime: the next call carries the new budget', async () => {
+    const { ctx, adapter, entry } = await composeLiveHarness(
+      { provider: 'stub', model: 'stub-model' },
+      [
+        [...textReply('{"note":"before edit","severity":"nit"}')],
+        [...textReply('{"note":"after edit","severity":"nit"}')],
+      ],
+    )
+    const { agent, inject } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent, source: 'startup' })
+    const { session, log } = makeSession('s1')
+
+    // Pre-edit: the runtime uses the code default budget (ADVISOR_MAX_TOKENS).
+    feed(ctx, session, log, simpleTurn(1, 'first request', 'first reply'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+    expect(adapter.requests[0]!.maxTokens).toBe(768)
+
+    // A maxTokens edit is runtime-affecting (KD-I4): the signature changes, so
+    // the volatile re-apply rebuilds the runtime and the next call carries the
+    // NEW budget (a stale runtime would keep 768).
+    entry.commit(ctx, { maxTokens: 4096 })
+
+    feed(ctx, session, log, simpleTurn(2, 'second request', 'second reply'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(2))
+    expect(adapter.requests[1]!.maxTokens).toBe(4096)
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(2))
+  })
+
+  it('a proseFallback edit rebuilds the runtime: prose replies start producing notes', async () => {
+    const { ctx, adapter, entry } = await composeLiveHarness(
+      { provider: 'stub', model: 'stub-model' },
+      [
+        [...textReply('plain prose reply without any JSON frame')],
+        [...textReply('another plain prose reply after enabling the fallback')],
+      ],
+    )
+    const { agent, inject } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent, source: 'startup' })
+    const { session, log } = makeSession('s1')
+
+    // Pre-edit (proseFallback default false): the prose reply has no parseable
+    // frame → dropped, nothing delivered.
+    feed(ctx, session, log, simpleTurn(1, 'first request', 'first reply'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+    await flush()
+    expect(inject).not.toHaveBeenCalled()
+
+    // Enabling proseFallback is runtime-affecting (KD-I4): the rebuilt runtime
+    // carries the flag, so the next prose reply becomes a nit note through the
+    // normal guard/delivery pipeline.
+    entry.commit(ctx, { proseFallback: true })
+
+    feed(ctx, session, log, simpleTurn(2, 'second request', 'second reply'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(2))
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 5. Unknown-key user layer containment (qc2 W-1): live reads never throw.
 // ---------------------------------------------------------------------------
 
@@ -768,6 +834,56 @@ describe('/advisor config — session-less composed readback (T2)', () => {
       expect(result.text).toContain('immuneTurns: 5')
       expect(result.text).toContain('maxDeltaMessages: 20')
       expect(result.text).toContain('systemPrompt: "keep me"')
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 9. AC-3 / KD-I3 (issue #102): drop counters surface on `/advisor status` —
+//    the REAL wiring carries the runtime's per-class drop statistics into the
+//    status snapshot and the renderer shows the Dropped line (only when
+//    non-zero; the zero-drop shape is pinned by the commands unit suite).
+// ---------------------------------------------------------------------------
+
+describe('/advisor status — drop statistics through the real wiring (AC-3, issue #102)', () => {
+  it('an unparsed prose drop and an empty drop render one Dropped line with counts, timestamps, and hints', async () => {
+    const { ctx, adapter } = await composeLiveHarness(
+      { provider: 'stub', model: 'stub-model' },
+      [
+        [...textReply('prose reply with no JSON frame')], // unparsed drop (fallback off)
+        [{ type: 'finish', reason: { kind: 'max-tokens' } }], // empty drop — the issue #102 budget-exhaustion case
+      ],
+    )
+    const handler = await registerCommands(ctx)
+    const { agent } = makeFakeAgent('s1')
+    ctx.emit('agent/created', { agent, source: 'startup' })
+    const { session, log } = makeSession('s1')
+
+    feed(ctx, session, log, simpleTurn(1, 'first request', 'first reply'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+    feed(ctx, session, log, simpleTurn(2, 'second request', 'second reply'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(2))
+
+    // Poll the rendered status itself — it is the settle point for the async
+    // drops (counters/timestamps are written after each stream is consumed).
+    await vi.waitFor(() => {
+      const polled = invokeAdvisor(handler, 'status', session)
+      expect(polled.kind).toBe('success')
+      if (polled.kind === 'success') {
+        expect(polled.text).toContain('Dropped: 1 empty')
+        expect(polled.text).toContain('1 unparsed')
+      }
+    })
+    const result = invokeAdvisor(handler, 'status', session)
+    expect(result.kind).toBe('success')
+    if (result.kind === 'success') {
+      expect(result.text).toContain('consider raising the maxTokens setting')
+      expect(result.text).toContain('consider enabling the proseFallback setting')
+      expect(result.text).toMatch(/Dropped: 1 empty \(last \d{4}-\d{2}-\d{2}T/)
+      expect(result.text).toMatch(/1 unparsed \(last \d{4}-\d{2}-\d{2}T/)
+      // Exactly ONE Dropped line for both classes.
+      const statusText = result.text ?? ''
+      expect(statusText.split('\n').filter((line) => line.startsWith('Dropped:'))).toHaveLength(1)
     }
   })
 })

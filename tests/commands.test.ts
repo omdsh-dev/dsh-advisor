@@ -77,7 +77,7 @@ function invoke(handler: CommandDefinition['handler'], rawInput: string, session
 
 /** Baseline status with the required fields filled in. */
 function baseStatus(overrides: Partial<AdvisorSessionStatus> = {}): AdvisorSessionStatus {
-  return { enabled: false, runtimeStatus: 'disabled', pendingCount: 0, ...overrides }
+  return { enabled: false, runtimeStatus: 'disabled', pendingCount: 0, emptyReplies: 0, unparsedReplies: 0, ...overrides }
 }
 
 /** Baseline composed config with the required fields filled in. */
@@ -417,6 +417,8 @@ describe('advisorStatusText (the /advisor status surface, spec §6)', () => {
       runtimeStatus: 'running',
       pendingCount: 2,
       lastActivityAt: new Date('2026-08-10T11:20:00Z').getTime(),
+      emptyReplies: 0,
+      unparsedReplies: 0,
     })
     expect(text).toContain('enabled')
     expect(text).toContain('openai/gpt-4o')
@@ -431,15 +433,25 @@ describe('advisorStatusText (the /advisor status surface, spec §6)', () => {
       disabledReason: 'provider and model are missing — configure both to enable the advisor',
       runtimeStatus: 'disabled',
       pendingCount: 0,
+      emptyReplies: 0,
+      unparsedReplies: 0,
     })
     expect(text).toContain('disabled')
     expect(text).toContain('configure both to enable the advisor')
   })
 
   it('renders "never" before the first accepted note', () => {
-    const text = advisorStatusText({ enabled: false, runtimeStatus: 'disabled', pendingCount: 0 })
+    const text = advisorStatusText({
+      enabled: false,
+      runtimeStatus: 'disabled',
+      pendingCount: 0,
+      emptyReplies: 0,
+      unparsedReplies: 0,
+    })
     expect(text).toContain('disabled')
     expect(text).toContain('never')
+    // KD-I3 zero-drop shape: nothing dropped → no Dropped line at all.
+    expect(text).not.toContain('Dropped')
   })
 
   it('status subcommand returns the status text with model + state', () => {
@@ -456,6 +468,75 @@ describe('advisorStatusText (the /advisor status surface, spec §6)', () => {
     expect(result.text).toContain('gpt-4o')
     expect(result.text).toContain('running')
     expect(result.text).toContain('1 pending')
+  })
+
+  it('zero-drop status stays byte-identical to the pre-#102 surface (no Dropped line, KD-I3)', () => {
+    const text = advisorStatusText(baseStatus({
+      enabled: true,
+      provider: 'openai',
+      model: 'gpt-4o',
+      modelSource: 'global',
+      runtimeStatus: 'running',
+      pendingCount: 2,
+      lastActivityAt: new Date('2026-08-10T11:20:00Z').getTime(),
+    }))
+    expect(text).toBe([
+      'Advisor: enabled',
+      'Model: openai/gpt-4o (global default)',
+      'Runtime: running (2 pending)',
+      'Last activity: 2026-08-10T11:20:00.000Z',
+    ].join('\n'))
+  })
+
+  it('renders ONE Dropped line with counts, ISO timestamps, and both repair hints (KD-I3, issue #102)', () => {
+    const text = advisorStatusText(baseStatus({
+      enabled: true,
+      runtimeStatus: 'running',
+      emptyReplies: 3,
+      lastEmptyReplyAt: new Date('2026-08-10T11:20:00Z').getTime(),
+      unparsedReplies: 1,
+      lastUnparsedReplyAt: new Date('2026-08-11T09:00:00Z').getTime(),
+    }))
+    const dropped = text.split('\n').filter((line) => line.startsWith('Dropped:'))
+    expect(dropped).toHaveLength(1)
+    expect(dropped[0]).toBe(
+      'Dropped: 3 empty (last 2026-08-10T11:20:00.000Z) — consider raising the maxTokens setting'
+      + '; 1 unparsed (last 2026-08-11T09:00:00.000Z) — consider enabling the proseFallback setting',
+    )
+  })
+
+  it('empty-only drop: the maxTokens hint, no unparsed fragment', () => {
+    const text = advisorStatusText(baseStatus({
+      enabled: true,
+      runtimeStatus: 'running',
+      emptyReplies: 2,
+      lastEmptyReplyAt: new Date('2026-08-10T11:20:00Z').getTime(),
+    }))
+    expect(text).toContain('Dropped: 2 empty (last 2026-08-10T11:20:00.000Z) — consider raising the maxTokens setting')
+    expect(text).not.toContain('unparsed')
+    expect(text).not.toContain('proseFallback')
+  })
+
+  it('unparsed-only drop: the proseFallback hint, no empty fragment', () => {
+    const text = advisorStatusText(baseStatus({
+      enabled: true,
+      runtimeStatus: 'running',
+      unparsedReplies: 4,
+      lastUnparsedReplyAt: new Date('2026-08-11T09:00:00Z').getTime(),
+    }))
+    expect(text).toContain('Dropped: 4 unparsed (last 2026-08-11T09:00:00.000Z) — consider enabling the proseFallback setting')
+    expect(text).not.toContain('empty')
+    expect(text).not.toContain('maxTokens')
+  })
+
+  it('omits the timestamp segment when a non-zero class has no recorded timestamp', () => {
+    const text = advisorStatusText(baseStatus({
+      enabled: true,
+      runtimeStatus: 'running',
+      emptyReplies: 2,
+    }))
+    expect(text).toContain('Dropped: 2 empty — consider raising the maxTokens setting')
+    expect(text).not.toContain('(last ')
   })
 })
 

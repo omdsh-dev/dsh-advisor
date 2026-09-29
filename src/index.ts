@@ -63,7 +63,7 @@ import { AdvisorConfigGateway, advisorSessionError, advisorTypertContribution } 
 import type { AdvisorSessionGatewayFace, AdvisorSessionRpcResult } from './gateway.js'
 import { SessionTranscriptObserver } from './transcript.js'
 import type { Delta } from './transcript.js'
-import { AdvisorRuntime } from './advisor-runtime.js'
+import { ADVISOR_MAX_TOKENS, AdvisorRuntime } from './advisor-runtime.js'
 import type { AdviceNote } from './advisor-runtime.js'
 import { AdvisorDelivery } from './delivery.js'
 import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts.js'
@@ -353,23 +353,33 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   /**
    * Runtime-affecting signature per session — the values that pin one
    * {@link AdvisorRuntime}: the effective switch, the post-gate enable (S4),
-   * and the {provider, model, systemPrompt} triple. Recorded at runtime
-   * creation and compared on every settings change (qc3 W-1 / qc1 W-2): only
-   * a signature change tears the runtime down — an immuneTurns/
-   * maxDeltaMessages-only edit updates the latches in place and keeps every
-   * in-flight call and backlog. The triple reads the EFFECTIVE config
-   * (spec §5.3), so a session-pinned pair freezes the signature against later
-   * global pair edits — global edits reach inheritors, never pinned sessions.
+   * the {provider, model, systemPrompt} triple, and the global
+   * maxTokens/proseFallback construction constants (KD-I4, issue #102 —
+   * global-only like systemPrompt, KD-I6). Recorded at runtime creation and
+   * compared on every settings change (qc3 W-1 / qc1 W-2): only a signature
+   * change tears the runtime down — an immuneTurns/maxDeltaMessages-only edit
+   * updates the latches in place and keeps every in-flight call and backlog.
+   * The triple reads the EFFECTIVE config (spec §5.3), so a session-pinned
+   * pair freezes the signature against later global pair edits — global edits
+   * reach inheritors, never pinned sessions.
    */
   const runtimeSignatures = new Map<string, string>()
   const runtimeSignature = (sessionId: string): string => {
     const effective = safeEffective(sessionId)
+    // KD-I4 (issue #102): the global runtime-construction constants join the
+    // signature — the same global resolved read as systemPrompt (never the
+    // per-session route). Optional in the resolved contract (T1 review F-2):
+    // normalized here with the runtime's own defaults (ADVISOR_MAX_TOKENS /
+    // false) so an absent-vs-explicit-default edit is not a teardown.
+    const globalResolved = safeResolved()
     return [
       effectiveEnabled(sessionId) ? 1 : 0,
       effective.enabled ? 1 : 0,
       effective.provider ?? '',
       effective.model ?? '',
       effective.systemPrompt,
+      globalResolved.maxTokens ?? ADVISOR_MAX_TOKENS,
+      globalResolved.proseFallback ?? false,
     ].join('\u0000')
   }
   /**
@@ -387,10 +397,18 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     // The re-resolved config guarantees provider + model when enabled — the
     // runtime is only constructed behind the gate.
     if (!effective.enabled) return undefined
+    // The global runtime-construction constants — the same global resolved
+    // read as systemPrompt (KD-I4/KD-I6, issue #102: global-only, never the
+    // per-session route). Optional in the resolved contract (T1 review F-2):
+    // when absent, the runtime applies its own defaults (ADVISOR_MAX_TOKENS /
+    // false), which runtimeSignature normalizes with to stay in sync.
+    const globalResolved = safeResolved()
     runtime = new AdvisorRuntime({
       provider: effective.provider!,
       model: effective.model!,
-      systemPrompt: safeResolved().systemPrompt || DEFAULT_ADVISOR_SYSTEM_PROMPT,
+      systemPrompt: globalResolved.systemPrompt || DEFAULT_ADVISOR_SYSTEM_PROMPT,
+      maxTokens: globalResolved.maxTokens,
+      proseFallback: globalResolved.proseFallback,
       llm: appRootLlm(),
       onNote: (note: AdviceNote) => {
         // Accepted notes only — the runtime's emission guard (T5) already
@@ -551,7 +569,8 @@ export function apply(ctx: Context, config: AdvisorConfig) {
 
   // T1-settings live re-apply: construction-time latches (immuneTurns on the
   // delivery, maxDeltaMessages on the observer, systemPrompt + provider/model
-  // on each per-session runtime) are re-derived from the NEW source on every
+  // + the global maxTokens/proseFallback constants (KD-I4, issue #102) on
+  // each per-session runtime) are re-derived from the NEW source on every
   // committed volatile edit — the Loader's `loader/volatile-update` event,
   // dispatched to this fiber only after the committed values are readable —
   // and re-applied: delivery/observer update in place, per-session runtimes
@@ -632,6 +651,13 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       runtimeStatus: runtime?.status() ?? 'disabled',
       pendingCount: runtime?.pendingCount ?? 0,
       lastActivityAt: runtime?.lastActivity,
+      // KD-I3 (issue #102): drop visibility — the live runtime's per-class
+      // drop counters + last-drop timestamps (0 / undefined for a runtime-less
+      // session), rendered by advisorStatusText only when non-zero.
+      emptyReplies: runtime?.emptyReplies ?? 0,
+      unparsedReplies: runtime?.unparsedReplies ?? 0,
+      lastEmptyReplyAt: runtime?.lastEmptyReplyAt,
+      lastUnparsedReplyAt: runtime?.lastUnparsedReplyAt,
     }
   }
   const controller: AdvisorCommandController = {
