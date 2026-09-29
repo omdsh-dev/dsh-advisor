@@ -181,10 +181,10 @@ export const ADVISOR_TUI_SETTINGS_SECTION: TuiSettingsSection = {
       kind: 'number',
       label: 'Max tokens',
       descriptions: { zh: '最大 token 数', en: 'Max tokens' },
-      hint: 'Token budget for one advisor review (integer 128..16384, default 768); raise it if a thinking model returns empty replies.',
+      hint: 'Token budget for one advisor review (integer 128–16384, default 768); raise it if a thinking model returns empty replies.',
       hintDescriptions: {
-        zh: '单次评审的 token 预算（整数 128..16384，默认 768）；思考型模型返回空回复时请调高。',
-        en: 'Token budget for one advisor review (integer 128..16384, default 768); raise it if a thinking model returns empty replies.',
+        zh: '单次评审的 token 预算（整数 128–16384，默认 768）；思考型模型返回空回复时请调高。',
+        en: 'Token budget for one advisor review (integer 128–16384, default 768); raise it if a thinking model returns empty replies.',
       },
     },
     {

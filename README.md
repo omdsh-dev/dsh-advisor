@@ -28,7 +28,7 @@ Same plugin, either front end — the only difference is the `--profile` flag. P
 
 ### Configuration
 
-Edit the `config` of the `advisor` row in your profile's patch layer (`~/.dsh/profiles/<profile>/cordis.patch.yml`). All five fields are schema-volatile live fields (dsh ≥ 0.1.7-rc.1): the web card and the TUI `/settings` screen write this same entry config — persisted in the profile patch, committed without a remount. (A pre-0.1.7 `$DSH_HOME/settings.yaml` `advisor:` section no longer exists: dsh imports it into the active profile once and renames the file `.imported`.)
+Edit the `config` of the `advisor` row in your profile's patch layer (`~/.dsh/profiles/<profile>/cordis.patch.yml`). All seven fields are schema-volatile live fields (dsh ≥ 0.1.7-rc.1): the web card and the TUI `/settings` screen write this same entry config — persisted in the profile patch, committed without a remount. (A pre-0.1.7 `$DSH_HOME/settings.yaml` `advisor:` section no longer exists: dsh imports it into the active profile once and renames the file `.imported`.)
 
 > **Breaking change (2026-09-26): the `enabled` config key was removed.** The plugin-row enable/disable toggle in the host UI is the master switch — a running row is enabled, and there is nothing left to configure for it. A stored profile still carrying an `enabled:` line keeps working: the line is **silently ignored** (accepted, never read, never re-persisted — 2026-09-27 ruling, no manual deletion needed); the key is deprecated and the write paths no longer persist it.
 
@@ -41,9 +41,13 @@ Edit the `config` of the `advisor` row in your profile's patch layer (`~/.dsh/pr
     systemPrompt: ""             # optional; "" = built-in reviewer prompt
     immuneTurns: 3               # int ≥ 0, default 3 — cooldown after a delivered steer
     maxDeltaMessages: 60         # int ≥ 0, default 60 — delta window; 0 = unbounded
+    maxTokens: 768               # int 128..16384, default 768 — token budget for one advisor review (issue #102)
+    proseFallback: false         # boolean, default false — deliver a frame-less prose reply as a nit note (opt-in)
 ```
 
 `provider` and `model` are **mandatory**: either missing or empty is a hard gate — the advisor never starts a model call and reports a disabled-with-reason status; unknown config keys are rejected.
+
+If the advisor is enabled and its runtime looks healthy but it never speaks, check `/advisor status`: a non-zero `Dropped:` line names the class — `empty` replies mean a thinking model is exhausting the token budget on reasoning (raise `maxTokens`, int 128..16384; the issue reporter verified 4096 restores output), `unparsed` replies mean prose without a JSON frame is being dropped (enable `proseFallback`, which delivers the cleaned prose as a low-severity note; JSON frames stay primary). Details → [docs/configuration.md](docs/configuration.md).
 
 The same keys are read and edited from **three surfaces** (one store — the advisor entry config above; every surface shares the same key set and the same hard gate, with the host-side gate as the final line of defense on every path):
 
@@ -51,7 +55,7 @@ The same keys are read and edited from **three surfaces** (one store — the adv
 2. **dsh web Plugins page — the dsh-advisor bundle's own page** — the Advisor **card** (bundle key `dsh-advisor`), a flat settings form (the page's title/description come from the plugin's locale meta) with provider / model selects restricted to system-configured providers and their models, and the optional fields. Saving writes the advisor entry's config (landed through the config editor into the profile patch) and applies to running sessions immediately — no restart. The card requires a dsh web build whose shell declares the `plugins.bundle.config` card slot (dsh ≥ 0.1.7-rc.1) and loads packages that declare `dsh.client`; it reads and writes the config through the official `GatewayService` RPC channel (`/api/advisor/get` + `/api/advisor/set`), which is not gated by the settings exposure allowlist. It additionally blocks saving while a required field is empty.
 3. **`/advisor` command** — per-session and ephemeral: it flips a session override and pins a per-session reviewer model, never the persisted config (see [Verify](#verify)).
 
-In a **dsh-tui** profile the same four keys are editable in the TUI `/settings` screen: run `dsh --profile dsh-tui`, open `/settings`, and edit the **Advisor** section (`provider` / `model` / `immuneTurns` / `maxDeltaMessages`, each with zh/en label + hint). Edits are staged and written on save through the revision-fenced `settings.mutate` into the same advisor entry config the web card writes, and re-apply live without a restart. `systemPrompt` is NOT a TUI field (the TUI text control is single-line; a multi-line prompt would be truncated) — edit it via the web card or the profile patch layer. The section requires dsh-tui ≥ v0.8.0 (shipped in the `dsh-tui-settings-sections` row of the v0.8.0+ bundle); older dsh-tui versions no-op it cleanly and the profile patch layer remains the edit path. `/advisor config` stays a read-only readback whose edit hint names the `/settings` screen when the seam is mounted. Save behavior differs from the web card: the TUI seam has no cross-field validation, so a save may leave `provider`/`model` empty — the explicit model gate resolves that to disabled-with-reason at runtime (visible via `/advisor status` and `/advisor config`); the web card blocks such a save outright. Full reference → [docs/configuration.md](docs/configuration.md).
+In a **dsh-tui** profile the same six keys are editable in the TUI `/settings` screen: run `dsh --profile dsh-tui`, open `/settings`, and edit the **Advisor** section (`provider` / `model` / `immuneTurns` / `maxDeltaMessages` / `maxTokens` / `proseFallback`, each with zh/en label + hint). Edits are staged and written on save through the revision-fenced `settings.mutate` into the same advisor entry config the web card writes, and re-apply live without a restart. `systemPrompt` is NOT a TUI field (the TUI text control is single-line; a multi-line prompt would be truncated) — edit it via the web card or the profile patch layer. The section requires dsh-tui ≥ v0.8.0 (shipped in the `dsh-tui-settings-sections` row of the v0.8.0+ bundle); older dsh-tui versions no-op it cleanly and the profile patch layer remains the edit path. `/advisor config` stays a read-only readback whose edit hint names the `/settings` screen when the seam is mounted. Save behavior differs from the web card: the TUI seam has no cross-field validation, so a save may leave `provider`/`model` empty — the explicit model gate resolves that to disabled-with-reason at runtime (visible via `/advisor status` and `/advisor config`); the web card blocks such a save outright. Full reference → [docs/configuration.md](docs/configuration.md).
 
 ![Advisor card on the dsh web Plugins page (the dsh-advisor bundle page)](docs/screenshots/advisor-settings-card.webp)
 
@@ -67,7 +71,7 @@ With the advisor installed and its plugin row enabled (the row switch on the Plu
 /advisor            toggle the advisor for this session
 /advisor on         enable the advisor for this session
 /advisor off        disable the advisor for this session
-/advisor status     show state, model, runtime status, pending count, last activity
+/advisor status     show state, model, runtime status, pending count, last activity, and drop counters when non-zero
 /advisor model      show the effective reviewer model and its source (session override or global default)
 /advisor model set <provider> <model>   pin a reviewer model for this session only
 /advisor model reset    drop the session pin and re-inherit the global defaults
