@@ -38,7 +38,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { LlmRuntime, LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmFailure, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import { AdvisorRuntime, ADVISOR_MAX_TOKENS, ADVISOR_NOTE_MAX_CHARS, extractAdviceNote } from '../src/advisor-runtime'
+import { AdvisorRuntime, ADVISOR_MAX_TOKENS, ADVISOR_NOTE_MAX_CHARS, extractAdviceNote, extractProseFallbackNote } from '../src/advisor-runtime'
 import type { AdvisorLlm, AdvisorRuntimeOptions, AdvisorRuntimeStatus, AdviceNote } from '../src/advisor-runtime'
 import type { Delta } from '../src/transcript'
 import { apply } from '../src/index'
@@ -188,6 +188,16 @@ class SignalBoundLlm {
 const textReply = (text: string): readonly StreamChunk[] => [
   { type: 'text-delta', index: 0, text },
   { type: 'finish', reason: { kind: 'stop' } },
+]
+
+/**
+ * Chunk script for an empty reply — no text deltas, just the terminal finish
+ * chunk (the issue #102 shape: a thinking model behind a gateway that cannot
+ * turn reasoning off exhausts the token budget and returns an empty body;
+ * constructible with either finish reason).
+ */
+const emptyReply = (kind: 'stop' | 'max-tokens'): readonly StreamChunk[] => [
+  { type: 'finish', reason: kind === 'stop' ? { kind: 'stop' } : { kind: 'max-tokens' } },
 ]
 
 /** Chunk script for a terminal provider error. */
@@ -473,6 +483,242 @@ describe('AdvisorRuntime — minimal request shape (AC-1 closed whitelist)', () 
     expect(options.system).toBe(TEST_SYSTEM_PROMPT)
     // KD-6 frozen value (= ADVISOR_MAX_TOKENS)
     expect(options.maxTokens).toBe(768)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Configurable maxTokens (KD-I1, issue #102) — the budget is an operator
+// setting; the code default stays ADVISOR_MAX_TOKENS (KD-6 default unchanged)
+// ---------------------------------------------------------------------------
+
+describe('AdvisorRuntime — configurable maxTokens (KD-I1, issue #102)', () => {
+  it('defaults the budget to ADVISOR_MAX_TOKENS (768) when the option is absent (KD-6 default unchanged)', async () => {
+    const llm = new FakeLlm([{ chunks: textReply('{"note":"default budget"}') }])
+    const { runtime, notes } = makeRuntime(llm)
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(notes).toEqual([{ note: 'default budget', severity: 'nit' }])
+    expect(llm.calls).toHaveLength(1)
+    expect(llm.calls[0]!.maxTokens).toBe(ADVISOR_MAX_TOKENS)
+    expect(llm.calls[0]!.maxTokens).toBe(768)
+  })
+
+  it('threads a configured maxTokens into GenerateOptions.maxTokens (AC-1a)', async () => {
+    // The issue #102 reporter's validated workaround: 4096 restores output for
+    // a thinking model behind a third-party gateway.
+    const llm = new FakeLlm([{ chunks: textReply('{"note":"big budget"}') }])
+    const { runtime, notes } = makeRuntime(llm, { maxTokens: 4096 })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(notes).toEqual([{ note: 'big budget', severity: 'nit' }])
+    expect(llm.calls).toHaveLength(1)
+    expect(llm.calls[0]!.maxTokens).toBe(4096)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Prose fallback (KD-I2, issue #102) — opt-in compat layer at the extraction
+// call site: JSON frame priority unchanged, frame-less prose becomes a nit
+// note ONLY when the flag is on
+// ---------------------------------------------------------------------------
+
+describe('AdvisorRuntime — prose fallback (KD-I2, issue #102)', () => {
+  const PROSE_REPLY = 'The helper in session.ts duplicates the retry loop — extract it into one place.'
+
+  it('is off by default: a frame-less prose reply is dropped and counted as unparsed (default behavior unchanged)', async () => {
+    const llm = new FakeLlm([
+      { chunks: textReply(PROSE_REPLY) },
+      { chunks: textReply('Second prose reply, also dropped while the flag is off.') },
+    ])
+    const { runtime, notes } = makeRuntime(llm, { logger: { debug: () => {}, warn: () => {} } })
+
+    runtime.enqueue(delta('update one'))
+    runtime.enqueue(delta('update two'))
+    await runtime.waitForDrain()
+
+    expect(notes).toEqual([])
+    expect(llm.calls).toHaveLength(2)
+    expect(runtime.unparsedReplies).toBe(2)
+    expect(runtime.emptyReplies).toBe(0)
+    expect(runtime.lastUnparsedReplyAt).toBeTypeOf('number')
+    expect(runtime.lastEmptyReplyAt).toBeUndefined()
+  })
+
+  it('proseFallback: true turns a frame-less prose reply into a nit note (guard-passed, onNote received)', async () => {
+    const llm = new FakeLlm([{ chunks: textReply(PROSE_REPLY) }])
+    const { runtime, notes } = makeRuntime(llm, { proseFallback: true })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(notes).toEqual([{ note: PROSE_REPLY, severity: 'nit' }])
+    expect(runtime.unparsedReplies).toBe(0)
+    expect(runtime.lastActivity).toBeTypeOf('number')
+  })
+
+  it('caps a long prose reply at ADVISOR_NOTE_MAX_CHARS with the truncation marker (same injection bound)', async () => {
+    const longProse = `The module mixes concerns: ${'x'.repeat(ADVISOR_NOTE_MAX_CHARS + 500)}`
+    const llm = new FakeLlm([{ chunks: textReply(longProse) }])
+    const { runtime, notes } = makeRuntime(llm, { proseFallback: true })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(notes).toHaveLength(1)
+    expect(notes[0]!.severity).toBe('nit')
+    expect(notes[0]!.note.length).toBe(ADVISOR_NOTE_MAX_CHARS)
+    expect(notes[0]!.note.endsWith('…')).toBe(true)
+  })
+
+  it('strips a surrounding markdown fence from a fenced prose reply', async () => {
+    const llm = new FakeLlm([{ chunks: textReply('```markdown\nThe retry loop is duplicated — extract it.\n```') }])
+    const { runtime, notes } = makeRuntime(llm, { proseFallback: true })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(notes).toEqual([{ note: 'The retry loop is duplicated — extract it.', severity: 'nit' }])
+  })
+
+  it('prefers the JSON frame when the reply carries prose around a frame (frame priority unchanged)', async () => {
+    const llm = new FakeLlm([{
+      chunks: textReply(`Some prose around the frame.\n{"note":"from the frame","severity":"concern"}\nMore prose.`),
+    }])
+    const { runtime, notes } = makeRuntime(llm, { proseFallback: true })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(notes).toEqual([{ note: 'from the frame', severity: 'concern' }])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Drop counters (KD-I3, issue #102) — empty vs unparsed classification with
+// timestamps and warn-once hints (KD-2 no-retry semantics unchanged: drops
+// still return 'no-note' and never count toward the KD-5 consecutive streak)
+// ---------------------------------------------------------------------------
+
+describe('AdvisorRuntime — drop counters (KD-I3, issue #102)', () => {
+  it('starts at zero with no timestamps', () => {
+    const llm = new FakeLlm([])
+    const { runtime } = makeRuntime(llm)
+
+    expect(runtime.emptyReplies).toBe(0)
+    expect(runtime.unparsedReplies).toBe(0)
+    expect(runtime.lastEmptyReplyAt).toBeUndefined()
+    expect(runtime.lastUnparsedReplyAt).toBeUndefined()
+  })
+
+  it('counts an empty reply (finish stop) as empty — never unparsed, never prose even with fallback on', async () => {
+    const llm = new FakeLlm([
+      { chunks: emptyReply('stop') },
+      { chunks: textReply('   ') },
+    ])
+    const { runtime, notes } = makeRuntime(llm, { proseFallback: true, logger: { debug: () => {}, warn: () => {} } })
+
+    runtime.enqueue(delta('update one'))
+    runtime.enqueue(delta('update two'))
+    await runtime.waitForDrain()
+
+    expect(llm.calls).toHaveLength(2)
+    expect(notes).toEqual([]) // empty body is NOT prose (KD-I2)
+    expect(runtime.emptyReplies).toBe(2)
+    expect(runtime.unparsedReplies).toBe(0)
+    expect(runtime.lastEmptyReplyAt).toBeTypeOf('number')
+    expect(runtime.lastUnparsedReplyAt).toBeUndefined()
+  })
+
+  it('counts an empty reply with finish max-tokens as empty (the issue #102 reasoning-exhaustion case)', async () => {
+    const llm = new FakeLlm([{ chunks: emptyReply('max-tokens') }])
+    const { runtime } = makeRuntime(llm, { logger: { debug: () => {}, warn: () => {} } })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(runtime.emptyReplies).toBe(1)
+    expect(runtime.unparsedReplies).toBe(0)
+    expect(runtime.lastEmptyReplyAt).toBeTypeOf('number')
+  })
+
+  it('warns once per class with an actionable hint, then stays silent on repeats (KD-I3 warn-once)', async () => {
+    const debug = vi.fn()
+    const warn = vi.fn()
+    const llm = new FakeLlm([
+      { chunks: emptyReply('max-tokens') },
+      { chunks: emptyReply('stop') },
+      { chunks: textReply('prose reply without a frame') },
+      { chunks: textReply('another prose reply without a frame') },
+    ])
+    const { runtime } = makeRuntime(llm, { logger: { debug, warn } })
+
+    runtime.enqueue(delta('update one'))
+    runtime.enqueue(delta('update two'))
+    runtime.enqueue(delta('update three'))
+    runtime.enqueue(delta('update four'))
+    await runtime.waitForDrain()
+
+    expect(runtime.emptyReplies).toBe(2)
+    expect(runtime.unparsedReplies).toBe(2)
+    // Exactly one warn per class, each carrying its fix hint (empty → raise
+    // the budget; unparsed → enable the fallback); repeats fall back to debug.
+    const emptyWarns = warn.mock.calls.filter(([m]) => typeof m === 'string' && m.includes('consider raising maxTokens'))
+    const unparsedWarns = warn.mock.calls.filter(([m]) => typeof m === 'string' && m.includes('consider enabling proseFallback'))
+    expect(emptyWarns).toHaveLength(1)
+    expect(unparsedWarns).toHaveLength(1)
+    const emptyWarnPayload = emptyWarns[0]![1] as { finish?: string }
+    expect(emptyWarnPayload.finish).toBe('max-tokens')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// extractProseFallbackNote — the KD-I2 cleanup (trim → strip surrounding
+// fence → cap); exported so the tests pin the exact contract
+// ---------------------------------------------------------------------------
+
+describe('extractProseFallbackNote — prose cleanup (KD-I2, issue #102)', () => {
+  it('trims surrounding whitespace and always yields a nit note', () => {
+    expect(extractProseFallbackNote('  a real observation  ')).toEqual({
+      note: 'a real observation',
+      severity: 'nit',
+    })
+  })
+
+  it('strips a surrounding markdown fence (with or without an info string)', () => {
+    expect(extractProseFallbackNote('```text\nobservation inside a fence\n```')).toEqual({
+      note: 'observation inside a fence',
+      severity: 'nit',
+    })
+    expect(extractProseFallbackNote('```\nno info string\n```')).toEqual({
+      note: 'no info string',
+      severity: 'nit',
+    })
+  })
+
+  it('keeps text whose fence is not surrounding (trailing prose after the closing fence)', () => {
+    expect(extractProseFallbackNote('```\ninside\n``` trailing')).toEqual({
+      note: '```\ninside\n``` trailing',
+      severity: 'nit',
+    })
+  })
+
+  it('caps at ADVISOR_NOTE_MAX_CHARS with the truncation marker', () => {
+    const long = 'y'.repeat(ADVISOR_NOTE_MAX_CHARS + 500)
+    const result = extractProseFallbackNote(long)
+    expect(result).toBeDefined()
+    expect(result!.note.length).toBe(ADVISOR_NOTE_MAX_CHARS)
+    expect(result!.note.endsWith('…')).toBe(true)
+    expect(result!.note.slice(0, ADVISOR_NOTE_MAX_CHARS - 1)).toBe('y'.repeat(ADVISOR_NOTE_MAX_CHARS - 1))
+  })
+
+  it('returns undefined for an empty, whitespace-only, or fence-only reply (NOT prose — KD-I3 empty drop)', () => {
+    expect(extractProseFallbackNote('')).toBeUndefined()
+    expect(extractProseFallbackNote('   \n  ')).toBeUndefined()
+    expect(extractProseFallbackNote('```json\n```')).toBeUndefined()
   })
 })
 

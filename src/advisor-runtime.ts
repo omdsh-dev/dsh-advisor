@@ -10,9 +10,10 @@
  * - a FIFO queue of pending transcript deltas (bounded — spec §6 "bounded
  *   backlog"; drop-newest when full);
  * - a serialized async drain loop: one `llm.stream` call per delta with
- *   `{ provider, model, system, messages: [user delta], maxTokens: 768 }` and
- *   `purpose` left UNSET (KD-5 — an advisor call is an ordinary conversation
- *   request);
+ *   `{ provider, model, system, messages: [user delta], maxTokens }` (the
+ *   configured budget — {@link AdvisorRuntimeOptions.maxTokens}, default
+ *   `ADVISOR_MAX_TOKENS`) and `purpose` left UNSET (KD-5 — an advisor call is
+ *   an ordinary conversation request);
  * - a call-level deadline on every `llm.stream` call (dsh-timeout `deadline`,
  *   fused with the dispose signal and raced per chunk): a hung provider stream
  *   times out instead of wedging the drain, and a timeout is a transient
@@ -20,6 +21,17 @@
  * - KD-2 JSON-frame extraction: the first balanced `{…}` in the reply is
  *   parsed (tolerant of prose/fences), `note` must be non-empty (else
  *   drop+log), `severity` missing/invalid defaults to `nit`, no parse retry;
+ *   the KD-I2 prose fallback (issue #102, opt-in — see
+ *   {@link extractProseFallbackNote}) lets a frame-less PROSE reply through
+ *   as a nit note when the `proseFallback` option is on — the JSON frame
+ *   keeps priority, and the default (off) preserves the KD-2 drop semantics;
+ * - KD-I3 drop visibility (issue #102): a completed call whose reply yields
+ *   no note is classified — EMPTY (body empty after trim; the classic case is
+ *   a thinking model exhausting the token budget) vs UNPARSED (text present,
+ *   no parseable frame, fallback off/rescued nothing) — counted with
+ *   timestamps and warn-once hints, readable via the `emptyReplies` /
+ *   `unparsedReplies` / `lastEmptyReplyAt` / `lastUnparsedReplyAt` getters
+ *   (the T7 `/advisor status` surface);
  * - the KD-5 failure policy: transient → 1 retry with a short backoff → drop;
  *   3 consecutive dropped deltas → flush the pending backlog (never stall);
  *   permanent errors (`invalid_request_error`, model-not-found, "is not
@@ -111,6 +123,22 @@ export interface AdvisorRuntimeOptions {
   readonly callTimeoutMs?: number
   /** Bounded backlog (spec §6); default 32 — drop-newest with a log when full. */
   readonly maxQueued?: number
+  /**
+   * Token budget for one advisor call (KD-I1, issue #102 — the config key
+   * `maxTokens` threaded through): when omitted the code default
+   * {@link ADVISOR_MAX_TOKENS} (768) applies, keeping every pre-existing
+   * 768 pin valid. Bounds (128..16384) are enforced by the config schema;
+   * the runtime threads the value as-is.
+   */
+  readonly maxTokens?: number
+  /**
+   * Opt-in prose fallback (KD-I2, issue #102): when true, a completed call
+   * whose reply has text but NO parseable JSON frame delivers the cleaned
+   * prose body ({@link extractProseFallbackNote}: trim → strip a surrounding
+   * fence → cap) as a `nit` note through the normal guard/delivery pipeline.
+   * Default false — the KD-2 drop semantics stay byte-identical.
+   */
+  readonly proseFallback?: boolean
   /** The llm service (`ctx.llm`); injectable for tests. */
   readonly llm: AdvisorLlm
   /**
@@ -143,15 +171,27 @@ export interface AdvisorRuntimeOptions {
  * guard stays re-bounded downstream: `extractAdviceNote` caps the note at
  * `ADVISOR_NOTE_MAX_CHARS` and `buildAdvisorMessage` bounds the notice
  * summary via `boundContextSummary`.
+ *
+ * KD-I1 (issue #102, user direction 2026-09-29): KD-6's "code invariant, not
+ * an operator switch" ruling was superseded again — the budget is now
+ * operator-configurable (config key `maxTokens`, bounds 128..16384, Settings
+ * UI in Task 3) because thinking models behind third-party gateways exhaust a
+ * fixed budget on reasoning and return an EMPTY body (finish: max-tokens).
+ * This constant remains the CODE DEFAULT for unconfigured/plain entries: the
+ * runtime falls back to it, so default behavior (and every existing 768 pin)
+ * is unchanged.
  */
 export const ADVISOR_MAX_TOKENS = 768
+
 /**
  * One extracted note's length cap (qc3 F-2 / qc2 S-1): a verbose/rogue advisor
  * reply must not inject an unbounded user-role message into the primary
  * session (the token budget is now matched to this cap — 768). Truncated with
- * a '…' marker.
+ * a '…' marker. The KD-I2 prose fallback note is capped by the same bound —
+ * a raised generation budget must not enlarge the injection surface.
  */
 export const ADVISOR_NOTE_MAX_CHARS = 768
+
 const DEFAULT_RETRY_BACKOFF_MS = 1_000
 const DEFAULT_MAX_QUEUED = 32
 /** Whole-call deadline for one `llm.stream` (qc2 W-4 / qc3 W-1); see `callTimeoutMs`. */
@@ -237,6 +277,42 @@ export function extractAdviceNote(reply: string): AdviceNote | undefined {
     }
   }
   return undefined
+}
+
+/**
+ * A reply fully wrapped in ONE markdown fence: an opening fence line (with or
+ * without an info string) and a closing fence at the very end. Trailing prose
+ * after the closing fence means the fence is not surrounding — no match.
+ */
+const SURROUNDING_FENCE_PATTERN = /^```[^\n]*\n([\s\S]*?)\n?```$/
+
+/**
+ * The KD-I2 prose fallback cleanup (issue #102; opt-in — see
+ * {@link AdvisorRuntimeOptions.proseFallback}). Frozen-spec supersession
+ * note: the strict KD-2 JSON-frame requirement stays the DEFAULT — this
+ * function is applied at the extraction call site ONLY when
+ * {@link extractAdviceNote} found no frame AND the flag is on, so a reply
+ * carrying both a frame and prose still delivers the frame's note.
+ *
+ * Cleanup: trim → strip ONE surrounding markdown fence (an unterminated or
+ * non-surrounding fence is kept as-is) → cap at {@link ADVISOR_NOTE_MAX_CHARS}
+ * with a '…' marker (the same injection bound as {@link extractAdviceNote} —
+ * a raised generation budget must not enlarge the primary session's injection
+ * surface). An empty result (whitespace-only reply, fence-only reply) is NOT
+ * prose: the caller classifies it as an EMPTY drop (KD-I3), never as an
+ * unparsed/prose case. Severity is always `nit` — prose carries no structured
+ * severity. Never throws.
+ */
+export function extractProseFallbackNote(reply: string): AdviceNote | undefined {
+  const match = SURROUNDING_FENCE_PATTERN.exec(reply.trim())
+  const text = (match?.[1] ?? reply).trim()
+  if (text.length === 0) return undefined
+  return {
+    note: text.length > ADVISOR_NOTE_MAX_CHARS
+      ? `${text.slice(0, ADVISOR_NOTE_MAX_CHARS - 1)}…`
+      : text,
+    severity: 'nit',
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +423,8 @@ export class AdvisorRuntime {
   private readonly provider: string
   private readonly model: string
   private readonly systemPrompt: string
+  private readonly maxTokens: number
+  private readonly proseFallback: boolean
   private readonly retryBackoffMs: number
   private readonly callTimeoutMs: number
   private readonly maxQueued: number
@@ -376,11 +454,27 @@ export class AdvisorRuntime {
   private drainPromise: Promise<void> | undefined
   /** Epoch-ms of the last note accepted by the emission guard (T7 status). */
   private lastActivityAt: number | undefined
+  /**
+   * KD-I3 drop counters (issue #102): EMPTY vs UNPARSED no-note drops with
+   * their last-occurrence timestamps — the "advisor is running but never
+   * speaks" visibility surface (T2 renders them on `/advisor status`). Only
+   * COMPLETED model calls are classified here; transport drops stay in the
+   * KD-5 consecutive-drop path.
+   */
+  private emptyReplyCount = 0
+  private unparsedReplyCount = 0
+  private lastEmptyReplyTimestamp: number | undefined
+  private lastUnparsedReplyTimestamp: number | undefined
+  /** Warn-once latches, one per drop class per runtime (KD-I3). */
+  private emptyReplyWarned = false
+  private unparsedReplyWarned = false
 
   constructor(options: AdvisorRuntimeOptions) {
     this.provider = options.provider
     this.model = options.model
     this.systemPrompt = options.systemPrompt
+    this.maxTokens = options.maxTokens ?? ADVISOR_MAX_TOKENS
+    this.proseFallback = options.proseFallback ?? false
     this.retryBackoffMs = options.retryBackoffMs ?? DEFAULT_RETRY_BACKOFF_MS
     this.callTimeoutMs = options.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS
     this.maxQueued = options.maxQueued ?? DEFAULT_MAX_QUEUED
@@ -406,6 +500,34 @@ export class AdvisorRuntime {
    */
   get lastActivity(): number | undefined {
     return this.lastActivityAt
+  }
+
+  /**
+   * KD-I3 (issue #102) — replies dropped because the body was empty after
+   * trim (mostly a reasoning model exhausting the token budget). Read-only
+   * status outlet, same style as `pendingCount`/`lastActivity`.
+   */
+  get emptyReplies(): number {
+    return this.emptyReplyCount
+  }
+
+  /**
+   * KD-I3 (issue #102) — replies dropped because no JSON frame was parseable
+   * and the prose fallback delivered nothing (`proseFallback` off, or on with
+   * an empty cleanup result). Read-only status outlet.
+   */
+  get unparsedReplies(): number {
+    return this.unparsedReplyCount
+  }
+
+  /** KD-I3 — epoch-ms of the last EMPTY-reply drop, `undefined` before the first. */
+  get lastEmptyReplyAt(): number | undefined {
+    return this.lastEmptyReplyTimestamp
+  }
+
+  /** KD-I3 — epoch-ms of the last UNPARSED-reply drop, `undefined` before the first. */
+  get lastUnparsedReplyAt(): number | undefined {
+    return this.lastUnparsedReplyTimestamp
   }
 
   /**
@@ -627,10 +749,31 @@ export class AdvisorRuntime {
     }
     // stop | max-tokens | tool-calls: extract from the collected text (KD-2;
     // no retry on parse failures — the frame must simply be absent/valid).
-    const note = extractAdviceNote(text)
+    // KD-I3 drop classification (issue #102): an EMPTY trimmed reply is an
+    // empty drop (the classic case is a thinking model exhausting the token
+    // budget — finish: max-tokens); a reply with text but no parseable frame
+    // is an unparsed drop unless the opt-in prose fallback rescues it. Both
+    // classes are counted with a timestamp and warn once per runtime, so
+    // "the advisor is running but never speaks" is discoverable instead of
+    // debug-only. Drops still return 'no-note': KD-2 extraction failures are
+    // output-quality issues, not transport failures (no KD-5 retry, no
+    // consecutive-drop counting).
+    let note = extractAdviceNote(text)
     if (note === undefined) {
-      this.logger.debug('advisor: reply yielded no note — dropped (no parseable non-empty JSON note in the reply)')
-      return { kind: 'no-note' }
+      if (text.trim().length === 0) {
+        this.recordEmptyReply(finish)
+        return { kind: 'no-note' }
+      }
+      // KD-I2 prose fallback (opt-in, default off): the JSON frame keeps
+      // priority — only when NO frame was found AND the flag is on does the
+      // cleaned prose body become a nit note and re-enter the normal
+      // guard/delivery pipeline below. With the flag off the reply is dropped
+      // exactly as before (default behavior unchanged).
+      if (this.proseFallback) note = extractProseFallbackNote(text)
+      if (note === undefined) {
+        this.recordUnparsedReply()
+        return { kind: 'no-note' }
+      }
     }
     try {
       // The T5 emission guard sits between extraction and delivery: only
@@ -659,6 +802,44 @@ export class AdvisorRuntime {
     return { kind: 'note', note }
   }
 
+  /**
+   * KD-I3: count + timestamp an EMPTY-reply drop and warn ONCE per runtime
+   * with the fix hint (raise the budget); repeats fall back to a debug line.
+   * The finish reason rides along — `max-tokens` vs `stop` is the
+   * budget-exhausted vs genuinely-empty tell (issue #102 evidence).
+   */
+  private recordEmptyReply(finish: FinishReason): void {
+    this.emptyReplyCount++
+    this.lastEmptyReplyTimestamp = Date.now()
+    if (this.emptyReplyWarned) {
+      this.logger.debug('advisor: empty reply dropped', { finish: finish.kind })
+      return
+    }
+    this.emptyReplyWarned = true
+    this.logger.warn(
+      'advisor: empty reply dropped — reasoning may be exhausting the token budget; consider raising maxTokens',
+      { finish: finish.kind },
+    )
+  }
+
+  /**
+   * KD-I3: count + timestamp an UNPARSED-reply drop and warn ONCE per runtime
+   * with the fix hint (enable the prose fallback); repeats fall back to the
+   * original KD-2 debug line.
+   */
+  private recordUnparsedReply(): void {
+    this.unparsedReplyCount++
+    this.lastUnparsedReplyTimestamp = Date.now()
+    if (this.unparsedReplyWarned) {
+      this.logger.debug('advisor: reply yielded no note — dropped (no parseable non-empty JSON note in the reply)')
+      return
+    }
+    this.unparsedReplyWarned = true
+    this.logger.warn(
+      'advisor: reply yielded no note — dropped (no parseable non-empty JSON note in the reply); consider enabling proseFallback',
+    )
+  }
+
   private buildOptions(delta: Delta, signal: AbortSignal, reasoningEffort: ReasoningEffortId | undefined): GenerateOptions {
     return {
       provider: this.provider,
@@ -683,9 +864,14 @@ export class AdvisorRuntime {
       // UNSUPPORTED_REASONING_EFFORT, silently killing the advisor for
       // non-deepseek models — pre-n4 these worked because no effort was sent).
       ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-      // user-directed budget (256 -> 5120 -> 768): with thinking-off the
-      // default, a modest cap that fits one bounded note plus the JSON frame.
-      maxTokens: ADVISOR_MAX_TOKENS,
+      // Token budget (KD-I1, issue #102): operator-configurable via the
+      // config key `maxTokens` (128..16384) — KD-6's code invariant was
+      // superseded because thinking models behind third-party gateways can
+      // exhaust a fixed budget on reasoning and return an empty body. The
+      // default stays the user-directed 768 (ADVISOR_MAX_TOKENS — see its
+      // supersession chain: 256 -> 5120 -> 768), so unconfigured runtimes
+      // behave exactly as before.
+      maxTokens: this.maxTokens,
       signal,
       // KD-5: `purpose` is a closed union ('compaction' | 'session-title'); an
       // advisor call is an ordinary conversation request and leaves it unset.
