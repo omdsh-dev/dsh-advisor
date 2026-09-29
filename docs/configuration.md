@@ -120,7 +120,7 @@ schema 默认值（.volatile() live 字段）→ entry config（插件行本体�
 **排查**：运行 `/advisor status`——任一计数非零时追加一行 `Dropped:`（按类计数 + 各类最近一次丢弃的 ISO 时间戳 + 修复提示）：
 
 ```text
-Dropped: 3 empty (last 2026-09-29T08:15:42.000Z) — consider raising the maxTokens setting; 12 unparsed — consider enabling the proseFallback setting
+Dropped: 3 empty (last 2026-09-29T08:15:42.000Z) — consider raising the maxTokens setting; 12 unparsed (last 2026-09-29T08:51:17.000Z) — consider enabling the proseFallback setting
 ```
 
 **处置**（与运行时 warn-once 日志的提示一致）：
