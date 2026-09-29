@@ -26,7 +26,7 @@
 | `immuneTurns` | number（整数 ≥ 0） | `3` | 冷却步数：实际 steer 过一次 concern/blocker 后，接下来 N 个完成的 stepped 主 turn 必须走完，另一条打断性 note 才可再次 steer；窗口内的 note 降级为 inject。 |
 | `maxDeltaMessages` | number（整数 ≥ 0） | `60` | 有界的 advisor 输入窗口。超过 N 的 delta 以 `… <earlier messages omitted>` 标记截断；`0` = 无上限。 |
 | `maxTokens` | number（整数 128..16384） | `768` | 单次评审调用的 token 预算（issue #102）。默认 768 = 既有用户指示超驰链终值（256 → 5120 → 768）；思考型模型（尤其第三方网关后无法关 thinking 的模型）把预算耗在 reasoning 上导致空回复时调高——见[思考型模型调优](#思考型模型调优)。 |
-| `proseFallback` | boolean | `false` | Opt-in 散文容错（issue #102）：开启后，无 JSON 帧但正文非空的回复经清理（trim → 剥外围 markdown 围栏 → 768 字符截断）作为 `severity: 'nit'` 的 note 走正常 guard/投递管线。JSON 帧始终优先；默认关闭时同样回复仍被丢弃。 |
+| `proseFallback` | boolean | `false` | Opt-in 散文容错（issue #102）：开启后，未产出有效 note（无可解析 JSON 帧，或帧的 note 为空/非法）但正文非空的回复经清理（trim → 剥外围 markdown 围栏 → 768 字符截断）作为 `severity: 'nit'` 的 note 走正常 guard/投递管线。可用的帧 note 始终优先；默认关闭时同样回复仍被丢弃。 |
 
 > 默认值即 `Config` schema 的默认值（`z.string().default('')`、`z.number().step(1).min(0).default(3)` / `.default(60)`、`z.number().step(1).min(128).max(16384).default(768)`、`z.boolean().default(false)`，`src/config.ts`）。`provider` / `model` 在 schema 上没有默认值 —— 保持可选是为了让缺 pair 的配置能通过 Loader 校验、再由门禁解析为 disabled-with-reason（而不是加载失败）。`enabled` 键已移除（2026-09-26）——宿主 UI 的插件行开关即总开关；存储值中残留的 `enabled:` 会被静默忽略（2026-09-27 裁决：接受但剥离，永不读取、永不回写）。`maxTokens` / `proseFallback` 为 2026-09-29 新增（issue #102）。
 
@@ -42,7 +42,7 @@
     immuneTurns: 3              # 整数 ≥ 0，默认 3 —— 打断性送达后的冷却步数
     maxDeltaMessages: 60        # 整数 ≥ 0，默认 60 —— delta 窗口；0 = 无上限
     maxTokens: 768              # 整数 128..16384，默认 768 —— 单次评审的 token 预算（issue #102）
-    proseFallback: false        # 布尔，默认 false —— 无 JSON 帧时将散文回复作为 nit note 投递（opt-in）
+    proseFallback: false        # 布尔，默认 false —— 无有效 note（含帧 note 为空/非法）时将散文回复作为 nit note 投递（opt-in）
 ```
 
 ## 显式模型门禁（S4）
@@ -107,7 +107,7 @@ schema 默认值（.volatile() live 字段）→ entry config（插件行本体�
 - 每次 `llm.stream` 调用：`{ provider, model, system, messages: [user delta], maxTokens }`（`maxTokens` 可配置、整数 128..16384、默认 768 = 用户指示的 256 → 5120 → 768 超驰链终值；2026-09-29 起经 `maxTokens` 配置键可调——issue #102：第三方网关后无法关 thinking 的模型会把固定预算耗在 reasoning 上、正文为空；`purpose` 不设置，KD-5）。`reasoningEffort: 'off'` 仅在所配置模型的 adapter 声明该档位时发送（`src/advisor-runtime.ts` `resolveModelInfo` 能力查询）；
 - 每次调用有 60s 整调用 deadline（超时按 transient 处理，KD-5 retry → drop）；
 - **failure policy（KD-5）**：transient → 1 次重试（1s backoff）→ drop；连续 3 次 drop → 冲刷积压 backlog（不 stall）；quota/rate-limit → `quota_exhausted` 暂停（批次保留，**无自动恢复定时器** —— `/advisor on` 手动恢复）；permanent（`invalid_request_error` / model-not-found / "is not supported when" / does not exist）→ `halted`（原地终止；`/advisor on` 为该会话全新重建）；
-- **KD-2 抽取**：解析回复中第一个平衡 JSON 帧（容忍 prose/fence）为 `{note, severity}`；`note` 非空否则 drop+log；`severity` 缺失/非法默认 `nit`；不做解析重试；note 文本有界（768 字符，`ADVISOR_NOTE_MAX_CHARS`）。开启 `proseFallback` 时，无帧但正文非空的回复经 `extractProseFallbackNote` 清理后作为 `nit` note 投递（帧优先不变）；丢弃按 empty / unparsed 分类计数 + 时间戳，非零时见 `/advisor status` 的 `Dropped:` 行（KD-I3，issue #102）；
+- **KD-2 抽取**：解析回复中第一个平衡 JSON 帧（容忍 prose/fence）为 `{note, severity}`；`note` 非空否则 drop+log；`severity` 缺失/非法默认 `nit`；不做解析重试；note 文本有界（768 字符，`ADVISOR_NOTE_MAX_CHARS`）。开启 `proseFallback` 时，未产出有效 note——无可解析帧，或帧的 note 为空/非法——但正文非空的回复经 `extractProseFallbackNote` 清理后作为 `nit` note 投递（可用帧 note 优先不变）；丢弃按 empty / unparsed 分类计数 + 时间戳，非零时见 `/advisor status` 的 `Dropped:` 行（KD-I3，issue #102）；
 - **T5 emission guard**（`src/emission-guard.ts`）：normalize（等价拼写归一到同一身份）、content-free 短语抑制（stop / done / complete / no issue continue / lgtm / nothing to add）、跨 update 去重（允许 nit → concern → blocker 升级）、每次 update 至多一条 note、FIFO 有界去重历史（默认 4096）；compaction / surface 重写清空历史与 latch。
 
 ### 思考型模型调优（issue #102）
@@ -126,7 +126,7 @@ Dropped: 3 empty (last 2026-09-29T08:15:42.000Z) — consider raising the maxTok
 **处置**（与运行时 warn-once 日志的提示一致）：
 
 - **empty 计数增长** → 调高 `maxTokens`（整数 128..16384；issue 报告者实测 4096 可恢复产出）。默认 768 适配 thinking-off 生效的 deepseek 模型；reasoning 无法关闭的模型需要更大预算。上限 16384 是失控成本保险——注入体积不随之放大（note 仍受 768 字符截断 + emission guard 约束），放大的只是模型调用的生成预算。
-- **unparsed 计数增长** → 开启 `proseFallback`（默认关闭）：无帧但正文非空的回复经清理（trim → 剥外围 markdown 围栏 → `ADVISOR_NOTE_MAX_CHARS` 截断）后作为 `severity: 'nit'` 的 note 走正常 guard / `immuneTurns` / 投递管线。JSON 帧始终优先；默认关闭时同样的回复仍被丢弃（opt-in 兼容层，默认行为不变）。
+- **unparsed 计数增长** → 开启 `proseFallback`（默认关闭）：未产出有效 note（无可解析帧，或帧的 note 为空/非法）但正文非空的回复经清理（trim → 剥外围 markdown 围栏 → `ADVISOR_NOTE_MAX_CHARS` 截断）后作为 `severity: 'nit'` 的 note 走正常 guard / `immuneTurns` / 投递管线。可用帧 note 始终优先；默认关闭时同样的回复仍被丢弃（opt-in 兼容层，默认行为不变）。
 
 两类丢弃首次发生时各 warn 一次（带同样的修复提示），此后仅 debug 级记录。计数自 runtime 创建起累计；编辑 `maxTokens` / `proseFallback` 属运行时构造期常量，会触发 runtime 重建（见 [live 重应用](#live-重应用)）并清零计数。
 

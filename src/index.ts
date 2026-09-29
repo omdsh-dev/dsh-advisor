@@ -802,6 +802,16 @@ export function apply(ctx: Context, config: AdvisorConfig) {
         model: resolved.model,
         immuneTurns: resolved.immuneTurns,
         maxDeltaMessages: resolved.maxDeltaMessages,
+        // qc1 S-1 / FW-1b R-1: the issue-#102 keys ride the same resolved
+        // source the renderer reads. Present on the normal path (the schema
+        // defaults fill 768/false on the Loader resolution), absent on the S1
+        // containment fallback (safeFallback seeds only the scalar latches) —
+        // conditional spread keeps absent-never-undefined, so the readback
+        // renders the lines only when the read carries them (same pattern as
+        // disabledReason; the renderer never invents a defaulted value for an
+        // absent key).
+        ...(resolved.maxTokens === undefined ? {} : { maxTokens: resolved.maxTokens }),
+        ...(resolved.proseFallback === undefined ? {} : { proseFallback: resolved.proseFallback }),
         systemPromptSet: resolved.systemPrompt !== '',
         systemPromptSummary: summarizeSystemPrompt(resolved.systemPrompt),
         // T2 (plan dsh-advisor-tui-settings-n9): the truthful edit-hint input.

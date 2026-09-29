@@ -810,6 +810,36 @@ describe('/advisor config — session-less composed readback (T2)', () => {
     }
   })
 
+  it('the readback carries the issue-#102 keys from the resolved config (FW-1b R-1: the wiring supplies them)', async () => {
+    // qc1 S-1 landed the renderer contract + renderer pins (commands.test.ts);
+    // the composed config the REAL wiring hands it must carry the keys too —
+    // otherwise the lines silently never render. The resolved read always
+    // carries them on the normal path (schema defaults fill 768/false), and a
+    // committed volatile edit is reflected live (same resolved source as the
+    // web card's /api/advisor/get readback).
+    const { ctx, entry } = await composeLiveHarness(
+      { provider: 'stub', model: 'stub-model', maxTokens: 768, proseFallback: false },
+      [],
+    )
+    const handler = await registerCommands(ctx)
+    const { session } = makeSession('s1')
+
+    const defaults = invokeAdvisor(handler, 'config', session)
+    expect(defaults.kind).toBe('success')
+    if (defaults.kind === 'success') {
+      expect(defaults.text).toContain('maxTokens: 768')
+      expect(defaults.text).toContain('proseFallback: off')
+    }
+
+    entry.commit(ctx, { maxTokens: 4096, proseFallback: true })
+    const edited = invokeAdvisor(handler, 'config', session)
+    expect(edited.kind).toBe('success')
+    if (edited.kind === 'success') {
+      expect(edited.text).toContain('maxTokens: 4096')
+      expect(edited.text).toContain('proseFallback: on')
+    }
+  })
+
   it('an unknown-key user layer: /advisor config stays disabled-with-reason and seeds the scalars from the raw source (qc2 W-1 on the config path, F-1/F-4)', async () => {
     // The exact qc2 W-1 scenario already pinned for /advisor status — now on
     // the config readback: the user layer gains an unknown key the resolver
