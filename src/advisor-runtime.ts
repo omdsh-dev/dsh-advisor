@@ -22,9 +22,11 @@
  *   parsed (tolerant of prose/fences), `note` must be non-empty (else
  *   drop+log), `severity` missing/invalid defaults to `nit`, no parse retry;
  *   the KD-I2 prose fallback (issue #102, opt-in — see
- *   {@link extractProseFallbackNote}) lets a frame-less PROSE reply through
- *   as a nit note when the `proseFallback` option is on — the JSON frame
- *   keeps priority, and the default (off) preserves the KD-2 drop semantics;
+ *   {@link extractProseFallbackNote}) lets a reply that yields no valid
+ *   frame note through as a nit note when the `proseFallback` option is on —
+ *   no parseable frame at all, or frames whose note is empty/invalid; the
+ *   JSON frame keeps priority (a usable frame note blocks the fallback), and
+ *   the default (off) preserves the KD-2 drop semantics;
  * - KD-I3 drop visibility (issue #102): a completed call whose reply yields
  *   no note is classified — EMPTY (body empty after trim; the classic case is
  *   a thinking model exhausting the token budget) vs UNPARSED (text present,
@@ -133,10 +135,12 @@ export interface AdvisorRuntimeOptions {
   readonly maxTokens?: number
   /**
    * Opt-in prose fallback (KD-I2, issue #102): when true, a completed call
-   * whose reply has text but NO parseable JSON frame delivers the cleaned
-   * prose body ({@link extractProseFallbackNote}: trim → strip a surrounding
-   * fence → cap) as a `nit` note through the normal guard/delivery pipeline.
-   * Default false — the KD-2 drop semantics stay byte-identical.
+   * whose reply has text but yields NO valid note from its JSON frames — no
+   * parseable frame at all, or frames whose note is empty/invalid — delivers
+   * the cleaned prose body ({@link extractProseFallbackNote}: trim → strip a
+   * surrounding fence → cap) as a `nit` note through the normal
+   * guard/delivery pipeline. Default false — the KD-2 drop semantics stay
+   * byte-identical.
    */
   readonly proseFallback?: boolean
   /** The llm service (`ctx.llm`); injectable for tests. */
@@ -291,8 +295,9 @@ const SURROUNDING_FENCE_PATTERN = /^```[^\n]*\n([\s\S]*?)\n?```$/
  * {@link AdvisorRuntimeOptions.proseFallback}). Frozen-spec supersession
  * note: the strict KD-2 JSON-frame requirement stays the DEFAULT — this
  * function is applied at the extraction call site ONLY when
- * {@link extractAdviceNote} found no frame AND the flag is on, so a reply
- * carrying both a frame and prose still delivers the frame's note.
+ * {@link extractAdviceNote} extracted no valid note (no parseable frame, or
+ * every frame's note empty/invalid) AND the flag is on, so a reply whose
+ * frame yields a usable note still delivers that note.
  *
  * Cleanup: trim → strip ONE surrounding markdown fence (an unterminated or
  * non-surrounding fence is kept as-is) → cap at {@link ADVISOR_NOTE_MAX_CHARS}
@@ -512,9 +517,10 @@ export class AdvisorRuntime {
   }
 
   /**
-   * KD-I3 (issue #102) — replies dropped because no JSON frame was parseable
-   * and the prose fallback delivered nothing (`proseFallback` off, or on with
-   * an empty cleanup result). Read-only status outlet.
+   * KD-I3 (issue #102) — replies dropped because no valid note was extracted
+   * (no parseable JSON frame, or frames whose note is empty/invalid) and the
+   * prose fallback delivered nothing (`proseFallback` off, or on with an
+   * empty cleanup result). Read-only status outlet.
    */
   get unparsedReplies(): number {
     return this.unparsedReplyCount
@@ -765,10 +771,11 @@ export class AdvisorRuntime {
         return { kind: 'no-note' }
       }
       // KD-I2 prose fallback (opt-in, default off): the JSON frame keeps
-      // priority — only when NO frame was found AND the flag is on does the
-      // cleaned prose body become a nit note and re-enter the normal
-      // guard/delivery pipeline below. With the flag off the reply is dropped
-      // exactly as before (default behavior unchanged).
+      // priority — only when NO frame yields a usable note (an empty- or
+      // invalid-note frame included) AND the flag is on does the cleaned
+      // prose body become a nit note and re-enter the normal guard/delivery
+      // pipeline below. With the flag off the reply is dropped exactly as
+      // before (default behavior unchanged).
       if (this.proseFallback) note = extractProseFallbackNote(text)
       if (note === undefined) {
         this.recordUnparsedReply()

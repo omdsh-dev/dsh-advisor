@@ -478,6 +478,18 @@ export interface AdvisorComposedConfig {
   readonly immuneTurns: number
   /** Delta window; 0 = unbounded (KD-3). */
   readonly maxDeltaMessages: number
+  /**
+   * Token budget for one advisor call (KD-I1, issue #102). Present when the
+   * composed read carries the key (the schema default fills 768 on the
+   * resolved path); absent on a fallback-shaped read — the renderer shows the
+   * line only when present, never a defaulted value for an absent key.
+   */
+  readonly maxTokens?: number
+  /**
+   * Opt-in prose fallback switch (KD-I2, issue #102); same presence rule as
+   * {@link AdvisorComposedConfig.maxTokens}.
+   */
+  readonly proseFallback?: boolean
   /** True when the composed config carries a custom system prompt ("" = unset). */
   readonly systemPromptSet: boolean
   /**
@@ -527,6 +539,13 @@ export function advisorConfigText(config: AdvisorComposedConfig): string {
   }
   lines.push(`immuneTurns: ${config.immuneTurns}`)
   lines.push(`maxDeltaMessages: ${config.maxDeltaMessages === 0 ? 'unbounded' : config.maxDeltaMessages}`)
+  // The issue-#102 keys (qc1 S-1) render only when the composed read carries
+  // them: a fallback-shaped read omits the optional keys, and inventing a
+  // default marker there would misreport a store whose real values differ —
+  // the same lie class the gateway wire fix (qc1 W-1) removes. Absent = no
+  // line, matching the Model/Reason lines' conditional style.
+  if (config.maxTokens !== undefined) lines.push(`maxTokens: ${config.maxTokens}`)
+  if (config.proseFallback !== undefined) lines.push(`proseFallback: ${config.proseFallback ? 'on' : 'off'}`)
   // The set-vs-default signal is systemPromptSet, NOT the summary: a custom
   // prompt whose first line is empty (e.g. '\nsecond line') summarizes to ''
   // but must still read as set, not <default> (qc2 F-3).

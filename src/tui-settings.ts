@@ -28,7 +28,11 @@
  * dsh-TUI commit `02ff08e`). Residual drift window: an upstream
  * addition/rename of a REQUIRED field would NOT fail the structural cast (the
  * cast goes through `unknown`) and could cause host-side misrender rather than
- * a compile error — re-verify against the dsh-TUI repo when bumping.
+ * a compile error — re-verify against the dsh-TUI repo when bumping. The same
+ * window covers a KIND VALUE the cast cannot validate against the host:
+ * `kind: 'boolean'` (the `proseFallback` field, issue #102) is native only in
+ * the ≥ v0.8.0 mirror, so a host older than the pin could misrender it
+ * silently (documented fallback: remap to a select(on/off) two-option field).
  *
  * Field subset (2026-09-26; extended 2026-09-29, issue #102): the section
  * covers the six §5.1 keys (`provider` / `model` / `immuneTurns` /

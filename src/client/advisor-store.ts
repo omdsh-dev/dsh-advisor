@@ -257,9 +257,11 @@ function draftOfConfig(config: AdvisorConfigView | undefined): AdvisorDraft {
     systemPrompt: typeof config?.systemPrompt === 'string' ? config.systemPrompt : '',
     immuneTurns: numberField(config?.immuneTurns, 3),
     maxDeltaMessages: numberField(config?.maxDeltaMessages, 60),
-    // The scalar fields show the schema-defaulted effective values (the
-    // gateway returns the resolved config, so post-T1 the wire always carries
-    // both keys; the fallbacks only cover the plain-object wire shapes).
+    // The scalar fields show the effective values: the gateway returns the
+    // resolved config, so the wire carries both keys whenever the resolver
+    // defined them (the schema defaults fill 768/false on the normal path);
+    // these fallbacks cover the containment wires whose raw entry omitted
+    // the keys (the gateway's S1 fallback mirrors the raw source verbatim).
     maxTokens: numberField(config?.maxTokens, 768),
     proseFallback: typeof config?.proseFallback === 'boolean' ? config.proseFallback : false,
   }

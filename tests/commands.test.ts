@@ -569,6 +569,29 @@ describe('advisorConfigText (the /advisor config surface, composed session-less 
     expect(text).not.toContain('maxDeltaMessages: 0')
   })
 
+  it('renders the issue-#102 keys when the composed config carries them (S-1 seven-key readback)', () => {
+    const text = advisorConfigText(baseConfig({
+      enabled: true,
+      maxTokens: 4096,
+      proseFallback: true,
+    }))
+    expect(text).toContain('maxTokens: 4096')
+    expect(text).toContain('proseFallback: on')
+    const off = advisorConfigText(baseConfig({ enabled: true, maxTokens: 768, proseFallback: false }))
+    expect(off).toContain('maxTokens: 768')
+    expect(off).toContain('proseFallback: off')
+  })
+
+  it('omits the issue-#102 lines when the composed config does not carry them (absent is never rendered as a value)', () => {
+    // A fallback-shaped composed read (e.g. an invalid-config fallback
+    // literal) omits the optional keys — inventing a default marker there
+    // would misreport a store whose real values differ (the same lie class
+    // the gateway wire fix qc1 W-1 removes). Absent = no line.
+    const text = advisorConfigText(baseConfig({ enabled: true }))
+    expect(text).not.toContain('maxTokens:')
+    expect(text).not.toContain('proseFallback:')
+  })
+
   it('renders <default> when the system prompt is unset', () => {
     const text = advisorConfigText(baseConfig({ enabled: true }))
     expect(text).toContain('systemPrompt: <default>')

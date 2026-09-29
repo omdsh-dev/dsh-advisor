@@ -603,10 +603,11 @@ describe('maxTokens + proseFallback draft fields (issue #102 settings sync)', ()
   })
 
   it('seeds the effective defaults (768 / false) when the wire omits the new keys, staying clean', async () => {
-    // The gateway returns the RESOLVED config, so post-T1 the wire always
-    // carries both keys; the fixture here is the pre-T1 shape — the seed
-    // shows the schema-defaulted effective values (numberField pattern) and
-    // the form opens clean (draft === seed, no invented diff).
+    // A wire without the new keys is a REAL shape, not a pre-#102 relic: the
+    // gateway's S1 containment fallback mirrors a raw entry that omits them
+    // (the resolver never ran, so no schema default filled them). The seed
+    // shows the effective defaults (numberField pattern) and the form opens
+    // clean (draft === seed, no invented diff).
     const { remote, rpc } = scriptedApi()
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
