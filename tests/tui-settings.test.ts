@@ -9,16 +9,18 @@
  *    `ADVISOR_SETTINGS_NAMESPACE` ('advisor'); title + zh/en descriptions
  *    are non-empty strings; the disposer returned by the inject child is
  *    exactly the stub registry's `register` return value (no wrapping).
- * ② The section's fields: the four expected kinds in display order
- *    (`provider`/`model` text, `immuneTurns`/`maxDeltaMessages` number),
- *    each with a non-empty `path`, `label`, and zh/en `hint`/`hintDescriptions`;
- *    `systemPrompt` is NOT among the field paths.
+ * ② The section's fields: the six expected kinds in display order
+ *    (`provider`/`model` text, `immuneTurns`/`maxDeltaMessages`/`maxTokens`
+ *    number, `proseFallback` boolean), each with a non-empty `path`, `label`,
+ *    and zh/en `hint`/`hintDescriptions`; `systemPrompt` is NOT among the
+ *    field paths.
  * ③ Field-path ↔ §5.1 schema alignment (regression pin): every field `path`
  *    is a single-element array whose key is a §5.1 `AdvisorConfig` key, and
  *    the exact allowed set is {provider, model, immuneTurns,
- *    maxDeltaMessages} — `systemPrompt` is the only §5.1 key intentionally
- *    absent (single-line TUI text input would truncate a multi-line prompt);
- *    `enabled` is gone with the config-level switch (2026-09-26).
+ *    maxDeltaMessages, maxTokens, proseFallback} — `systemPrompt` is the only
+ *    §5.1 key intentionally absent (single-line TUI text input would truncate
+ *    a multi-line prompt); `enabled` is gone with the config-level switch
+ *    (2026-09-26).
  * ④ No `tuiSettingsSections` service → `installTuiSettingsSection` completes
  *    without error and registers nothing.
  * ⑤ A duplicate-ns registration is contained: debug log + no-op disposer,
@@ -73,6 +75,8 @@ const TUI_FIELD_KEYS: readonly (keyof AdvisorConfig)[] = [
   'model',
   'immuneTurns',
   'maxDeltaMessages',
+  'maxTokens',
+  'proseFallback',
 ]
 
 /** Stub `tuiSettingsSections` registry mirroring the dsh-TUI host contract
@@ -192,7 +196,7 @@ describe('installTuiSettingsSection — registration (AC-1)', () => {
 // ② + ③ the section's fields: kinds, display order, zh/en copy, schema pins
 // ---------------------------------------------------------------------------
 
-describe('section fields — four §5.1 keys, display order, zh/en copy (AC-1)', () => {
+describe('section fields — §5.1 keys, display order, zh/en copy (AC-1)', () => {
   function registeredSection(): TuiSettingsSection {
     const sections = new StubSettingsSections()
     const { ctx } = activateCtx({ tuiSettingsSections: sections })
@@ -201,11 +205,11 @@ describe('section fields — four §5.1 keys, display order, zh/en copy (AC-1)',
     return sections.sections[0]!
   }
 
-  it('declares the four fields with the expected kinds in display order', () => {
+  it('declares the six fields with the expected kinds in display order', () => {
     const fields = registeredSection().fields
 
     expect(fields.map((field) => field.path)).toEqual(TUI_FIELD_KEYS.map((key) => [key]))
-    expect(fields.map((field) => field.kind)).toEqual(['text', 'text', 'number', 'number'])
+    expect(fields.map((field) => field.kind)).toEqual(['text', 'text', 'number', 'number', 'number', 'boolean'])
   })
 
   it('every field carries a non-empty path, label, and zh/en hint + hintDescriptions; systemPrompt is absent', () => {
@@ -232,6 +236,29 @@ describe('section fields — four §5.1 keys, display order, zh/en copy (AC-1)',
     // No §5.1 config key is silently unreachable from the TUI section except
     // systemPrompt — assert the exact allowed set.
     expect(new Set(keys.map(([key]) => key!))).toEqual(new Set(TUI_FIELD_KEYS))
+  })
+
+  it('declares the issue #102 fields with their tuning guidance (maxTokens number, proseFallback boolean)', () => {
+    const fields = registeredSection().fields
+    const maxTokens = fields.find((field) => field.path[0] === 'maxTokens')
+    // The hint carries the KD-I1 bounds + default and the thinking-model
+    // tuning guidance (empty replies → raise the budget).
+    expect(maxTokens?.kind).toBe('number')
+    expect(maxTokens?.label).toBe('Max tokens')
+    expect(maxTokens?.hint).toMatch(/128/)
+    expect(maxTokens?.hint).toMatch(/16384/)
+    expect(maxTokens?.hint).toMatch(/768/)
+    expect(maxTokens?.hint).toMatch(/empty/i)
+    expect(maxTokens?.descriptions?.zh).toBeTruthy()
+    expect(maxTokens?.hintDescriptions?.zh).toBeTruthy()
+    const proseFallback = fields.find((field) => field.path[0] === 'proseFallback')
+    // The hint carries the KD-I2 semantics (no JSON frame → prose note).
+    expect(proseFallback?.kind).toBe('boolean')
+    expect(proseFallback?.label).toBe('Prose fallback')
+    expect(proseFallback?.hint).toMatch(/JSON/)
+    expect(proseFallback?.hint).toMatch(/prose/i)
+    expect(proseFallback?.descriptions?.zh).toBeTruthy()
+    expect(proseFallback?.hintDescriptions?.zh).toBeTruthy()
   })
 })
 
