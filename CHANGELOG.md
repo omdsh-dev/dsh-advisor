@@ -2,6 +2,13 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.5.5] - 2026-10-17
+
+- 9bd0fca chore(deps): 升级 dsh peers 到 0.2.1-rc.2 / upgrade dsh peers to 0.2.1-rc.2 (#109)
+- 42a057d chore(deps): bump source-map-js from 1.2.1 to 1.2.2 (#108)
+- e0166b2 Merge pull request #107 from omdsh-dev/chore/dsh-0.2.1-rc.1
+- 3c030c1 docs(mstar): align .mstar/AGENTS.md with the store.db authority layout (#106)
+
 ## [0.5.4] - 2026-09-29
 
 - dd9b75f Merge pull request #104 from omdsh-dev/feat/issue-102-output-resilience
