@@ -7,13 +7,14 @@ nodeLinker: hoisted
 allowBuilds:
   esbuild: true
 
-# Standing exemption for first-party @deepseek-ai packages so a future
-# minimumReleaseAge policy never blocks our own fresh rc releases.
-# INERT today: takes effect only once minimumReleaseAge is set (pnpm
-# defaults to 0 = no release-age check). Keep versions in sync with the
-# lockfile when bumping dsh peers.
+# Standing exemption for first-party @deepseek-ai packages so the
+# minimumReleaseAge policy never blocks our own fresh rc releases. pnpm 11
+# defaults the window to 1440 minutes, so any lockfile entry that resolves a
+# just-published first-party version fails `pnpm install --frozen-lockfile`
+# until the window passes. Keep versions in sync with the lockfile when
+# bumping dsh peers.
 minimumReleaseAgeExclude:
-  - '@deepseek-ai/cordis-plugin-include@1.0.9'
+  - '@deepseek-ai/cordis-plugin-include@1.0.10'
   - '@deepseek-ai/cordis-plugin-loader@1.0.6'
   - '@deepseek-ai/cordis@4.0.5'
   - '@deepseek-ai/cosmokit@1.8.6'
@@ -69,7 +70,7 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-client-file-upload@0.2.1-rc.1'
   - '@deepseek-ai/dsh-fs@0.2.1-rc.1'
   - '@deepseek-ai/dsh-sandbox@0.2.1-rc.1'
-  - '@deepseek-ai/cordis-plugin-group@1.0.4'
+  - '@deepseek-ai/cordis-plugin-group@1.0.5'
   - '@deepseek-ai/dsh-agent-preset-registry@0.2.1-rc.1'
   - '@deepseek-ai/dsh-app-boot@0.2.1-rc.1'
   - '@deepseek-ai/dsh-compaction-image-offload@0.2.1-rc.1'
