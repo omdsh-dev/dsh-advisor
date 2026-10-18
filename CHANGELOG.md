@@ -2,6 +2,10 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.5.7] - 2026-10-18
+
+- 2b4f132 Merge pull request #113 from omdsh-dev/fix/advisor-drop-max-tokens
+
 ## [0.5.6] - 2026-10-18
 
 - 5904b68 feat(advisor): select model-declared reasoning effort with a smallest-effort default (#111)
