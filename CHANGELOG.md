@@ -2,6 +2,10 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.5.6] - 2026-10-18
+
+- 5904b68 feat(advisor): select model-declared reasoning effort with a smallest-effort default (#111)
+
 ## [0.5.5] - 2026-10-17
 
 - 9bd0fca chore(deps): 升级 dsh peers 到 0.2.1-rc.2 / upgrade dsh peers to 0.2.1-rc.2 (#109)
