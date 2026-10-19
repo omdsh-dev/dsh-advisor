@@ -2,6 +2,14 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.6.0] - 2026-10-19
+
+- 4ad7c4e Merge pull request #120 from omdsh-dev/docs/screenshot-crops
+- 9913eb1 Merge pull request #119 from omdsh-dev/docs/readme-latest-capabilities
+- cb603b4 Merge pull request #118 from omdsh-dev/fix/ghost-placeholder-fusion
+- f70d88d Merge pull request #117 from omdsh-dev/fix/ghost-placeholder-fusion
+- 3660d67 Merge pull request #116 from omdsh-dev/feat/advisor-next-prompt
+
 ## [0.5.7] - 2026-10-18
 
 - 2b4f132 Merge pull request #113 from omdsh-dev/fix/advisor-drop-max-tokens
