@@ -2,6 +2,11 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.6.2] - 2026-10-21
+
+- 13f12bb fix(deps): bump vite to 8.3.4 for dependabot advisories (#127)
+- dc4d2b1 feat(advisor): add defaultEnabled opt-in default for new sessions (#126)
+
 ## [0.6.1] - 2026-10-21
 
 - c240c3e Merge pull request #123 from FFFengMJL/fix/advisor-session-id
