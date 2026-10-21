@@ -5,11 +5,9 @@ import { defineConfig } from 'vitest/config'
 const here = dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
-  // Component specs compile JSX with the automatic runtime (react/jsx-runtime),
-  // mirroring tsconfig.spec.json — the spec files never import React.
-  esbuild: {
-    jsx: 'automatic',
-  },
+  // Component specs compile JSX with oxc's automatic runtime
+  // (react/jsx-runtime), mirroring tsconfig.spec.json — the spec files never
+  // import React. An `esbuild.jsx` option would be ignored by vite 8.
   resolve: {
     alias: [
       // The published @deepseek-ai/dsh-client-store entry is served to the
