@@ -11,9 +11,9 @@
  * beneath it: provider select, model select (ALWAYS rendered — there is no
  * enable checkbox to gate them; the config-level `enabled` switch was removed
  * and the plugin-row toggle is the master switch), system-prompt textarea,
- * and the paired `immuneTurns`/`maxDeltaMessages` numbers plus the
- * `proseFallback` checkbox (the `maxTokens` input was removed with the
- * 2026-10-18 budget ruling); then the footer
+ * the `proseFallback` / `nextPrompt` / `defaultEnabled` checkboxes and the
+ * paired `immuneTurns`/`maxDeltaMessages` numbers (the `maxTokens`
+ * input was removed with the 2026-10-18 budget ruling); then the footer
  * with the failed message + Discard/Save carrying the upstream disabled
  * semantics — save = `!dirty || invalid || saving`, discard = `!dirty ||
  * saving` (KD-U1, Global Constraints). Save additionally carries `!writable`
@@ -368,11 +368,11 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
         </div>
         <div className={styles['field']}>
           <label htmlFor="advisor-prose-fallback" className={styles['fieldLabel']}>{t('proseFallback')}</label>
-          {/* Boolean toggle (KD-I2, issue #102): the ONLY checkbox on the card
-              (the config-level `enabled` switch is gone — the row toggle is
-              the master switch). Same field pattern as the other controls:
-              label + htmlFor + aria-label. Placed BEFORE the number trio so
-              the `.numberFields` group keeps closing the field run. */}
+          {/* Boolean toggle (KD-I2, issue #102): one of the card's three
+              checkboxes (the config-level `enabled` switch is gone — the row
+              toggle is the master switch). Same field pattern as the other
+              controls: label + htmlFor + aria-label. Placed BEFORE the number
+              trio so the `.numberFields` group keeps closing the field run. */}
           <input
             id="advisor-prose-fallback"
             aria-label={t('proseFallback')}
@@ -401,6 +401,24 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
             onChange={(event) => { controller.setNextPrompt(event.target.checked) }}
           />
           <p className={styles['hint']}>{t('nextPromptHint')}</p>
+        </div>
+        <div className={styles['field']}>
+          <label htmlFor="advisor-default-enabled" className={styles['fieldLabel']}>{t('defaultEnabled')}</label>
+          {/* Session default switch (GitHub issue #124): when off, a session
+              with no own enable override starts with the advisor off until
+              `/advisor on` opts in for that session. The seed shows the
+              effective value (the resolver defaults true). Same field pattern
+              as the other controls: label + htmlFor + aria-label. */}
+          <input
+            id="advisor-default-enabled"
+            aria-label={t('defaultEnabled')}
+            className={styles['checkboxInput']}
+            type="checkbox"
+            checked={draft.defaultEnabled ?? true}
+            disabled={busy}
+            onChange={(event) => { controller.setDefaultEnabled(event.target.checked) }}
+          />
+          <p className={styles['hint']}>{t('defaultEnabledHint')}</p>
         </div>
         <div className={styles['numberFields']}>
           <div className={styles['field']}>

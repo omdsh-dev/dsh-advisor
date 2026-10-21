@@ -272,6 +272,7 @@ describe('providers join (KD-S2 configured determination)', () => {
       maxDeltaMessages: 60,
       proseFallback: false,
       nextPrompt: true,
+      defaultEnabled: true,
     })
   })
 
@@ -755,6 +756,79 @@ describe('nextPrompt draft field (plan dsh-advisor-next-prompt-n12, task 3)', ()
   })
 })
 
+describe('defaultEnabled draft field (GitHub issue #124)', () => {
+  it('seeds true when the wire omits the key and false when it carries an explicit false', async () => {
+    // src/config.ts normalizes defaultEnabled to a plain boolean (schema
+    // default true); a containment wire that omitted the key still seeds the
+    // default rather than inventing the opt-in behavior.
+    const absent = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
+    const absentStore = new AdvisorSettingsStore(absent.remote, absent.rpc, schema)
+    await absentStore.load()
+    expect(draftOf(absentStore).defaultEnabled).toBe(true)
+    expect(absentStore.store.getSnapshot().dirty).toBe(false)
+
+    const explicit = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, defaultEnabled: false },
+    })
+    const explicitStore = new AdvisorSettingsStore(explicit.remote, explicit.rpc, schema)
+    await explicitStore.load()
+    expect(draftOf(explicitStore).defaultEnabled).toBe(false)
+    expect(explicitStore.store.getSnapshot().dirty).toBe(false)
+  })
+
+  it('toggles defaultEnabled in the draft (dirty vs the seed, clean when reverted)', async () => {
+    const { remote, rpc } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    expect(draftOf(store).defaultEnabled).toBe(true)
+    store.setDefaultEnabled(false)
+    expect(draftOf(store).defaultEnabled).toBe(false)
+    expect(store.store.getSnapshot().dirty).toBe(true)
+    store.setDefaultEnabled(true) // back to the seed value → empty diff → clean
+    expect(draftOf(store).defaultEnabled).toBe(true)
+    expect(store.store.getSnapshot().dirty).toBe(false)
+  })
+
+  it('writes an edited defaultEnabled key through the always list', async () => {
+    const { remote, rpc, call } = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, defaultEnabled: true },
+    })
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    store.setDefaultEnabled(false)
+    await store.apply()
+    const payload = call.mock.calls.find(callArgs => callArgs[1] === 'advisor/set')?.[2] as { args: { patch: Record<string, unknown> } }
+    expect(payload.args.patch).toEqual({ defaultEnabled: false })
+  })
+
+  it('round-trips a non-default false through save and reload', async () => {
+    const { remote, rpc } = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    store.setDefaultEnabled(false)
+    await store.apply()
+    await store.load() // reload reads the merged config back
+    expect(draftOf(store).defaultEnabled).toBe(false)
+    expect(store.store.getSnapshot().dirty).toBe(false)
+  })
+
+  it('keeps an untouched defaultEnabled out of a partial apply (no churn)', async () => {
+    const { remote, rpc, call } = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, defaultEnabled: false },
+    })
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    store.setSystemPrompt('edited')
+    await store.apply()
+    const payload = call.mock.calls.find(callArgs => callArgs[1] === 'advisor/set')?.[2] as { args: { patch: Record<string, unknown> } }
+    expect(payload.args.patch).toEqual({ systemPrompt: 'edited' })
+  })
+})
+
 describe('invalidations (refreshIfLoaded)', () => {
   it('refetches a loaded store', async () => {
     const { remote, rpc, describe } = scriptedApi()
@@ -908,6 +982,7 @@ describe('gateway availability (KD-G5 — advisorPresent)', () => {
       systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
       proseFallback: false,
       nextPrompt: true,
+      defaultEnabled: true,
     })
   })
 })
@@ -955,6 +1030,7 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
       systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
       proseFallback: false,
       nextPrompt: true,
+      defaultEnabled: true,
     })
     // Discard is a client-side rewind — no advisor/set call ever happened.
     expect(set).not.toHaveBeenCalled()
@@ -981,6 +1057,7 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
       systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60,
       proseFallback: false,
       nextPrompt: true,
+      defaultEnabled: true,
     })
   })
 
@@ -1045,7 +1122,7 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
     // The rewind target is the default (failed-get) seed — the effective
     // defaults view, still inventing NO provider/model (the gate/wipe hazard
     // this pin guards); the recovery below must still seed the REAL config.
-    expect(draftOf(store)).toEqual({ systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, proseFallback: false, nextPrompt: true })
+    expect(draftOf(store)).toEqual({ systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, proseFallback: false, nextPrompt: true, defaultEnabled: true })
     await store.load()
     expect(store.store.getSnapshot().advisorPresent).toBe(true)
     expect(draftOf(store)).toEqual({
@@ -1053,6 +1130,7 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
       systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
       proseFallback: false,
       nextPrompt: true,
+      defaultEnabled: true,
     })
   })
 })

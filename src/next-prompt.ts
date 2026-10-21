@@ -331,7 +331,17 @@ export class NextPromptManager {
       this.options.logger.debug('advisor: next-prompt config read failed — prediction skipped', {
         error,
       })
-      return { enabled: false, systemPrompt: '', immuneTurns: 0, maxDeltaMessages: 60, nextPrompt: false }
+      return {
+        enabled: false,
+        systemPrompt: '',
+        immuneTurns: 0,
+        maxDeltaMessages: 60,
+        nextPrompt: false,
+        // Fail-closed placeholder (GitHub issue #124 adds the plain-boolean
+        // field): the disabled gate already blocks every prediction, so the
+        // concrete value is inert — keep the schema default for consistency.
+        defaultEnabled: true,
+      }
     }
   }
 

@@ -233,6 +233,7 @@ const effective = (overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvi
   immuneTurns: 3,
   maxDeltaMessages: 60,
   nextPrompt: true,
+  defaultEnabled: true,
   ...overrides,
 })
 

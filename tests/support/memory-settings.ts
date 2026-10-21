@@ -4,7 +4,7 @@
  * base class + user layers — both are gone: dsh-settings is now the form
  * service `SettingsForms` and a plugin's editable config is its OWN entry).
  *
- * A plugin's six live fields (`.volatile()` in `src/config.ts`) are committed
+ * A plugin's nine live fields (`.volatile()` in `src/config.ts`) are committed
  * by the cordis Loader into the running fiber's references — frozen cosmokit
  * `Volatile` objects (`{ get() }`) whose values only the Loader can update —
  * and every commit is announced by `loader/volatile-update`, emitted to the

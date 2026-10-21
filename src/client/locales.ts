@@ -74,6 +74,10 @@ export const en = {
   nextPromptHint: 'Show the reviewer’s suggested next prompt as a tip below the composer; press → to insert it.',
   nextPromptPrefix: 'Suggestion',
   nextPromptAccept: '→ Accept',
+  // Session default switch (GitHub issue #124): new sessions start enabled;
+  // turning this off makes the advisor opt-in per session via /advisor on.
+  defaultEnabled: 'Enabled by default',
+  defaultEnabledHint: 'New sessions start with the advisor on; turn it off to make the advisor opt-in per session (enable with /advisor on).',
 }
 
 /** The settings.advisor namespace key union. */
@@ -132,4 +136,6 @@ export const zh: typeof en = {
   nextPromptHint: '在输入框下方以提示条显示审阅者建议的下一条提示；按 → 插入。',
   nextPromptPrefix: '建议',
   nextPromptAccept: '→ 采纳',
+  defaultEnabled: '默认启用',
+  defaultEnabledHint: '新会话默认开启顾问；关闭后改为按会话手动启用（用 /advisor on）。',
 }

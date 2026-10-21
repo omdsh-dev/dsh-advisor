@@ -180,11 +180,11 @@ export type AdvisorModelSource = 'session' | 'global'
  * The per-session overrides consulted by the runtime gate and the effective
  * resolver (`src/index.ts`):
  *
- * - enable: `override ?? true` (`/advisor on|off|toggle`) — there is no
- *   config-level switch anymore (2026-09-26: the config `enabled` key was
- *   removed; a running plugin row IS enabled, and the row toggle turns every
- *   session off at once), so the default is ON and only an explicit
- *   `/advisor off` override suppresses a session;
+ * - enable: the RAW session override (`/advisor on|off|toggle`) — `undefined`
+ *   when the session has no own override, so the wiring can apply the
+ *   persisted `defaultEnabled` default (GitHub issue #124: `override ??
+ *   config.defaultEnabled`, default true keeps a running row enabled). The
+ *   class never decides a default itself;
  * - model: the complete session pair ?? the composed global pair — the pair
  *   is atomic, so the two levels are never merged (spec §5.3);
  * - generation: a per-session counter that fences async model work — a newer
@@ -203,9 +203,12 @@ export class AdvisorSessionOverrides {
   private readonly models = new Map<string, AdvisorModelPair>()
   private readonly generations = new Map<string, number>()
 
-  /** Effective switch for one session: `override ?? true` (a running row is on). */
-  effective(sessionId: string): boolean {
-    return this.enables.get(sessionId) ?? true
+  /**
+   * The session's RAW enable override — `undefined` when it has none, so the
+   * caller applies the config default (`defaultEnabled`, issue #124).
+   */
+  enableOverride(sessionId: string): boolean | undefined {
+    return this.enables.get(sessionId)
   }
 
   /** Set the enable override for one session. */
@@ -287,7 +290,7 @@ export class AdvisorSessionOverrides {
  * the override state.
  */
 export interface AdvisorSessionStatus {
-  /** Effective switch for this session (`override ?? true` — row on = on). */
+  /** Effective switch for this session (`override ?? config.defaultEnabled`; issue #124). */
   readonly enabled: boolean
   /**
    * Present iff the session is effectively enabled but the S4 explicit gate
@@ -487,6 +490,13 @@ export interface AdvisorComposedConfig {
    */
   readonly proseFallback?: boolean
   /**
+   * Session default switch (GitHub issue #124): true when a session with no
+   * own enable override starts enabled; false makes the advisor opt-in per
+   * session. Always present — the wiring supplies it from the resolved config
+   * (schema default true), never a gate-derived value.
+   */
+  readonly defaultEnabled: boolean
+  /**
    * Reasoning effort for one advisor call (plan dsh-advisor-reasoning-effort
    * T1/RD-1). Present when the composed read carries a non-empty key; ABSENT
    * means AUTOMATIC — the runtime sends the smallest effort the resolved model
@@ -551,6 +561,11 @@ export function advisorConfigText(config: AdvisorComposedConfig): string {
   // line, matching the Model/Reason lines' conditional style. (No maxTokens
   // line since the 2026-10-18 ruling — the model-side budget is gone.)
   if (config.proseFallback !== undefined) lines.push(`proseFallback: ${config.proseFallback ? 'on' : 'off'}`)
+  // Issue #124: the session default is a plain boolean on every composed read
+  // (the resolved contract always carries it; the wiring seeds it from the
+  // resolver). Always rendered, right after proseFallback and before the
+  // optional reasoningEffort line.
+  lines.push(`defaultEnabled: ${config.defaultEnabled ? 'on' : 'off'}`)
   // The reasoning-effort key (plan dsh-advisor-reasoning-effort T1) follows the same
   // presence rule: an absent key means AUTOMATIC (the smallest effort the
   // model declares), so there is no value to print — rendering 'auto' for it
@@ -689,12 +704,16 @@ function createAdvisorCommandHandler(controller: AdvisorCommandController) {
         // session whose runtime is halted/quota-paused must reach `setEnabled`
         // (which resumes/rebuilds it) — a plain "already on" would be a dead
         // end, since the only resume call site sits behind the enable path.
+        // Always route through `setEnabled` as well: an explicit on RECORDS
+        // the session's choice even when it is already effectively on, so a
+        // later `defaultEnabled` flip cannot override it (GitHub issue #124
+        // review, should-fix).
         const needsRecovery = before.enabled
           && (before.runtimeStatus === 'halted' || before.runtimeStatus === 'quota_exhausted')
+        controller.setEnabled(sessionId, true, invocation.agent.session.seq)
         if (before.enabled && !needsRecovery) {
           return { kind: 'success', text: 'Advisor is already on for this session.' }
         }
-        controller.setEnabled(sessionId, true, invocation.agent.session.seq)
         // Reply from the POST-flip status: when the override flip trips the
         // S4 gate (missing provider/model), the reply must say the advisor
         // did not start and why, not a bare "Advisor on" (qc2 W-2 / qc3 I-2).
@@ -702,9 +721,15 @@ function createAdvisorCommandHandler(controller: AdvisorCommandController) {
       }
       case 'off': {
         const before = controller.getStatus(sessionId)
-        if (!before.enabled) return { kind: 'success', text: 'Advisor is already off for this session.' }
+        // Always record the explicit off (GitHub issue #124 review,
+        // should-fix): under `defaultEnabled:false` the reply is still
+        // "already off", but the session now carries its own false override,
+        // so flipping the persisted default to true cannot re-enable it.
         controller.setEnabled(sessionId, false)
-        return { kind: 'success', text: 'Advisor off for this session.' }
+        return {
+          kind: 'success',
+          text: before.enabled ? 'Advisor off for this session.' : 'Advisor is already off for this session.',
+        }
       }
       case 'status':
         return { kind: 'success', text: advisorStatusText(controller.getStatus(sessionId)) }

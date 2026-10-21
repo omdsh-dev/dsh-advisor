@@ -7,7 +7,7 @@
  * service `SettingsForms` over profile entries). A plugin's editable config is
  * now its OWN entry config: the fields the schema declares `.volatile()` are
  * committed by the cordis Loader into the running fiber's references WITHOUT a
- * remount (`src/config.ts` marks all five live fields volatile).
+ * remount (`src/config.ts` marks all nine live fields volatile).
  *
  * This module is the read side of that pipeline. `apply` receives the entry
  * config with each volatile field as a `{ get() }` reference; the bridge
@@ -88,7 +88,7 @@ interface VolatileUpdateContext {
  * Wire the live source over the entry config's volatile references.
  *
  * `entry` is the config object `apply` received — on a Loader composition the
- * five schema-declared fields are `{ get() }` references; plain-object entries
+ * nine schema-declared fields are `{ get() }` references; plain-object entries
  * (integration harnesses) work identically. The bridge holds the ENTRY, not a
  * snapshot, so every `source()` call reads the references' CURRENT values and
  * the returned config is live from the first read. `onChange` fires on every

@@ -9,7 +9,7 @@
  *   removed — output is bounded at extraction by ADVISOR_NOTE_MAX_CHARS).
  *   `reasoningEffort` deliberately has NO
  *   default (an absent value means automatic — the smallest effort the
- *   resolved model declares). All seven live fields are `.volatile()`:
+ *   resolved model declares). All nine live fields are `.volatile()`:
  *   `Config(raw)` resolves them to `{ get() }` references (the loader's
  *   no-remount edit channel), and the reads below go through
  *   `unwrapAdvisorConfig` — the same unwrapping the runtime does before the
@@ -36,7 +36,7 @@ describe('schema defaults (cordis Loader path, spec §5.1)', () => {
     // fiber's references. A resolved field must duck-type as `{ get() }` —
     // every runtime read (unwrapAdvisorConfig → the gate) depends on it.
     const resolved: Record<string, unknown> = Config({})
-    for (const key of ['provider', 'model', 'systemPrompt', 'immuneTurns', 'maxDeltaMessages', 'proseFallback']) {
+    for (const key of ['provider', 'model', 'systemPrompt', 'immuneTurns', 'maxDeltaMessages', 'proseFallback', 'nextPrompt', 'defaultEnabled']) {
       expect(typeof (resolved[key] as { get?: unknown }).get, key).toBe('function')
     }
   })
@@ -48,6 +48,7 @@ describe('schema defaults (cordis Loader path, spec §5.1)', () => {
       maxDeltaMessages: 60,
       proseFallback: false,
       nextPrompt: true,
+      defaultEnabled: true,
     })
   })
 
@@ -67,6 +68,7 @@ describe('schema defaults (cordis Loader path, spec §5.1)', () => {
       maxDeltaMessages: 10,
       proseFallback: true,
       nextPrompt: true,
+      defaultEnabled: true,
     })
   })
 
@@ -169,7 +171,42 @@ describe('explicit model gate (S4 / spec §5.2)', () => {
       maxDeltaMessages: 0,
       proseFallback: true,
       nextPrompt: true,
+      defaultEnabled: true,
     })
+  })
+})
+
+describe('defaultEnabled — persisted session default (GitHub issue #124)', () => {
+  it('defaults to true in the Loader schema and on BOTH resolver arms', () => {
+    expect(unwrapAdvisorConfig(Config({})).defaultEnabled).toBe(true)
+    // Enabled arm (pair complete).
+    const enabled = resolveAdvisorConfig({ provider: 'p', model: 'm' })
+    expect(enabled.enabled).toBe(true)
+    expect(enabled.defaultEnabled).toBe(true)
+    // Disabled-with-reason arm (pair gate) — the boolean is still present.
+    const gated = resolveAdvisorConfig({})
+    expect(gated.enabled).toBe(false)
+    expect(gated.disabledReason).toBeTruthy()
+    expect(gated.defaultEnabled).toBe(true)
+  })
+
+  it('carries an explicit false as a plain boolean on both gate arms', () => {
+    expect(unwrapAdvisorConfig(Config({ defaultEnabled: false })).defaultEnabled).toBe(false)
+    const enabled = resolveAdvisorConfig({ provider: 'p', model: 'm', defaultEnabled: false })
+    expect(enabled.enabled).toBe(true) // defaultEnabled does not close the pair gate
+    expect(enabled.defaultEnabled).toBe(false)
+    const gated = resolveAdvisorConfig({ defaultEnabled: false })
+    expect(gated.enabled).toBe(false)
+    expect(gated.defaultEnabled).toBe(false)
+  })
+
+  it('rejects near-miss keys — defaultEnabled is a NEW key, exact-matched, not a legacy key', () => {
+    expect(() => resolveAdvisorConfig({ defaultEnableds: true }))
+      .toThrow(/unknown config key "defaultEnableds"/)
+    expect(() => resolveAdvisorConfig({ provider: 'p', model: 'm', DefaultEnabled: true }))
+      .toThrow(/unknown config key "DefaultEnabled"/)
+    // Schema type enforcement too: only a boolean validates.
+    expect(() => Config({ defaultEnabled: 'yes' as never })).toThrow()
   })
 })
 
@@ -208,6 +245,7 @@ describe('strict schema — unknown keys rejected (spec §5.2)', () => {
       maxDeltaMessages: 60,
       proseFallback: false,
       nextPrompt: true,
+      defaultEnabled: true,
     })
   })
 
@@ -226,6 +264,7 @@ describe('strict schema — unknown keys rejected (spec §5.2)', () => {
       maxDeltaMessages: 60,
       proseFallback: false,
       nextPrompt: true,
+      defaultEnabled: true,
     })
   })
 
@@ -269,6 +308,7 @@ describe('strict schema — unknown keys rejected (spec §5.2)', () => {
       proseFallback: true,
       reasoningEffort: 'high',
       nextPrompt: true,
+      defaultEnabled: true,
     })
   })
 

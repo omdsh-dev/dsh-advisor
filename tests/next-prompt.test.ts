@@ -59,6 +59,7 @@ const baseConfig = (): ResolvedAdvisorConfig => ({
   immuneTurns: 3,
   maxDeltaMessages: 60,
   nextPrompt: true,
+  defaultEnabled: true,
 })
 
 /** Chunk script for a successful text reply. */

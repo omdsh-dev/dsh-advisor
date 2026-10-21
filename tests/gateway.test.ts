@@ -146,6 +146,7 @@ describe('no settings service (entry fallback)', () => {
         maxDeltaMessages: 60,
         proseFallback: false,
         nextPrompt: true,
+        defaultEnabled: true,
       },
     })
   })
@@ -201,6 +202,7 @@ describe('with a settings service (set writes the entry config)', () => {
       maxDeltaMessages: 60,
       proseFallback: false,
       nextPrompt: true,
+      defaultEnabled: true,
     }
     // Live: the bridge source the runtime reads reflects the write.
     expect(resolveAdvisorConfig(bridge.source())).toEqual(composed)
@@ -238,6 +240,7 @@ describe('with a settings service (set writes the entry config)', () => {
         maxDeltaMessages: 10,
         proseFallback: false,
         nextPrompt: true,
+        defaultEnabled: true,
         disabledReason: expect.any(String),
       },
     })
@@ -266,6 +269,7 @@ describe('with a settings service (set writes the entry config)', () => {
         maxDeltaMessages: 10,
         proseFallback: false,
         nextPrompt: true,
+        defaultEnabled: true,
       },
     })
   })
@@ -306,6 +310,7 @@ describe('with a settings service (set writes the entry config)', () => {
       maxDeltaMessages: 60,
       proseFallback: false,
       nextPrompt: true,
+      defaultEnabled: true,
     })
   })
 
@@ -534,6 +539,7 @@ describe('typertGateway endpoint claims + payload contract', () => {
           maxDeltaMessages: 60,
           proseFallback: false,
           nextPrompt: true,
+          defaultEnabled: true,
           disabledReason: expect.any(String),
         },
       },
@@ -651,6 +657,38 @@ describe('typertGateway endpoint claims + payload contract', () => {
     }
   })
 
+  it('always carries defaultEnabled on get and round-trips a non-default false through set (GitHub issue #124)', async () => {
+    const { connection } = await composeGatewayHarness()
+    const signal = new AbortController().signal
+
+    // The default get carries the key (schema default true) — it is a
+    // persisted key, always included like nextPrompt.
+    const before = await connection.handler!('advisor/get', { args: {} }, signal, connection.peer)
+    expect(before.ok).toBe(true)
+    if (before.ok) {
+      const config = (before.value as { config: ResolvedAdvisorConfig }).config
+      expect(config.defaultEnabled).toBe(true)
+      expect('defaultEnabled' in config).toBe(true)
+    }
+
+    // A non-default patch persists and round-trips through the next get.
+    const setResult = await connection.handler!(
+      'advisor/set',
+      { args: { patch: { provider: 'deepseek', model: 'deepseek-chat', defaultEnabled: false } } },
+      signal,
+      connection.peer,
+    )
+    expect(setResult.ok).toBe(true)
+    if (setResult.ok) {
+      expect((setResult.value as { config: ResolvedAdvisorConfig }).config.defaultEnabled).toBe(false)
+    }
+    const after = await connection.handler!('advisor/get', { args: {} }, signal, connection.peer)
+    expect(after.ok).toBe(true)
+    if (after.ok) {
+      expect((after.value as { config: ResolvedAdvisorConfig }).config.defaultEnabled).toBe(false)
+    }
+  })
+
   it('the S1 containment fallback carries a raw-pinned proseFallback and omits it when the raw entry lacks it', async () => {
     // S1 mirrors the readable raw source's scalar latches (systemPrompt /
     // immuneTurns / maxDeltaMessages style) — the issue-#102 key rides the
@@ -673,6 +711,9 @@ describe('typertGateway endpoint claims + payload contract', () => {
       expect(config.disabledReason).toContain('unknown config key "bogus"')
       // Absent keys are omitted, never present-as-undefined (wire boundary).
       expect('proseFallback' in config).toBe(false)
+      // defaultEnabled is NOT one of those conditional keys: the fallback
+      // seeds it (schema default true) and the wire always includes it.
+      expect(config.defaultEnabled).toBe(true)
     }
   })
 
@@ -730,7 +771,7 @@ describe('typertGateway endpoint claims + payload contract', () => {
     })
   })
 
-  it('carries reasoningEffort on set and through a get round-trip (eighth key, T2)', async () => {
+  it('carries reasoningEffort on set and through a get round-trip (reasoningEffort key, T2)', async () => {
     const { connection } = await composeGatewayHarness()
     const signal = new AbortController().signal
 
@@ -754,7 +795,7 @@ describe('typertGateway endpoint claims + payload contract', () => {
     const { connection } = await composeGatewayHarness({ reasoningEffort: 'high' })
     const signal = new AbortController().signal
 
-    // The eighth key is persisted as the raw text the operator wrote; an empty
+    // The reasoningEffort key is persisted as the raw text the operator wrote; an empty
     // value means AUTOMATIC (config.ts RD-1), so the wire omits it rather than
     // carrying a present-as-empty key the renderer would print as a blank value.
     const cleared = await connection.handler!(
@@ -802,6 +843,7 @@ describe('composed plugin (apply wires the gateway)', () => {
       maxDeltaMessages: 60,
       proseFallback: false,
       nextPrompt: true,
+      defaultEnabled: true,
       disabledReason: expect.any(String),
     })
 
@@ -831,6 +873,7 @@ describe('composed plugin (apply wires the gateway)', () => {
       maxDeltaMessages: 60,
       proseFallback: false,
       nextPrompt: true,
+      defaultEnabled: true,
     })
   })
 

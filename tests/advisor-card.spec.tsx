@@ -10,7 +10,8 @@
  * above the card (the locale meta files), so the fields tile directly —
  * provider select, model select (ALWAYS rendered: the config-level `enabled`
  * switch is gone, the row toggle is the switch), system-prompt textarea
- * (placeholder = the built-in reviewer prompt), the proseFallback checkbox and
+ * (placeholder = the built-in reviewer prompt), the proseFallback /
+ * nextPrompt / defaultEnabled checkboxes and
  * the number inputs (immuneTurns / maxDeltaMessages) —
  * then the footer with the failed message + Discard/Save (upstream disabled
  * semantics: save = `!dirty || invalid || saving`, discard = `!dirty ||
@@ -470,6 +471,7 @@ describe('AdvisorCard flat layout (official settings-page language)', () => {
     expect(screen.getByLabelText(en.immuneTurns)).toBeTruthy()
     expect(screen.getByLabelText(en.maxDeltaMessages)).toBeTruthy()
     expect(screen.getByLabelText(en.proseFallback)).toBeTruthy()
+    expect(screen.getByLabelText(en.defaultEnabled)).toBeTruthy()
     // The 2026-10-18-removed budget field is gone from the card.
     expect(screen.queryByLabelText(/max tokens/i)).toBeNull()
     expect(screen.getByRole('button', { name: en.save })).toBeTruthy()
@@ -882,6 +884,30 @@ describe('AdvisorCard', () => {
     view.rerender(<AdvisorCard {...props} />)
     expect(controller.store.getSnapshot().draft.nextPrompt).toBe(true)
     expect((screen.getByLabelText(en.nextPrompt) as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('renders the defaultEnabled checkbox reflecting the resolved config (GitHub issue #124)', async () => {
+    // The resolver defaults defaultEnabled to true; the checkbox shows the
+    // effective value with its opt-in hint.
+    await mountCard({ config: { ...defaultConfig(), defaultEnabled: true } })
+    const toggle = screen.getByLabelText(en.defaultEnabled) as HTMLInputElement
+    expect(toggle.type).toBe('checkbox')
+    expect(toggle.checked).toBe(true)
+    expect(screen.getByText(en.defaultEnabledHint)).toBeTruthy()
+  })
+
+  it('reflects a stored false and toggles the defaultEnabled draft through the store', async () => {
+    // A gate-passing pair: the toggle's dirty term is the only Save blocker,
+    // so the upstream disabled semantics stay observable in isolation.
+    const { controller, props, view } = await mountCard({ config: { ...pairedConfig(), defaultEnabled: false } })
+    expect((screen.getByLabelText(en.defaultEnabled) as HTMLInputElement).checked).toBe(false)
+    // Toggling flips the draft boolean and stages a dirty draft — Save is
+    // enabled (upstream terms), and the checkbox re-renders the new value.
+    fireEvent.click(screen.getByLabelText(en.defaultEnabled))
+    view.rerender(<AdvisorCard {...props} />)
+    expect(controller.store.getSnapshot().draft.defaultEnabled).toBe(true)
+    expect((screen.getByLabelText(en.defaultEnabled) as HTMLInputElement).checked).toBe(true)
     expect((screen.getByRole('button', { name: en.save }) as HTMLButtonElement).disabled).toBe(false)
   })
 

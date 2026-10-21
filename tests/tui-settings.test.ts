@@ -9,15 +9,17 @@
  *    `ADVISOR_SETTINGS_NAMESPACE` ('advisor'); title + zh/en descriptions
  *    are non-empty strings; the disposer returned by the inject child is
  *    exactly the stub registry's `register` return value (no wrapping).
- * ② The section's fields: the five expected kinds in display order
+ * ② The section's fields: the expected kinds in display order
  *    (`provider`/`model` text, `immuneTurns`/`maxDeltaMessages`
- *    number, `proseFallback` boolean), each with a non-empty `path`, `label`,
+ *    number, `proseFallback`/`defaultEnabled` boolean, `reasoningEffort`
+ *    text), each with a non-empty `path`, `label`,
  *    and zh/en `hint`/`hintDescriptions`; `systemPrompt` is NOT among the
  *    field paths, and neither is the 2026-10-18-removed `maxTokens`.
  * ③ Field-path ↔ §5.1 schema alignment (regression pin): every field `path`
  *    is a single-element array whose key is a §5.1 `AdvisorConfig` key, and
  *    the exact allowed set is {provider, model, immuneTurns,
- *    maxDeltaMessages, proseFallback, reasoningEffort} — `systemPrompt` is
+ *    maxDeltaMessages, proseFallback, defaultEnabled, reasoningEffort} —
+ *    `systemPrompt` is
  *    intentionally absent (single-line TUI text input would truncate
  *    a multi-line prompt); `enabled` is gone with the config-level switch
  *    (2026-09-26) and `maxTokens` with the budget (2026-10-18).
@@ -76,6 +78,7 @@ const TUI_FIELD_KEYS: readonly (keyof AdvisorConfig)[] = [
   'immuneTurns',
   'maxDeltaMessages',
   'proseFallback',
+  'defaultEnabled',
   'reasoningEffort',
 ]
 
@@ -205,11 +208,11 @@ describe('section fields — §5.1 keys, display order, zh/en copy (AC-1)', () =
     return sections.sections[0]!
   }
 
-  it('declares the six fields with the expected kinds in display order', () => {
+  it('declares the seven fields with the expected kinds in display order', () => {
     const fields = registeredSection().fields
 
     expect(fields.map((field) => field.path)).toEqual(TUI_FIELD_KEYS.map((key) => [key]))
-    expect(fields.map((field) => field.kind)).toEqual(['text', 'text', 'number', 'number', 'boolean', 'text'])
+    expect(fields.map((field) => field.kind)).toEqual(['text', 'text', 'number', 'number', 'boolean', 'boolean', 'text'])
   })
 
   it('every field carries a non-empty path, label, and zh/en hint + hintDescriptions; systemPrompt is absent', () => {
@@ -234,7 +237,8 @@ describe('section fields — §5.1 keys, display order, zh/en copy (AC-1)', () =
       expect(TUI_FIELD_KEYS).toContain(path[0])
     }
     // No §5.1 config key is silently unreachable from the TUI section except
-    // systemPrompt — assert the exact allowed set.
+    // systemPrompt (single-line control) and the web-only nextPrompt switch —
+    // assert the exact allowed set.
     expect(new Set(keys.map(([key]) => key!))).toEqual(new Set(TUI_FIELD_KEYS))
   })
 
@@ -250,6 +254,18 @@ describe('section fields — §5.1 keys, display order, zh/en copy (AC-1)', () =
     expect(proseFallback?.hint).toMatch(/prose/i)
     expect(proseFallback?.descriptions?.zh).toBeTruthy()
     expect(proseFallback?.hintDescriptions?.zh).toBeTruthy()
+  })
+
+  it('declares the defaultEnabled field as a boolean with the opt-in prompt (GitHub issue #124)', () => {
+    const fields = registeredSection().fields
+    const defaultEnabled = fields.find((field) => field.path[0] === 'defaultEnabled')
+    expect(defaultEnabled?.kind).toBe('boolean')
+    expect(defaultEnabled?.label).toBe('Enabled by default')
+    expect(defaultEnabled?.path).toEqual(['defaultEnabled'])
+    expect(defaultEnabled?.hint).toMatch(/opt-in per session/i)
+    expect(defaultEnabled?.hint).toMatch(/\/advisor on/)
+    expect(defaultEnabled?.descriptions?.zh).toBe('默认启用')
+    expect(defaultEnabled?.hintDescriptions?.zh).toBeTruthy()
   })
 
   it('declares the thinking-effort field as free text with the automatic-default hint (AC-7)', () => {

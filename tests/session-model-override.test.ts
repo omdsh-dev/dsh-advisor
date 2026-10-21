@@ -438,6 +438,44 @@ describe('session model override — explicit gate applies AFTER session resolut
     expect(adapter.requests[0]).toMatchObject({ provider: 'stub', model: 'stub-model' })
   })
 
+  it('resetting a pin that closes the gate aborts the old runtime (GitHub issue #124 must-fix)', async () => {
+    const { ctx, adapter, entry, handler, agents } = await composeOverrideHarness(
+      {}, // pairless global: the session pin is what satisfies the gate
+      [textReply('pinned'), textReply('after repair')],
+    )
+    const { inject } = publishAgent(ctx, agents, 's1')
+    const { session, log } = makeSession('s1')
+
+    // Turn 1 holds a blocked call on the pinned route; turn 2 queues BEHIND it.
+    await invokeAdvisor(handler, ' model set stub stub-model', session)
+    adapter.blockNext()
+    feed(ctx, session, log, simpleTurn(1, 'u1', 'a1'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+    feed(ctx, session, log, simpleTurn(2, 'u2-backlog', 'a2'))
+    await flush()
+
+    // Reset drops the pin; the global stays pairless, so the gate closes. The
+    // old runtime must be disposed here — a route change that closes the gate
+    // still has to abort the in-flight call and drop the backlog (spec §5.3).
+    const resetResult = await invokeAdvisor(handler, ' model reset', session)
+    expect(textOf(resetResult)).toContain('pin removed')
+    adapter.release()
+    await flush()
+    // The late old-route call must never deliver, and the queued delta must
+    // never reach the adapter: a surviving runtime would produce both.
+    expect(inject).not.toHaveBeenCalled()
+    expect(adapter.requests).toHaveLength(1)
+
+    // Repairing the global pair serves the next delta on the NEW route. This
+    // step proves the route, not the reset-time dispose: `onChange` rebuilds a
+    // surviving runtime too when its signature changes, so the discriminating
+    // assertions are the two above.
+    entry.commit(ctx, { provider: 'other', model: 'other-model' })
+    feed(ctx, session, log, simpleTurn(3, 'u3', 'a3'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(2))
+    expect(adapter.requests[1]).toMatchObject({ provider: 'other', model: 'other-model' })
+  })
+
   it('a malformed global config cannot be bypassed — the pin records but the advisor stays blocked', async () => {
     const { ctx, adapter, entry, handler, agents } = await composeOverrideHarness(
       { provider: 'stub', model: 'stub-model' },

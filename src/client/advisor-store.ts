@@ -119,6 +119,12 @@ export interface AdvisorConfigView {
    * so a containment wire that omitted the key still reads the default.
    */
   nextPrompt?: boolean
+  /**
+   * Session default switch (GitHub issue #124): whether a session with no
+   * own enable override starts enabled. The resolver's default is true, so a
+   * containment wire that omitted the key still reads the default.
+   */
+  defaultEnabled?: boolean
   /** Present iff the advisor is disabled by the explicit model gate. */
   disabledReason?: string
 }
@@ -178,7 +184,7 @@ export type ModelsEmptyReason =
 
 /**
  * The user-layer draft the form edits
- * (provider/model/systemPrompt/immuneTurns/maxDeltaMessages/proseFallback/reasoningEffort).
+ * (provider/model/systemPrompt/immuneTurns/maxDeltaMessages/proseFallback/reasoningEffort/nextPrompt/defaultEnabled).
  */
 export interface AdvisorDraft {
   /** Provider route; required (non-empty). */
@@ -207,6 +213,12 @@ export interface AdvisorDraft {
    * schema default below).
    */
   nextPrompt?: boolean
+  /**
+   * Session default switch (GitHub issue #124); the resolver's default is
+   * true — the seed shows the effective value and never invents one the wire
+   * does not pin (an absent key reads the schema default below).
+   */
+  defaultEnabled?: boolean
 }
 
 /** Why an Apply failed (copy keys resolve in the card; raw text passes through). */
@@ -330,6 +342,10 @@ function draftOfConfig(config: AdvisorConfigView | undefined): AdvisorDraft {
     // — the seed shows the effective value, so a wire that omitted the key
     // still reads the default rather than inventing the opposite.
     nextPrompt: typeof config?.nextPrompt === 'boolean' ? config.nextPrompt : true,
+    // Session default switch (GitHub issue #124): the resolved contract types
+    // it as a plain boolean (schema default true), so an omitted-key
+    // containment wire still seeds the default — never the opt-in behavior.
+    defaultEnabled: typeof config?.defaultEnabled === 'boolean' ? config.defaultEnabled : true,
   }
 }
 
@@ -824,6 +840,11 @@ export class AdvisorSettingsStore {
     this.setField('nextPrompt', value)
   }
 
+  /** Set the session default switch (GitHub issue #124). */
+  setDefaultEnabled(value: boolean): void {
+    this.setField('defaultEnabled', value)
+  }
+
   /**
    * Refuse in a read-only environment (store-side defense-in-depth for the
    * W-1 invariant — a write must never be issued when the UI declares the
@@ -951,7 +972,7 @@ export class AdvisorSettingsStore {
    */
   private patchFor(draft: AdvisorDraft): Record<string, unknown> {
     const patch: Record<string, unknown> = {}
-    const always = ['systemPrompt', 'immuneTurns', 'maxDeltaMessages', 'proseFallback', 'nextPrompt'] as const
+    const always = ['systemPrompt', 'immuneTurns', 'maxDeltaMessages', 'proseFallback', 'nextPrompt', 'defaultEnabled'] as const
     for (const key of always) {
       const next = draft[key]
       // A cleared number input (undefined) means "leave the stored value

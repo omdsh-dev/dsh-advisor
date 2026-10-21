@@ -65,6 +65,7 @@ describe('plain-value entry (integration harness form, behavior identical to tod
       provider: 'deepseek',
       model: 'deepseek-chat',
       nextPrompt: true,
+      defaultEnabled: true,
       systemPrompt: '',
       immuneTurns: 5,
       maxDeltaMessages: 60,

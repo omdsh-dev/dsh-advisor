@@ -31,14 +31,15 @@
  * (`ctx.get('tuiSettingsSections') !== undefined`), so the hint names the TUI
  * `/settings` Advisor section as a write path exactly while the seam is
  * mounted; the readback itself stays session-less and read-only.
- * Settings (plan dsh-advisor-settings-n2): the plugin-row entry config's five
+ * Settings (plan dsh-advisor-settings-n2): the plugin-row entry config's nine
  * live fields are schema-volatile (`src/config.ts`), read live through the
  * bridge source (`src/settings.ts`); committed volatile edits (Loader
  * `loader/volatile-update`) re-apply derived state (immuneTurns /
  * maxDeltaMessages / per-session runtimes) without a restart. There is no
  * config-level `enabled` key (2026-09-26): the plugin-row enable/disable
- * toggle IS the master switch, and the per-session `/advisor` override
- * defaults to ON (`override ?? true`).
+ * toggle IS the master switch. The per-session `/advisor` override wins,
+ * otherwise the persisted `defaultEnabled` decides (schema default true;
+ * GitHub issue #124 — `override ?? config.defaultEnabled`).
  * Config gateway (plan dsh-advisor-settings-gateway-n5): `apply` also
  * registers the host-side `AdvisorConfigGateway` (`src/gateway.ts`) — the
  * `/api/advisor/get` + `/api/advisor/set` endpoints (explicit
@@ -173,7 +174,7 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // plugin row at load; the gate resolves to disabled-with-reason instead.
   //
   // T1-settings (plan dsh-advisor-settings-n2): the plugin-row entry config's
-  // five live fields are schema-volatile (0.1.7-rc.1). The runtime reads the
+  // nine live fields are schema-volatile (0.1.7-rc.1). The runtime reads the
   // LIVE values through the bridge source (per-field volatile reference
   // unwrap); the Loader commits edits into those references without a remount
   // and announces them via `loader/volatile-update`. The hard gate is applied
@@ -276,6 +277,10 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       // nextPrompt as a plain boolean — an absent raw key means the schema
       // default (true; enabled:false already blocks every prediction call).
       nextPrompt: raw?.nextPrompt ?? true,
+      // GitHub issue #124: the resolved contract types defaultEnabled as a
+      // plain boolean too — an unreadable/invalid entry keeps the schema
+      // default (true), so the fallback never invents the opt-in behavior.
+      defaultEnabled: raw?.defaultEnabled ?? true,
       disabledReason: reason,
     }
   }
@@ -286,11 +291,31 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       return safeFallback(error instanceof Error ? error.message : String(error))
     }
   }
+  /**
+   * One session-scoped resolution: the composed source with the session's
+   * COMPLETE model pair substituted (spec §5.3 — never a half-pair merge).
+   * Throws on an invalid shape; the safe wrappers contain it.
+   */
+  const resolveSessionConfig = (sessionId: string): ResolvedAdvisorConfig => {
+    const source = sourceConfig()
+    const pair = overrides.model(sessionId)
+    return resolveAdvisorConfig({
+      ...source,
+      ...(pair === undefined ? {} : { provider: pair.provider, model: pair.model }),
+    })
+  }
+  /**
+   * The effective on/off switch, as ONE AND: the post-gate enable AND the
+   * session resolution of `defaultEnabled` (GitHub issue #124): an explicit
+   * per-session override wins, otherwise the persisted default decides — the
+   * schema default `true` keeps every pre-#124 session byte-identical.
+   */
+  const effectiveSwitch = (sessionId: string, resolved: ResolvedAdvisorConfig): boolean =>
+    resolved.enabled && (overrides.enableOverride(sessionId) ?? resolved.defaultEnabled)
   // Spec §5.3 — the ONE effective resolver: (1) the global shape is validated
   // first (a malformed entry still throws → safeFallback: fail closed for
-  // every session); (2) enable = session enable override ?? true — a running
-  // row is enabled (no config-level switch since its 2026-09-26 removal), so
-  // only an explicit `/advisor off` override forces `enabled: false` on the
+  // every session); (2) enable = session enable override ?? the persisted
+  // `defaultEnabled` (issue #124; schema default true), ANDed with the
   // POST-gate resolution; (3) route = the session's COMPLETE modelOverride
   // pair ?? the composed global pair — the pair is atomic, so the levels are
   // never merged; (4) the explicit pair gate (§5.2) applies on the effective
@@ -298,21 +323,33 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // an invalid global schema can never be bypassed.
   const safeEffective = (sessionId: string): ResolvedAdvisorConfig => {
     try {
-      const source = sourceConfig()
-      const pair = overrides.model(sessionId)
-      const resolved = resolveAdvisorConfig({
-        ...source,
-        ...(pair === undefined ? {} : { provider: pair.provider, model: pair.model }),
-      })
-      // A session turned off by its own override carries NO gate reason: the
-      // S4 reason describes the persisted pair, which the off session isn't
-      // asking about (`/advisor status` shows "disabled" plainly; the global
-      // readback — safeResolved — keeps the reason). Destructure-strip so the
-      // off branch's contract is the absence of the key, not an
-      // undefined-valued one.
-      if (effectiveEnabled(sessionId)) return resolved
-      const { disabledReason: _unused, ...rest } = resolved
-      return { ...rest, enabled: false }
+      const resolved = resolveSessionConfig(sessionId)
+      if (effectiveSwitch(sessionId, resolved)) return resolved
+      // Not effectively on. Strip the gate reason, then re-add exactly the
+      // reason this arm owns:
+      // - an explicit `/advisor off` override → no reason (current behavior:
+      //   once the user turned the session off, a later global pair removal
+      //   must not start explaining a gate the session is not asking about —
+      //   `/advisor status` shows "disabled" plainly, while the global
+      //   readback — safeResolved — keeps the reason);
+      // - no own-off override + the gate failed → keep explaining the missing
+      //   model (current behavior: a missing model still explains itself);
+      // - `defaultEnabled: false` with no override (issue #124) → explain how
+      //   to opt in for this session.
+      const { disabledReason: gateReason, ...rest } = resolved
+      if (overrides.enableOverride(sessionId) === false) return { ...rest, enabled: false }
+      if (!resolved.enabled) {
+        return {
+          ...rest,
+          enabled: false,
+          ...(gateReason === undefined ? {} : { disabledReason: gateReason }),
+        }
+      }
+      return {
+        ...rest,
+        enabled: false,
+        disabledReason: 'disabled by default — enable it for this session with /advisor on',
+      }
     } catch (error) {
       return safeFallback(error instanceof Error ? error.message : String(error))
     }
@@ -323,17 +360,30 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   })
 
   // T7: the per-session override mechanism — `/advisor on|off|toggle` write
-  // here and the runtime gate consults `override ?? true` (a running row is
-  // enabled; no config-level switch since its 2026-09-26 removal), so the
-  // commands start/stop per-session runtimes WITHOUT touching the persisted
-  // config (spec §4 mapping — omp `/advisor` semantics). Ephemeral: entries
-  // are cleared on `agent/disposed` / `session/disposed` below. A session
-  // enabled without a usable pair re-derives the disabled-with-reason through
-  // the resolver, so `/advisor status` shows the reason (spec §5.2; qc3 I-1)
-  // — the gate itself still blocks every runtime (the resolver is the SSOT
-  // for the gate).
+  // here and the runtime gate consults `override ?? config.defaultEnabled`
+  // (GitHub issue #124; the schema default true means a running row is on, so
+  // the default behavior is unchanged), so the commands start/stop
+  // per-session runtimes WITHOUT touching the persisted config (spec §4
+  // mapping — omp `/advisor` semantics). Ephemeral: entries are cleared on
+  // `agent/disposed` / `session/disposed` below. A session enabled without a
+  // usable pair re-derives the disabled-with-reason through the resolver, so
+  // `/advisor status` shows the reason (spec §5.2; qc3 I-1) — the gate itself
+  // still blocks every runtime (the resolver is the SSOT for the gate).
   const overrides = new AdvisorSessionOverrides()
-  const effectiveEnabled = (sessionId: string): boolean => overrides.effective(sessionId)
+  /**
+   * The effective on/off switch for one session. Applies the SAME AND as
+   * `safeEffective` on one session-scoped resolution — the session's complete
+   * pin can satisfy the pair gate when the global default is pairless (spec
+   * §5.3), so this deliberately does NOT read the global `safeResolved()`.
+   * Contained like every other live read: an invalid entry fails closed.
+   */
+  const effectiveEnabled = (sessionId: string): boolean => {
+    try {
+      return effectiveSwitch(sessionId, resolveSessionConfig(sessionId))
+    } catch {
+      return false
+    }
+  }
   // Live-path alias: every consumer reads the effective config through the
   // safe wrapper (qc2 W-1 — a throwing resolver must not break the
   // session/event handler or `/advisor status`).
@@ -417,6 +467,9 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       // rebuild review runtimes. The prediction gate reads it live on every
       // arm/fire, and it touches no review-call construction constant. It is
       // likewise NOT in LEGACY_KEYS (a new key, no stored-profile history).
+      // `defaultEnabled` is ABSENT for the same reason (GitHub issue #124):
+      // it is not a runtime construction constant — the bridge's onChange
+      // reconciles the effective switch (dispose when it turns off).
     ].join('\u0000')
   }
   /**
@@ -489,7 +542,15 @@ export function apply(ctx: Context, config: AdvisorConfig) {
    *   changed (the caller mutates `overrides` between the capture and here).
    */
   const applyRouteChange = (sessionId: string, before: ResolvedAdvisorConfig, sessionLength?: number): void => {
-    if (!effectiveEnabled(sessionId)) return
+    // A route change can CLOSE the pair gate (e.g. `/advisor model reset` on a
+    // session pinned to a valid pair while the global pair is missing): the
+    // old runtime must still be aborted and its backlog dropped — returning
+    // early here would leave it reviewing a route the switch already reports
+    // as off (GitHub issue #124 review, must-fix).
+    if (!effectiveEnabled(sessionId)) {
+      disposeRuntime(sessionId)
+      return
+    }
     const after = effectiveConfig(sessionId)
     if (after.provider === before.provider && after.model === before.model) return
     if (sessionLength !== undefined) observer.seedTo(sessionId, sessionLength)
@@ -643,7 +704,9 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // start a gated model call (SSOT unchanged). An entry config the resolver
   // rejects (qc2 W-1 — unknown key) stops the advisor without wedging the
   // re-apply path, and the last-good latches stay until the config is
-  // repaired.
+  // repaired. `defaultEnabled` (GitHub issue #124) is not a construction
+  // constant: the candidate loop below disposes runtimes that became
+  // effectively off and leaves the signature compare to rebuild the rest.
   bridge.onChange(() => {
     let next: ResolvedAdvisorConfig
     try {
@@ -667,6 +730,18 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     const candidates = new Set([...runtimes.keys(), ...overrides.overrideSessionIds()])
     let rebuilt = 0
     for (const sessionId of candidates) {
+      // GitHub issue #124: a live flip to `defaultEnabled: false` (or a
+      // closed gate / an explicit off override) stops already-running
+      // sessions here — the runtime is disposed before the signature compare,
+      // so a running advisor cannot keep reviewing while effectively off.
+      // A later flip back to true reaches sessions that still hold an
+      // override/runtime through this loop; a session with NO runtime and NO
+      // override is not a candidate and starts on its next event
+      // (`ensureRuntime` on `agent/created` / the next delta).
+      if (!effectiveEnabled(sessionId)) {
+        disposeRuntime(sessionId)
+        continue
+      }
       if (runtimeSignatures.get(sessionId) === runtimeSignature(sessionId)) continue
       disposeRuntime(sessionId)
       ensureRuntime(sessionId)
@@ -728,18 +803,27 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       // must restart a session advisor that is `quota_exhausted` (KD-5 —
       // manual resume, no auto-resume timer) or `halted` (permanent model
       // error — terminal in place, rebuilt fresh here) (qc1/qc2/qc3 W-1/I-4).
-      // The override is written only when the effective switch actually
-      // changes; enabling an already-effectively-enabled session still routes
-      // through the recovery path below instead of early-returning.
-      const already = effectiveEnabled(sessionId) === enabled
-      if (!already) overrides.set(sessionId, enabled)
+      // An explicit `/advisor on|off` ALWAYS records the session's choice —
+      // even when the effective switch already matches — so a later
+      // `defaultEnabled` flip cannot silently override an explicit decision
+      // (GitHub issue #124 review, should-fix). The runtime decision below is
+      // separate: stop on off, start/recover on on.
+      const wasOn = effectiveEnabled(sessionId)
+      overrides.set(sessionId, enabled)
       if (!enabled) {
-        if (!already) disposeRuntime(sessionId)
+        disposeRuntime(sessionId)
         return
       }
-      // enabled (newly or already): KD-5 seed — no full-history replay of
-      // deltas that predate (or occurred while paused/halted under) the enable.
-      if (sessionLength !== undefined) observer.seedTo(sessionId, sessionLength)
+      // KD-5 seed — skip the pre-enable history, so an off→on transition (or a
+      // halted/quota recovery) does not replay prior deltas. An IDEMPOTENT
+      // `/advisor on` must NOT re-seed: `seedTo` resets the session renderer
+      // (cursor + fold state), which would drop the context the next delta is
+      // built from. `!wasOn` is the actual off→on transition; `recovering`
+      // keeps the KD-5 seed for the halted/quota restart path.
+      const current = runtimes.get(sessionId)
+      const recovering = current !== undefined
+        && (current.status() === 'halted' || current.status() === 'quota_exhausted')
+      if ((!wasOn || recovering) && sessionLength !== undefined) observer.seedTo(sessionId, sessionLength)
       const runtime = ensureRuntime(sessionId)
       if (runtime === undefined) return // S4 explicit gate blocks model calls
       if (runtime.status() === 'halted') {
@@ -874,8 +958,12 @@ export function apply(ctx: Context, config: AdvisorConfig) {
         // absent key). No maxTokens line anymore (2026-10-18 ruling — the key
         // is dropped by the resolver, never reaches the resolved contract).
         ...(resolved.proseFallback === undefined ? {} : { proseFallback: resolved.proseFallback }),
-        // T2 (plan dsh-advisor-reasoning-effort): the seventh key rides the same
-        // resolved source. An absent/empty value means AUTOMATIC (the runtime
+        // GitHub issue #124: the session default switch rides the same
+        // resolved source and is ALWAYS present (the resolved contract types
+        // it as a plain boolean; safeFallback seeds the schema default).
+        defaultEnabled: resolved.defaultEnabled,
+        // T2 (plan dsh-advisor-reasoning-effort): the reasoningEffort key rides
+        // the same resolved source. An absent/empty value means AUTOMATIC (the runtime
         // sends the smallest declared effort) — conditional spread keeps
         // absent-never-undefined, so the renderer prints no line for it.
         ...(resolved.reasoningEffort === undefined ? {} : { reasoningEffort: resolved.reasoningEffort }),

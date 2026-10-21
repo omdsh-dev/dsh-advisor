@@ -86,6 +86,7 @@ function baseConfig(overrides: Partial<AdvisorComposedConfig> = {}): AdvisorComp
     enabled: false,
     immuneTurns: 3,
     maxDeltaMessages: 60,
+    defaultEnabled: true,
     systemPromptSet: false,
     systemPromptSummary: '',
     tuiSettingsAvailable: false,
@@ -228,24 +229,26 @@ describe('parseAdvisorCommand (parse of the text after /advisor)', () => {
 // AdvisorSessionOverrides — the override mechanism
 // ---------------------------------------------------------------------------
 
-describe('AdvisorSessionOverrides (per-session override ?? the running-row default on)', () => {
-  it('defaults to ON when no override is set (a running row is enabled — no config switch since 2026-09-26)', () => {
-    expect(new AdvisorSessionOverrides().effective('s1')).toBe(true)
+describe('AdvisorSessionOverrides (raw per-session enable override)', () => {
+  it('returns undefined when no override is set (the config default applies — defaultEnabled, issue #124)', () => {
+    expect(new AdvisorSessionOverrides().enableOverride('s1')).toBeUndefined()
   })
 
-  it('an override flips the effective switch for that session only', () => {
+  it('an override is exposed raw for that session only', () => {
     const overrides = new AdvisorSessionOverrides()
     overrides.set('s1', false)
-    expect(overrides.effective('s1')).toBe(false)
-    expect(overrides.effective('s2')).toBe(true) // other sessions keep the default
+    expect(overrides.enableOverride('s1')).toBe(false)
+    expect(overrides.enableOverride('s2')).toBeUndefined() // other sessions keep inheriting the default
+    overrides.set('s2', true)
+    expect(overrides.enableOverride('s2')).toBe(true) // explicit on is distinguishable from no override
   })
 
-  it('clear removes the override, falling back to the running-row default (on)', () => {
+  it('clear removes the override, falling back to undefined (inherit the config default)', () => {
     const overrides = new AdvisorSessionOverrides()
     overrides.set('s1', false)
-    expect(overrides.effective('s1')).toBe(false)
+    expect(overrides.enableOverride('s1')).toBe(false)
     overrides.clear('s1')
-    expect(overrides.effective('s1')).toBe(true)
+    expect(overrides.enableOverride('s1')).toBeUndefined()
   })
 })
 
@@ -340,17 +343,20 @@ describe('/advisor handler — toggle / on / off flip the runtime gate', () => {
     expect(controller.setCalls.at(-1)?.sessionLength).toBe(0) // fake agent has 0 events
   })
 
-  it('on is idempotent when already on; off when already off', () => {
+  it('on is idempotent when already on; off when already off — but both record the explicit choice', () => {
+    // GitHub issue #124 review: the reply still says "already on/off", but the
+    // controller is called either way so the session's explicit choice lands
+    // as an override (`override ?? defaultEnabled` makes "effectively on" and
+    // "explicitly chosen on" different states).
     const controller = new FakeController(baseStatus({ enabled: true }))
     const handler = registerAndGetHandler(controller)
     const onResult = invoke(handler, ' on')
     expect(onResult.text).toContain('already on')
+
     const offController = new FakeController(baseStatus({ enabled: false }))
     const offHandler = registerAndGetHandler(offController)
     const offResult = invoke(offHandler, ' off')
     expect(offResult.text).toContain('already off')
-    expect(controller.setCalls).toHaveLength(0)
-    expect(offController.setCalls).toHaveLength(0)
   })
 
   it('on with a config lacking provider/model reports the S4 gate reason', () => {
@@ -582,6 +588,22 @@ describe('advisorConfigText (the /advisor config surface, composed session-less 
     // carried one before the removal.
     expect(text).not.toContain('maxTokens')
     expect(off).not.toContain('maxTokens')
+  })
+
+  it('renders the defaultEnabled switch always, between proseFallback and reasoningEffort (GitHub issue #124)', () => {
+    const on = advisorConfigText(baseConfig({ enabled: true, defaultEnabled: true }))
+    expect(on).toContain('defaultEnabled: on')
+    const off = advisorConfigText(baseConfig({
+      enabled: true,
+      proseFallback: true,
+      defaultEnabled: false,
+      reasoningEffort: 'high',
+    }))
+    expect(off).toContain('defaultEnabled: off')
+    // The new key follows proseFallback and precedes the optional
+    // reasoningEffort line (the renderer's stable field order).
+    expect(off.indexOf('defaultEnabled: off')).toBeGreaterThan(off.indexOf('proseFallback: on'))
+    expect(off.indexOf('defaultEnabled: off')).toBeLessThan(off.indexOf('reasoningEffort: high'))
   })
 
   it('omits the issue-#102 lines when the composed config does not carry them (absent is never rendered as a value)', () => {
@@ -870,7 +892,7 @@ describe('apply wiring — /advisor config tuiSettingsAvailable reflects the tui
   })
 
   it('renders the persisted reasoningEffort through the real apply wiring (getConfig reads the resolved config)', () => {
-    // The eighth key rides the SAME resolved-config read the web card serves:
+    // The reasoningEffort key rides the SAME resolved-config read the web card serves:
     // a persisted `reasoningEffort` must reach the `/advisor config` readback
     // without a second state store.
     const registry = new FakeRegistry()
@@ -980,9 +1002,9 @@ describe('AdvisorSessionOverrides — model pair API (spec §5.3)', () => {
     overrides.setModel('s1', { provider: 'p', model: 'm' })
     overrides.beginModelGeneration('s1')
     overrides.clear('s1')
-    // The enable override is wiped with the rest: the effective switch falls
-    // back to the running-row default (on).
-    expect(overrides.effective('s1')).toBe(true)
+    // The enable override is wiped with the rest: the session inherits the
+    // config default again (no override).
+    expect(overrides.enableOverride('s1')).toBeUndefined()
     expect(overrides.model('s1')).toBeUndefined()
     expect(overrides.modelGeneration('s1')).toBe(0)
   })
@@ -994,7 +1016,7 @@ describe('AdvisorSessionOverrides — model pair API (spec §5.3)', () => {
     overrides.beginModelGeneration('s1')
     overrides.beginModelGeneration('s2')
     overrides.disposeAll()
-    expect(overrides.effective('s1')).toBe(true)
+    expect(overrides.enableOverride('s1')).toBeUndefined()
     expect(overrides.model('s1')).toBeUndefined()
     expect(overrides.modelGeneration('s1')).toBe(0)
     expect(overrides.modelGeneration('s2')).toBe(0)

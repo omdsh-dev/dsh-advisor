@@ -621,8 +621,8 @@ export class AdvisorConfigGateway extends TypertRemoteService {
    * RPC on a bad config, and gate semantics hold (no model call can start).
    * S1: when the raw source is still readable, the fallback seeds its scalar
    * latches (systemPrompt / immuneTurns / maxDeltaMessages /
-   * proseFallback / reasoningEffort) instead of hardcoded defaults, so an
-   * invalid config only drops the offending keys.
+   * proseFallback / reasoningEffort / nextPrompt / defaultEnabled) instead of
+   * hardcoded defaults, so an invalid config only drops the offending keys.
    */
   private readConfig(): ResolvedAdvisorConfig {
     let config: ResolvedAdvisorConfig
@@ -649,21 +649,25 @@ export class AdvisorConfigGateway extends TypertRemoteService {
         // nextPrompt as a plain boolean — an absent raw key means the schema
         // default (true; enabled:false already blocks every prediction call).
         nextPrompt: raw?.nextPrompt ?? true,
+        // GitHub issue #124: same containment rule for the session default —
+        // an absent raw key keeps the schema default (true), so the S1
+        // fallback never invents the opt-in behavior.
+        defaultEnabled: raw?.defaultEnabled ?? true,
         disabledReason: error instanceof Error ? error.message : String(error),
       }
     }
     // typertGateway wire boundary: absent keys are omitted, never
     // present-as-undefined (the result validator rejects undefined values).
     // Key census (qc1 W-1, issue #102; T2 plan dsh-advisor-reasoning-effort;
-    // T1 plan dsh-advisor-next-prompt-n12): SEVEN persisted keys
-    // (systemPrompt/immuneTurns/maxDeltaMessages/proseFallback/
-    // reasoningEffort/provider/model) — proseFallback/reasoningEffort ride
-    // the same resolved source, present whenever the resolver defined them
-    // (the schema default fills false on the normal path), omitted only when
-    // the raw entry lacks them and the S1 fallback cannot seed them — plus
-    // THREE non-persisted live fields: `enabled`/`disabledReason` (the gate
-    // state, never stored) and `nextPrompt` (derived, see below). No
-    // maxTokens key since the 2026-10-18 ruling (budget removed).
+    // T1 plan dsh-advisor-next-prompt-n12; GitHub issue #124): NINE persisted
+    // keys — the live `CONFIG_KEYS` set in src/config.ts: systemPrompt,
+    // immuneTurns, maxDeltaMessages, proseFallback, reasoningEffort, provider,
+    // model, nextPrompt, defaultEnabled. The scalar pair (provider/model) and
+    // reasoningEffort are omitted while unset; the schema-defaulted booleans
+    // (proseFallback, nextPrompt, defaultEnabled) ride every resolved get.
+    // Plus TWO non-persisted live fields: `enabled`/`disabledReason` (the gate
+    // state, never stored). No maxTokens key since the 2026-10-18 ruling
+    // (budget removed).
     const wire: Record<string, unknown> = {
       enabled: config.enabled,
       systemPrompt: config.systemPrompt,
@@ -672,10 +676,14 @@ export class AdvisorConfigGateway extends TypertRemoteService {
     }
     if (config.proseFallback !== undefined) wire.proseFallback = config.proseFallback
     if (config.reasoningEffort !== undefined) wire.reasoningEffort = config.reasoningEffort
-    // T1 (plan dsh-advisor-next-prompt-n12): a derived switch, not a persisted
-    // key — the resolver normalizes nextPrompt to a plain boolean (the schema
-    // default fills true), so it rides every resolved get without a gate.
+    // T1 (plan dsh-advisor-next-prompt-n12): a persisted key whose resolver
+    // normalizes it to a plain boolean (the schema default fills true), so it
+    // rides every resolved get without a gate.
     wire.nextPrompt = config.nextPrompt
+    // GitHub issue #124: always included, like nextPrompt — the resolved
+    // contract always carries the plain boolean (schema default true; the S1
+    // fallback seeds the raw/default value).
+    wire.defaultEnabled = config.defaultEnabled
     if (config.provider !== undefined) wire.provider = config.provider
     if (config.model !== undefined) wire.model = config.model
     if (config.disabledReason !== undefined) wire.disabledReason = config.disabledReason

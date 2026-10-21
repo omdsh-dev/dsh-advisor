@@ -35,8 +35,9 @@
  * silently (documented fallback: remap to a select(on/off) two-option field).
  *
  * Field subset (2026-09-26; extended 2026-09-29, issue #102; `maxTokens`
- * removed 2026-10-18): the section covers the six §5.1 keys (`provider` /
- * `model` / `immuneTurns` / `maxDeltaMessages` / `proseFallback` /
+ * removed 2026-10-18; `defaultEnabled` added 2026-10-21, issue #124): the
+ * section covers the seven §5.1 keys (`provider` / `model` / `immuneTurns` /
+ * `maxDeltaMessages` / `proseFallback` / `defaultEnabled` /
  * `reasoningEffort`). `enabled` is
  * gone with the config-level switch it edited (the plugin-row toggle is the
  * master switch), and `systemPrompt` is intentionally NOT a field — the TUI
@@ -136,10 +137,10 @@ export const TUI_SETTINGS_SECTIONS = 'tuiSettingsSections'
 export const ADVISOR_TUI_SETTINGS_NS = 'advisor'
 
 /** The declared "Advisor" section for the dsh-tui `/settings` screen: the
- * six §5.1 keys (provider/model/immuneTurns/maxDeltaMessages/
- * proseFallback/reasoningEffort) with zh/en labels + hints. Field paths are
- * single-element §5.1 flat keys, so staged edits map 1:1 onto the namespace
- * `mutate` paths. */
+ * seven §5.1 keys (provider/model/immuneTurns/maxDeltaMessages/
+ * proseFallback/defaultEnabled/reasoningEffort) with zh/en labels + hints.
+ * Field paths are single-element §5.1 flat keys, so staged edits map 1:1 onto
+ * the namespace `mutate` paths. */
 export const ADVISOR_TUI_SETTINGS_SECTION: TuiSettingsSection = {
   ns: ADVISOR_SETTINGS_NAMESPACE,
   title: 'Advisor',
@@ -194,6 +195,21 @@ export const ADVISOR_TUI_SETTINGS_SECTION: TuiSettingsSection = {
       hintDescriptions: {
         zh: '未找到 JSON 帧时，将散文回复作为低严重级建议投递（默认关闭）。',
         en: 'When no JSON frame is found, deliver the prose reply as a low-severity note (off by default).',
+      },
+    },
+    {
+      // GitHub issue #124: the session default switch — native boolean kind,
+      // same control as proseFallback. Off makes a session with no own
+      // override opt-in via `/advisor on`; the persisted value stays the
+      // global default.
+      path: ['defaultEnabled'],
+      kind: 'boolean',
+      label: 'Enabled by default',
+      descriptions: { zh: '默认启用', en: 'Enabled by default' },
+      hint: 'New sessions start enabled; off = opt-in per session (enable with /advisor on).',
+      hintDescriptions: {
+        zh: '新会话默认开启；关闭后改为按会话手动启用（用 /advisor on）。',
+        en: 'New sessions start enabled; off = opt-in per session (enable with /advisor on).',
       },
     },
     {
