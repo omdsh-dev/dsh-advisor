@@ -15,8 +15,10 @@
  *   `severity` defaults to `nit`; no frame → drop+log, no model retry.
  * - Failure policy (KD-5): transient → 1 retry with a short backoff → drop;
  *   3 consecutive dropped deltas → flush the pending backlog; permanent errors
- *   (`invalid_request_error`, model-not-found, "is not supported when") → halt
- *   with status; quota/rate-limit → pause (`quota_exhausted`), batch retained,
+ *   (`invalid_request_error`, model-not-found, "is not supported when", a
+ *   listed model this build cannot serve — `MODEL_UNSUPPORTED` /
+ *   `CLIENT_UPGRADE_REQUIRED`) → halt with status; quota/rate-limit → pause
+ *   (`quota_exhausted`), batch retained,
  *   no auto-resume timer; in-flight call aborted on dispose via the signal;
  *   never park the primary.
  * - Bounded backlog (spec §6): `maxQueued` (default 32) bounds the waiting
@@ -223,6 +225,18 @@ const quotaFailure = (): LlmFailure => ({
 const permanentFailure = (): LlmFailure => ({
   message: "the model 'gpt-5' is not supported when using Codex with a ChatGPT account (invalid_request_error)",
   code: 'INVALID_REQUEST',
+})
+/**
+ * dsh model-listing refusal (`@deepseek-ai/dsh-llm-deepseek`): a listed model
+ * this build cannot serve, refused before network I/O. The account route has
+ * thrown these since rc.2; rc.3's API-key route follows the official listing
+ * too, which makes them reachable on the default provider.
+ */
+const refusalFailure = (code: 'MODEL_UNSUPPORTED' | 'CLIENT_UPGRADE_REQUIRED'): LlmFailure => ({
+  message: code === 'MODEL_UNSUPPORTED'
+    ? 'DeepSeek model "deepseek-v5" is not supported by DeepSeek Harness; current version is 0.2.1-rc.3'
+    : 'DeepSeek model "deepseek-v5-next" requires DeepSeek Harness 99.0.0-alpha.1 or later; current version is 0.2.1-rc.3',
+  code,
 })
 
 function makeRuntime(llm: AdvisorLlm, overrides: Partial<AdvisorRuntimeOptions> = {}): {
@@ -1124,6 +1138,20 @@ describe('AdvisorRuntime — failure policy (KD-5)', () => {
     expect(llm.calls).toHaveLength(1) // halted: never called again
     expect(runtime.pendingCount).toBe(0)
   })
+
+  it.each(['MODEL_UNSUPPORTED', 'CLIENT_UPGRADE_REQUIRED'] as const)(
+    'halts on the model-listing refusal %s instead of retrying it as transient',
+    async (code) => {
+      const llm = new FakeLlm([{ chunks: errorReply(refusalFailure(code)) }])
+      const { runtime, notes } = makeRuntime(llm)
+
+      runtime.enqueue(delta('first'))
+      await runtime.waitForDrain()
+      expect(runtime.status()).toBe('halted')
+      expect(notes).toEqual([])
+      expect(llm.calls).toHaveLength(1) // a refusal is not retryable
+    },
+  )
 })
 
 // ---------------------------------------------------------------------------
