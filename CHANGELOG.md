@@ -2,6 +2,12 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.6.3] - 2026-10-24
+
+- 389166f fix(advisor): halt on dsh model-listing refusals instead of retrying them (#131)
+- 6697b13 chore(deps): 升级 dsh peers 到 0.2.1-rc.3 / upgrade dsh peers to 0.2.1-rc.3 (#129)
+- 324fe8b fix(deps): bump vitest to 4.1.12 for the @vitest/mocker advisories (#130)
+
 ## [0.6.2] - 2026-10-21
 
 - 13f12bb fix(deps): bump vite to 8.3.4 for dependabot advisories (#127)
