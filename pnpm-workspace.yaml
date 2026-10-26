@@ -7,6 +7,16 @@ nodeLinker: hoisted
 allowBuilds:
   esbuild: true
 
+# Dependabot alerts 10-14: the @deepseek-ai peers still pin the vulnerable
+# zod 4.4.3 exactly and pull fast-uri 3.1.8 through ajv, and no upstream
+# release moves them yet. These overrides stay workspace-only metadata (never
+# shipped) and drop out once a peer release bumps the pins.
+# shortcut: peers ship an untested zod/fast-uri pair here — recheck on the next
+# dsh peer bump.
+overrides:
+  fast-uri: ^3.1.9
+  zod: ^4.6.6
+
 # Standing exemption for first-party @deepseek-ai packages so the
 # minimumReleaseAge policy never blocks our own fresh rc releases. pnpm 11
 # defaults the window to 1440 minutes, so any lockfile entry that resolves a
