@@ -2,6 +2,12 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.6.4] - 2026-10-26
+
+- 94782bf fix(deps): pin fast-uri and zod past the dependabot advisories (#136)
+- f027aea feat(locale): append (dsh-advisor) to the plugin meta title (#135)
+- 6639c09 chore(deps): bump undici from 7.30.0 to 7.30.1 (#134)
+
 ## [0.6.3] - 2026-10-24
 
 - 389166f fix(advisor): halt on dsh model-listing refusals instead of retrying them (#131)
