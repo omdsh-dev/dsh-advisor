@@ -48,7 +48,7 @@ describe('registry peer contract (dsh line from npm, no link farm)', () => {
   })
 
   it('uses the scoped schemastery peer supplied by the dsh line', () => {
-    // ^3.18.5 tracks what the 0.2.1-rc.3 dsh line supplies (`~3.18.5` in
+    // ^3.18.5 tracks what the 0.2.1-rc.4 dsh line supplies (`~3.18.5` in
     // dsh-api-gateway); 3.18.4 is the floor the volatile live fields need
     // (`.volatile()` — Schema meta `volatile` + resolve-to-reference — landed
     // there).
