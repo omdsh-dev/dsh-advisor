@@ -2,6 +2,10 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.6.5] - 2026-10-28
+
+- b355049 chore(deps): 升级 dsh peers 到 0.2.1-rc.4 / upgrade dsh peers to 0.2.1-rc.4 (#138)
+
 ## [0.6.4] - 2026-10-26
 
 - 94782bf fix(deps): pin fast-uri and zod past the dependabot advisories (#136)
