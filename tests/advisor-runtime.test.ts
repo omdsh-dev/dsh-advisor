@@ -234,8 +234,8 @@ const permanentFailure = (): LlmFailure => ({
  */
 const refusalFailure = (code: 'MODEL_UNSUPPORTED' | 'CLIENT_UPGRADE_REQUIRED'): LlmFailure => ({
   message: code === 'MODEL_UNSUPPORTED'
-    ? 'DeepSeek model "deepseek-v5" is not supported by DeepSeek Harness; current version is 0.2.1-rc.3'
-    : 'DeepSeek model "deepseek-v5-next" requires DeepSeek Harness 99.0.0-alpha.1 or later; current version is 0.2.1-rc.3',
+    ? 'DeepSeek model "deepseek-v5" is not supported by DeepSeek Harness; current version is 0.2.1-rc.4'
+    : 'DeepSeek model "deepseek-v5-next" requires DeepSeek Harness 99.0.0-alpha.1 or later; current version is 0.2.1-rc.4',
   code,
 })
 
