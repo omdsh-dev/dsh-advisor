@@ -973,6 +973,15 @@ describe('parseModelSetArgs (one-token grammar, spec §5.3 / GitHub issue #142)'
     expect(parseModelSetArgs('p/')).toMatchObject({ ok: false, reason: expect.stringContaining('model') })
   })
 
+  it('the plain pair-shape rejections carry no colon-ambiguity hint', () => {
+    // The remedy belongs to the controller's undeclared-effort rejection, never
+    // to a malformed-pair message (QC2 F-001).
+    for (const raw of ['', 'p', '/m', 'p/', 'p/m:']) {
+      const parsed = parseModelSetArgs(raw)
+      expect(parsed.ok ? '' : parsed.reason).not.toContain('model id containing')
+    }
+  })
+
   it('the retired two-argument form is rejected with a usage message naming the new form', () => {
     const parsed = parseModelSetArgs('p m')
     expect(parsed).toMatchObject({ ok: false })

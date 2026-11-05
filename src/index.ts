@@ -964,9 +964,12 @@ export function apply(ctx: Context, config: AdvisorConfig) {
           }
         }
         if (!declaredEfforts.includes(reasoningEffort)) {
+          // The parser cannot tell a model id ending in ":" from an effort
+          // suffix, so this branch names the remedy: re-pin with an explicit
+          // declared effort (QC2 F-001).
           return {
             kind: 'rejected',
-            reason: `"${reasoningEffort}" is not declared by ${provider}/${model} (declared: ${declaredEfforts.join(', ')})`,
+            reason: `"${reasoningEffort}" is not declared by ${provider}/${model} (declared: ${declaredEfforts.join(', ')}) — a model id containing ":" needs an explicit effort suffix, e.g. ${provider}/${model}:${reasoningEffort}:${declaredEfforts[0]}`,
           }
         }
       }

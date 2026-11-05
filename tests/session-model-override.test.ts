@@ -881,10 +881,14 @@ describe('session model override — reasoning effort pin (GitHub issue #142)', 
     await invokeAdvisor(handler, ' model set other/other-model', session)
     const rejected = textOf(await invokeAdvisor(handler, ' model set stub/stub-model:medium', session))
     expect(rejected).toContain('Not set:')
-    // The rejection names the declared ids so the operator can retry.
+    // The rejection names the declared ids so the operator can retry, and it
+    // names the colon remedy for a model id whose own ":" was parsed as an
+    // effort suffix (QC2 F-001).
     expect(rejected).toContain('not declared')
     expect(rejected).toContain('off')
     expect(rejected).toContain('high')
+    expect(rejected).toContain('a model id containing ":" needs an explicit effort suffix')
+    expect(rejected).toContain('stub/stub-model:medium:off')
 
     // The previous selection stayed in place — route AND (absent) effort.
     const status = textOf(await invokeAdvisor(handler, ' status', session))
@@ -893,6 +897,25 @@ describe('session model override — reasoning effort pin (GitHub issue #142)', 
     await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
     expect(adapter.requests[0]).toMatchObject({ provider: 'other', model: 'other-model' })
     expect(adapter.requests[0]!.reasoningEffort).toBe(ReasoningEffortId('off'))
+  })
+
+  it('a model id ending in ":" gets the colon remedy in the undeclared-effort rejection (QC2 F-001)', async () => {
+    const { ctx, handler, agents } = await composeOverrideHarness(
+      { provider: 'stub', model: 'stub-model' },
+      [],
+    )
+    publishAgent(ctx, agents, 's1')
+    const { session } = makeSession('s1')
+
+    // `other/other-model:4o` parses as model `other-model` + effort `4o`; the
+    // gate rejects that undeclared suffix and must name the way to pin the
+    // model id the operator meant.
+    const rejected = textOf(await invokeAdvisor(handler, ' model set other/other-model:4o', session))
+    expect(rejected).toContain('a model id containing ":" needs an explicit effort suffix')
+    expect(rejected).toContain('other/other-model:4o:off')
+    // Nothing was committed.
+    expect(textOf(await invokeAdvisor(handler, ' status', session)))
+      .toContain('Model: stub/stub-model (global default)')
   })
 
   it('a model that declares no reasoning efforts rejects any explicit effort (AC4)', async () => {
@@ -907,6 +930,8 @@ describe('session model override — reasoning effort pin (GitHub issue #142)', 
     const rejected = textOf(await invokeAdvisor(handler, ' model set plain/plain-model:high', session))
     expect(rejected).toContain('Not set:')
     expect(rejected).toContain('declares no reasoning efforts')
+    // The colon hint belongs to the undeclared-EFFORT branch only.
+    expect(rejected).not.toContain('model id containing')
     const status = textOf(await invokeAdvisor(handler, ' status', session))
     expect(status).toContain('Model: stub/stub-model (global default)')
   })
