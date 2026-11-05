@@ -147,9 +147,14 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
       })
     }
     update()
+    // Async snapshot/directory loads grow the panel's height while `open`
+    // stays true; re-clamp whenever the measured size actually changes.
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(update) : null
+    if (panelRef.current !== null) observer?.observe(panelRef.current)
     window.addEventListener('resize', update)
     window.addEventListener('scroll', update, true)
     return () => {
+      observer?.disconnect()
       window.removeEventListener('resize', update)
       window.removeEventListener('scroll', update, true)
     }

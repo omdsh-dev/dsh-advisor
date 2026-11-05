@@ -24,7 +24,7 @@
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClientConnectionRpc, RpcResult } from '@deepseek-ai/dsh-client-connection/client'
 import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
@@ -186,6 +186,51 @@ describe('advisor session header action (B2)', () => {
     render(<AdvisorSessionAction {...props} />)
     fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
     expect(screen.getByRole('dialog').parentElement).toBe(document.body)
+  })
+
+  it('re-clamps the open panel when async content growth changes its measured height', async () => {
+    // jsdom measures nothing: drive the geometry the layout effect reads.
+    let panelHeight = 80
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(() => panelHeight)
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(() => 300)
+    const originalInnerHeight = window.innerHeight
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 250 })
+    // The size-change channel the panel relies on (jsdom has no
+    // ResizeObserver): record the callbacks so a growth can be reported.
+    const observerCallbacks = new Set<() => void>()
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(cb: () => void) { observerCallbacks.add(cb) }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    })
+    try {
+      const { props, rpc, controller } = harness(ok(SESSION_SNAPSHOT))
+      const view = render(<AdvisorSessionAction {...props} />)
+      const trigger = screen.getByRole('button', { name: en.sessionExpand })
+      vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({
+        left: 400, top: 40, right: 460, bottom: 64, width: 60, height: 24, x: 400, y: 40, toJSON: () => ({}),
+      } as DOMRect)
+
+      fireEvent.click(trigger)
+      // Open at height 80 under a 250px viewport: natural top 70 fits the
+      // bottom clamp (250 − 80 − 8 = 162), so it applies as-is.
+      expect(screen.getByRole('dialog').style.top).toBe('70px')
+
+      // The snapshot settles (loading → loaded body) and the panel grows to
+      // 200; the position must re-clamp to 250 − 200 − 8 = 42 — without any
+      // resize or scroll event.
+      rpc.settle(ok(SESSION_SNAPSHOT))
+      await settled({ controller })
+      view.rerender(<AdvisorSessionAction {...props} />)
+      panelHeight = 200
+      observerCallbacks.forEach((cb) => { cb() })
+      await waitFor(() => { expect(screen.getByRole('dialog').style.top).toBe('42px') })
+    } finally {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: originalInnerHeight })
+      vi.unstubAllGlobals()
+      vi.restoreAllMocks()
+    }
   })
 
   it('open is a refresh point: the panel renders pair, source badge, and lifetime', async () => {
