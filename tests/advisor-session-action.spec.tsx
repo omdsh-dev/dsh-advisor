@@ -264,7 +264,9 @@ describe('advisor session header action (B2)', () => {
   it('re-clamps the open panel when async content growth changes its measured height', async () => {
     // jsdom measures nothing: drive the geometry the layout effect reads.
     // Scope the stub to the dialog panel (role="dialog") so a measurement
-    // taken from the wrong element reads 0 and fails the assertions.
+    // taken from the wrong element reads 0: the first-paint block guards
+    // the width-derived `left`, and only the post-growth assertion
+    // discriminates height.
     let panelHeight = 80
     vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
       return this.getAttribute('role') === 'dialog' ? panelHeight : 0
@@ -320,7 +322,10 @@ describe('advisor session header action (B2)', () => {
       const panel = screen.getByRole('dialog')
       // Open at height 80 under a 250px viewport: natural top 70 fits the
       // bottom clamp (250 − 80 − 8 = 162), so it applies as-is — measured
-      // and visible.
+      // and visible. `left` comes from the width (300px right-aligned to
+      // the trigger rect: 460 − 300 = 160), so a wrong-element measurement
+      // that reads width 0 cannot satisfy this first-paint assertion.
+      expect(panel.style.left).toBe('160px')
       expect(panel.style.top).toBe('70px')
       expect(panel.style.visibility).toBe('visible')
 

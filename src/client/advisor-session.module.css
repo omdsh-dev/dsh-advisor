@@ -56,10 +56,12 @@
   box-sizing: border-box;
   /* A panel taller than the viewport scrolls its own content (matching the
      8px screen margin on both edges) instead of losing its lower controls.
-     The dynamic viewport unit tracks window.innerHeight, the metric the JS
-     clamp measures; 100vh is the initial containing block and can exceed
-     the visible area on mobile dynamic viewports. */
-  max-height: calc(100vh - 16px);
+     The cap tracks the dynamic viewport — 100dvh follows window.innerHeight,
+     the metric the JS clamp measures; the shell targets a Chromium that
+     supports dvh. `16px` = 2 × POPOVER_MARGIN (8px) in
+     src/client/advisor-session.tsx — the pair must move together. The build's
+     lightningcss minification dedupes duplicate max-height lines, so no vh
+     fallback is declared (it would be dropped anyway). */
   max-height: calc(100dvh - 16px);
   overflow-y: auto;
   border: 1px solid var(--dsw-alias-border-l2);
