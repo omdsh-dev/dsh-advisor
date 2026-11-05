@@ -586,9 +586,9 @@ export class AdvisorConfigGateway extends TypertRemoteService {
    * the bridge `onChange`; no restart needed).
    * @param patch - any subset of the config keys; unknown keys are rejected
    *   by the `Config` schema before anything is written. The legacy `enabled`
-   *   key is the one tolerated exception (config.ts LEGACY_KEYS): it passes
-   *   validation but is STRIPPED from the write payload — accepted, never
-   *   persisted.
+   *   and `maxTokens` keys are the tolerated exceptions (config.ts
+   *   LEGACY_KEYS): they pass validation but are STRIPPED from the write
+   *   payload — accepted, never persisted.
    * @returns the NEW composed config after the write.
    * @throws when the patch fails `Config` validation, or when no settings
    *   service is composed (KD-G5: the write channel is unavailable).
@@ -608,17 +608,20 @@ export class AdvisorConfigGateway extends TypertRemoteService {
       // receives a coded RemoteFailure instead of an ad-hoc Error shape.
       throw new RemoteError('gateway/internal', 'advisor: settings service is unavailable — configuration cannot be written', {})
     }
-    // Wire normalization (QC tri M-2) + legacy strip (2026-09-27): JSON
-    // cannot carry undefined, so a null-valued key is a third-party client's
-    // way of saying "absent" — the resolver already treats null as missing on
-    // read, but the raw entry config must not store it. The schema-removed
-    // `enabled` rides the same drop: the resolver TOLERATES it in a patch
-    // (config.ts LEGACY_KEYS — stored profiles must load cleanly), but the
-    // dead key must never be re-persisted here — the plugin-row toggle
-    // replaced it, so writing it back would resurrect a switch nothing reads.
-    // An all-null / enabled-only patch is a no-op, like the empty patch above.
+    // Wire normalization (QC tri M-2) + legacy strip (2026-09-27, extended
+    // 2026-10-18): JSON cannot carry undefined, so a null-valued key is a
+    // third-party client's way of saying "absent" — the resolver already
+    // treats null as missing on read, but the raw entry config must not store
+    // it. The schema-removed `enabled` and `maxTokens` ride the same drop: the
+    // resolver TOLERATES them in a patch (config.ts LEGACY_KEYS — stored
+    // profiles must load cleanly), but the dead keys must never be re-persisted
+    // here — the plugin-row toggle replaced `enabled`, and the host
+    // SettingsForms.write aborts the WHOLE save on any non-volatile field
+    // (`Config field "maxTokens" is not volatile`), so leaking `maxTokens`
+    // through would turn a tolerated patch into a failed write.
+    // An all-null / legacy-only patch is a no-op, like the empty patch above.
     const normalized = Object.fromEntries(
-      Object.entries(patch).filter(([key, value]) => key !== 'enabled' && value !== null),
+      Object.entries(patch).filter(([key, value]) => key !== 'enabled' && key !== 'maxTokens' && value !== null),
     )
     if (Object.keys(normalized).length === 0) return { config: this.readConfig() }
     // The `ns` argument is the PROFILE ENTRY id — the advisor bundle row id
