@@ -55,8 +55,12 @@
      edge past the viewport (issue #141 round 2). */
   box-sizing: border-box;
   /* A panel taller than the viewport scrolls its own content (matching the
-     8px screen margin on both edges) instead of losing its lower controls. */
+     8px screen margin on both edges) instead of losing its lower controls.
+     The dynamic viewport unit tracks window.innerHeight, the metric the JS
+     clamp measures; 100vh is the initial containing block and can exceed
+     the visible area on mobile dynamic viewports. */
   max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
   overflow-y: auto;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;

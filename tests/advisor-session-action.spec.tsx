@@ -263,9 +263,15 @@ describe('advisor session header action (B2)', () => {
 
   it('re-clamps the open panel when async content growth changes its measured height', async () => {
     // jsdom measures nothing: drive the geometry the layout effect reads.
+    // Scope the stub to the dialog panel (role="dialog") so a measurement
+    // taken from the wrong element reads 0 and fails the assertions.
     let panelHeight = 80
-    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(() => panelHeight)
-    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(() => 300)
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'dialog' ? panelHeight : 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'dialog' ? 300 : 0
+    })
     const originalInnerHeight = window.innerHeight
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 250 })
     // The size-change channel the panel relies on (jsdom has no
