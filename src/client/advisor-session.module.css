@@ -38,20 +38,32 @@
   outline-offset: 1px;
 }
 
-/* Wrapper anchoring the popover under the trigger (the header action cell is
-   the positioning context). */
+/* Wrapper holding the trigger; the panel no longer anchors here — it portals
+   into document.body and positions itself from measured viewport rects. */
 .anchor {
-  position: relative;
   display: inline-flex;
 }
 
-/* The open panel: a bordered popover card above the header's z-plane. */
+/* The open panel: a bordered popover card on the body layer (position: fixed
+   via portal; left/top come from computePopoverPosition). */
 .panel {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 30;
+  position: fixed;
+  z-index: 1100;
   width: 300px;
+  /* The cap must bound the RENDERED box: without border-box, max-height
+     limits the content box only and padding + border still push the bottom
+     edge past the viewport (issue #141 round 2). */
+  box-sizing: border-box;
+  /* A panel taller than the viewport scrolls its own content (matching the
+     8px screen margin on both edges) instead of losing its lower controls.
+     The cap tracks the dynamic viewport — 100dvh follows window.innerHeight,
+     the metric the JS clamp measures; the shell targets a Chromium that
+     supports dvh. `16px` = 2 × POPOVER_MARGIN (8px) in
+     src/client/advisor-session.tsx — the pair must move together. The build's
+     lightningcss minification dedupes duplicate max-height lines, so no vh
+     fallback is declared (it would be dropped anyway). */
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);

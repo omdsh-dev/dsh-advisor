@@ -30,7 +30,8 @@
  * falsely claiming continuous synchronization.
  */
 
-import { useState, type ReactNode } from 'react'
+import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { AdvisorSessionMenuState, AdvisorSessionModelController, AdvisorSettingsState, AdvisorSettingsStore } from './advisor-store.ts'
@@ -72,6 +73,45 @@ export type AdvisorSessionActionProps =
   & InjectFace<AdvisorSessionActionInjected>
 
 /**
+ * Measured rects of the popover geometry. `anchor` is the trigger's viewport
+ * rect; `panel`/`viewport` are plain sizes. Pure so the clamp contract is
+ * unit-testable (issue #141).
+ */
+export interface PopoverGeometry {
+  anchor: { left: number; top: number; right: number; bottom: number }
+  panel: { width: number; height: number }
+  viewport: { width: number; height: number }
+  gap: number
+  margin: number
+}
+
+/**
+ * Clamp the panel to the viewport: right-aligned under the trigger (matching
+ * the pre-portal geometry), pushed inside `margin` on whichever edge the
+ * natural position would cross. The outer `Math.max(margin, …)` guarantees
+ * only that the top-left corner lands inside `margin` and never a negative
+ * offset — even when the panel itself is larger than the viewport (the
+ * inner upper bound would then be below `margin`); it does NOT keep an
+ * oversized panel fully on-screen. Vertical containment comes from the CSS
+ * `max-height` cap on `.panel`.
+ */
+export function computePopoverPosition({ anchor, panel, viewport, gap, margin }: PopoverGeometry): { left: number; top: number } {
+  const left = Math.max(
+    margin,
+    Math.min(anchor.right - panel.width, viewport.width - panel.width - margin),
+  )
+  const top = Math.max(
+    margin,
+    Math.min(anchor.bottom + gap, viewport.height - panel.height - margin),
+  )
+  return { left, top }
+}
+
+/** Popover placement constants (the old CSS `100% + 6px` offset; 8px screen margin). */
+const POPOVER_GAP = 6
+const POPOVER_MARGIN = 8
+
+/**
  * Render the session header's Advisor action: a neutral trigger plus, when
  * open, a popover panel holding the refreshable snapshot and the pin/reset
  * controls.
@@ -84,6 +124,82 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
   const epoch = useRefreshSignal((s) => s.epoch)
   const directoryState = useDirectory((s) => s)
   const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  // First paint hides the panel at 0,0 (mirroring the host's ContextMeter):
+  // the layout effect then measures and pins the clamped position before
+  // paint, so no unpositioned frame is ever visible.
+  const [position, setPosition] = useState<{ left: number; top: number; visibility: CSSProperties['visibility'] }>({ left: 0, top: 0, visibility: 'hidden' })
+  const panelId = useId()
+  // Open→close transitions only: guards the return-focus path so the first
+  // mount (closed) never steals page focus.
+  const wasOpenRef = useRef(false)
+  // Last measured geometry: resize/scroll/observer ticks skip setPosition
+  // while nothing changed. Reset on close so a reopen always re-applies
+  // `visible` (never strands the panel behind a stale skip).
+  const lastMeasuredRef = useRef<{ left: number; top: number; width: number; height: number; visibility: CSSProperties['visibility'] } | null>(null)
+
+  useLayoutEffect(() => {
+    if (!open) {
+      if (wasOpenRef.current) triggerRef.current?.focus()
+      wasOpenRef.current = false
+      lastMeasuredRef.current = null
+      setPosition({ left: 0, top: 0, visibility: 'hidden' })
+      return
+    }
+    wasOpenRef.current = true
+    const update = (): void => {
+      const trigger = triggerRef.current
+      const panel = panelRef.current
+      if (trigger === null || panel === null) return
+      const width = panel.offsetWidth
+      const height = panel.offsetHeight
+      const next: { left: number; top: number; width: number; height: number; visibility: CSSProperties['visibility'] } = {
+        ...computePopoverPosition({
+          anchor: trigger.getBoundingClientRect(),
+          panel: { width, height },
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+          gap: POPOVER_GAP,
+          margin: POPOVER_MARGIN,
+        }),
+        width,
+        height,
+        visibility: 'visible',
+      }
+      const last = lastMeasuredRef.current
+      if (last === null || last.left !== next.left || last.top !== next.top || last.width !== next.width || last.height !== next.height || last.visibility !== next.visibility) {
+        lastMeasuredRef.current = next
+        setPosition({ left: next.left, top: next.top, visibility: next.visibility })
+      }
+    }
+    update()
+    // Async snapshot/directory loads grow the panel's height while `open`
+    // stays true; re-clamp whenever the measured size actually changes.
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(update) : null
+    if (panelRef.current !== null) observer?.observe(panelRef.current)
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
+  }, [open])
+  // The portal severed the DOM sibling relationship the pre-portal panel
+  // relied on for keyboard order: move focus into the panel once it is
+  // actually visible (browsers refuse to focus a visibility:hidden panel,
+  // and the measuring effect above commits `visible` only in a later
+  // layout pass). Runs once per open; position re-clamps on scroll/resize
+  // do not re-fire it because `visibility` never changes while open.
+  const focusHandedOffRef = useRef(false)
+  useLayoutEffect(() => {
+    if (!open || position.visibility !== 'visible' || focusHandedOffRef.current) return
+    focusHandedOffRef.current = true
+    panelRef.current?.focus({ preventScroll: true })
+  }, [open, position.visibility])
+  useLayoutEffect(() => {
+    if (!open) focusHandedOffRef.current = false
+  }, [open])
   // The staged pin selection is LOCAL user input (never seeded from the
   // snapshot — the effective pair is displayed as text above; a stale host
   // pair must not look like staged edits).
@@ -205,24 +321,43 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
       {/* Neutral closed label: the plugin name only — a closed action claims
           no model and no continuous synchronization. */}
       <button
+        ref={triggerRef}
         type="button"
         className={styles.trigger}
         aria-expanded={open}
         aria-haspopup="dialog"
+        /* Only advertise the id while the panel exists — a closed trigger
+           pointing at a missing element is a dangling IDREF. */
+        aria-controls={open ? panelId : undefined}
         aria-label={t(open ? 'sessionCollapse' : 'sessionExpand')}
         onClick={() => { if (open) setOpen(false); else openAdvisor() }}
       >
         {t('sessionTrigger')}
       </button>
       {open
-        ? (
-            <div className={styles.panel} role="dialog" aria-label={t('sessionModelHeading')}>
+        ? createPortal(
+            // The panel lives on document.body (position: fixed, z-index
+            // 1100) so the host conversation column's overflow: hidden can
+            // never crop it, however far the header action sits toward the
+            // column's left edge (issue #141).
+            <div
+              ref={panelRef}
+              id={panelId}
+              className={styles.panel}
+              role="dialog"
+              aria-label={t('sessionModelHeading')}
+              // tabIndex=-1: the dialog is a focus target (focus moves here on
+              // open) but stays out of the sequential Tab order.
+              tabIndex={-1}
+              style={{ left: position.left, top: position.top, visibility: position.visibility }}
+            >
               <p className={styles.panelHeading}>{t('sessionModelHeading')}</p>
               {directoryState.providers.length === 0 && directoryState.status === 'ready' && !state.unavailable
                 ? <p className={styles.mutedLine}>{t('noProviders')}</p>
                 : null}
               {body}
-            </div>
+            </div>,
+            document.body,
           )
         : null}
     </div>

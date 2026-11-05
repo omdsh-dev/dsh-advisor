@@ -24,12 +24,12 @@
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClientConnectionRpc, RpcResult } from '@deepseek-ai/dsh-client-connection/client'
 import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { fakeSchema } from './support/schema-ops'
-import { AdvisorSessionAction } from '../src/client/advisor-session'
+import { AdvisorSessionAction, computePopoverPosition } from '../src/client/advisor-session'
 import type { AdvisorSessionActionProps } from '../src/client/advisor-session'
 import { AdvisorSessionModelController, AdvisorSettingsStore } from '../src/client/advisor-store'
 import type { AdvisorSettingsState } from '../src/client/advisor-store'
@@ -137,6 +137,50 @@ const SESSION_SNAPSHOT = {
   },
 }
 
+describe('computePopoverPosition (viewport clamp, issue #141)', () => {
+  const viewport = { width: 1280, height: 800 }
+  const panel = { width: 300, height: 200 }
+
+  it('right-aligns the panel under the trigger when everything fits', () => {
+    expect(computePopoverPosition({
+      anchor: { left: 400, top: 40, right: 460, bottom: 64 },
+      panel, viewport, gap: 6, margin: 8,
+    })).toEqual({ left: 160, top: 70 })
+  })
+
+  it('clamps to the left viewport margin when the anchor sits near the left edge', () => {
+    expect(computePopoverPosition({
+      anchor: { left: 20, top: 40, right: 80, bottom: 64 },
+      panel, viewport, gap: 6, margin: 8,
+    })).toEqual({ left: 8, top: 70 })
+  })
+
+  it('clamps to the right viewport margin when right-aligned would overflow', () => {
+    expect(computePopoverPosition({
+      anchor: { left: 1240, top: 40, right: 1300, bottom: 64 },
+      panel, viewport, gap: 6, margin: 8,
+    })).toEqual({ left: 972, top: 70 })
+  })
+
+  it('clamps vertically so the panel never overflows the viewport bottom', () => {
+    expect(computePopoverPosition({
+      anchor: { left: 400, top: 726, right: 460, bottom: 750 },
+      panel, viewport, gap: 6, margin: 8,
+    })).toEqual({ left: 160, top: 592 })
+  })
+
+  it('never returns a negative offset when the panel is larger than the viewport', () => {
+    // 1280×800 viewport, 1500×2000 panel: the naive upper clamp
+    // (viewport − size − margin) lands below the margin, and plain
+    // min(max(natural, margin), upper) would paint the panel off-screen.
+    expect(computePopoverPosition({
+      anchor: { left: 20, top: 40, right: 80, bottom: 64 },
+      panel: { width: 1500, height: 2000 },
+      viewport, gap: 6, margin: 8,
+    })).toEqual({ left: 8, top: 8 })
+  })
+})
+
 describe('advisor session header action (B2)', () => {
   it('the closed action is neutral: plugin name only, no model label, no panel', () => {
     const { props } = harness(ok(SESSION_SNAPSHOT))
@@ -146,6 +190,167 @@ describe('advisor session header action (B2)', () => {
     // No model text anywhere in the closed surface, and no panel.
     expect(screen.queryByText('deepseek/deepseek-chat')).toBeNull()
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('the panel portals into document.body so the column overflow cannot clip it', () => {
+    const { props } = harness(ok(SESSION_SNAPSHOT))
+    render(<AdvisorSessionAction {...props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    expect(screen.getByRole('dialog').parentElement).toBe(document.body)
+  })
+
+  it('the portalled dialog stays wired to the trigger: aria-controls + focus hand-off', () => {
+    // The portal severed the pre-portal DOM sibling path (Tab from the
+    // trigger used to reach the panel); the wiring must restore it.
+    // jsdom focuses regardless of CSS visibility; real browsers refuse to
+    // focus a hidden element. Stub focus() to enforce the browser rule so
+    // the timing (focus only after the panel commits visible) is proven.
+    const originalFocus = HTMLElement.prototype.focus
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+      if ((this.style?.visibility ?? 'visible') === 'hidden') return
+      originalFocus.call(this, options)
+    })
+    try {
+      const { props } = harness(ok(SESSION_SNAPSHOT))
+      render(<AdvisorSessionAction {...props} />)
+      const trigger = screen.getByRole('button', { name: en.sessionExpand })
+      // Closed: the panel (the id's owner) does not exist yet, so the
+      // trigger must not advertise a dangling IDREF.
+      expect(trigger.getAttribute('aria-controls')).toBeNull()
+      fireEvent.click(trigger)
+      const panel = screen.getByRole('dialog')
+      expect(panel.id).not.toBe('')
+      expect(trigger.getAttribute('aria-controls')).toBe(panel.id)
+      // Focus moves into the panel on open and returns to the trigger on close.
+      expect(document.activeElement).toBe(panel)
+      fireEvent.click(screen.getByRole('button', { name: en.sessionCollapse }))
+      expect(document.activeElement).toBe(trigger)
+      // Closed again: the reference must go away with the panel.
+      expect(trigger.getAttribute('aria-controls')).toBeNull()
+    } finally {
+      focusSpy.mockRestore()
+    }
+  })
+
+  it('a closed first mount never steals page focus', () => {
+    // The return-focus path must fire on open→close transitions only: focus
+    // an external element, mount the component closed, and require focus to
+    // stay put. Without that guard the first mount takes the close path and
+    // pulls focus into the closed trigger.
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    outside.focus()
+    try {
+      const { props } = harness(ok(SESSION_SNAPSHOT))
+      render(<AdvisorSessionAction {...props} />)
+      expect(document.activeElement).toBe(outside)
+    } finally {
+      outside.remove()
+    }
+  })
+
+  it('a reopen after close is measured and visible again (the skip-unchanged ref must not strand it hidden)', () => {
+    const { props } = harness(ok(SESSION_SNAPSHOT))
+    render(<AdvisorSessionAction {...props} />)
+    const trigger = screen.getByRole('button', { name: en.sessionExpand })
+    fireEvent.click(trigger)
+    expect(screen.getByRole('dialog').style.visibility).toBe('visible')
+    fireEvent.click(screen.getByRole('button', { name: en.sessionCollapse }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(trigger)
+    expect(screen.getByRole('dialog').style.visibility).toBe('visible')
+  })
+
+  it('re-clamps the open panel when async content growth changes its measured height', async () => {
+    // jsdom measures nothing: drive the geometry the layout effect reads.
+    // Scope the stub to the dialog panel (role="dialog") so a measurement
+    // taken from the wrong element reads 0: the first-paint block guards
+    // the width-derived `left`, and only the post-growth assertion
+    // discriminates height.
+    let panelHeight = 80
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'dialog' ? panelHeight : 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'dialog' ? 300 : 0
+    })
+    const originalInnerHeight = window.innerHeight
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 250 })
+    // The size-change channel the panel relies on (jsdom has no
+    // ResizeObserver): contract-mirror stub — each instance records the
+    // element it was asked to observe, and growth is reported only through
+    // instances that actually observed the panel. Deleting
+    // `observer.observe(panel)` in production leaves no matching instance,
+    // the growth below is never reported, and this test goes red.
+    const observed: Array<{ callback: () => void; element: Element }> = []
+    vi.stubGlobal('ResizeObserver', class {
+      #callback: () => void
+      constructor(callback: () => void) { this.#callback = callback }
+      observe(element: Element): void { observed.push({ callback: this.#callback, element }) }
+      unobserve(): void {}
+      disconnect(): void {}
+    })
+    // First-paint contract: the panel mounts `visibility: hidden` and turns
+    // visible only once the layout effect has measured and clamped it.
+    // React applies style through the CSSStyleDeclaration accessor, so a
+    // prototype spy observes the hidden → visible order. Every write is
+    // recorded with its declaration so the assertion can scope to the panel
+    // — an unrelated element's write must not satisfy it.
+    const appliedVisibilities: Array<{ decl: CSSStyleDeclaration; value: string }> = []
+    const styleProto = Object.getPrototypeOf(document.createElement('div').style) as CSSStyleDeclaration
+    const visibilityDescriptor = Object.getOwnPropertyDescriptor(styleProto, 'visibility')
+    if (visibilityDescriptor !== undefined && visibilityDescriptor.set !== undefined) {
+      const { set: setVisibility, get: getVisibility } = visibilityDescriptor
+      Object.defineProperty(styleProto, 'visibility', {
+        set(this: CSSStyleDeclaration, value: string) {
+          appliedVisibilities.push({ decl: this, value })
+          setVisibility.call(this, value)
+        },
+        get: getVisibility,
+        configurable: true,
+      })
+    }
+    try {
+      const { props, rpc, controller } = harness(ok(SESSION_SNAPSHOT))
+      const view = render(<AdvisorSessionAction {...props} />)
+      const trigger = screen.getByRole('button', { name: en.sessionExpand })
+      vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({
+        left: 400, top: 40, right: 460, bottom: 64, width: 60, height: 24, x: 400, y: 40, toJSON: () => ({}),
+      } as DOMRect)
+
+      fireEvent.click(trigger)
+      const panel = screen.getByRole('dialog')
+      // Open at height 80 under a 250px viewport: natural top 70 fits the
+      // bottom clamp (250 − 80 − 8 = 162), so it applies as-is — measured
+      // and visible. `left` comes from the width (300px right-aligned to
+      // the trigger rect: 460 − 300 = 160), so a wrong-element measurement
+      // that reads width 0 cannot satisfy this first-paint assertion.
+      expect(panel.style.left).toBe('160px')
+      expect(panel.style.top).toBe('70px')
+      expect(panel.style.visibility).toBe('visible')
+
+      // The snapshot settles (loading → loaded body) and the panel grows to
+      // 200; the position must re-clamp to 250 − 200 − 8 = 42 — without any
+      // resize or scroll event.
+      rpc.settle(ok(SESSION_SNAPSHOT))
+      await settled({ controller })
+      view.rerender(<AdvisorSessionAction {...props} />)
+      panelHeight = 200
+      observed.filter((entry) => entry.element === panel).forEach((entry) => { entry.callback() })
+      await waitFor(() => { expect(panel.style.top).toBe('42px') })
+      expect(panel.style.visibility).toBe('visible')
+      const panelVisibilities = appliedVisibilities
+        .filter((entry) => entry.decl === panel.style)
+        .map((entry) => entry.value)
+      expect(panelVisibilities.slice(0, 2)).toEqual(['hidden', 'visible'])
+    } finally {
+      if (visibilityDescriptor !== undefined) {
+        Object.defineProperty(styleProto, 'visibility', visibilityDescriptor)
+      }
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: originalInnerHeight })
+      vi.unstubAllGlobals()
+      vi.restoreAllMocks()
+    }
   })
 
   it('open is a refresh point: the panel renders pair, source badge, and lifetime', async () => {
