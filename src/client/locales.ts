@@ -66,6 +66,17 @@ export const en = {
   sessionPending: 'Applying…',
   sessionReset: 'Use global default',
   sessionUnavailable: 'The advisor session control surface is not available on this host. Use /advisor model in the session, or configure the global defaults on the Plugins page.',
+  // Session reasoning effort (issue #142): the select's label + inherit
+  // option, and the effective-effort line's source suffixes — the same
+  // wording as the `/advisor status` command surface. {route} interpolates
+  // the effective `provider/model`, {configured} the configured/pinned id.
+  sessionEffort: 'Effort',
+  sessionEffortInherit: 'Inherit global',
+  sessionEffortConfigured: '(configured)',
+  sessionEffortAuto: '(auto — smallest declared by {route})',
+  sessionEffortFallback: '(fallback — "{configured}" is not declared by {route})',
+  sessionEffortNone: 'not sent — {route} declares no reasoning efforts',
+  sessionEffortPending: 'pending — resolved on the first review call',
   // Next-prompt suggestion tip (plan dsh-advisor-next-prompt-n12, T3;
   // dock-tip rework e2e-n13): the config-card checkbox copy + the tip row's
   // prefix and accept copy. The old `nextPromptBadge` key died with the
@@ -132,6 +143,17 @@ export const zh: typeof en = {
   sessionPending: '应用中…',
   sessionReset: '使用全局默认',
   sessionUnavailable: '本宿主上的顾问会话控制面不可用。请在会话中使用 /advisor model，或在 Plugins 页配置全局默认值。',
+  // Session reasoning effort (issue #142): the select's label + inherit
+  // option, and the effective-effort line's source suffixes — the same
+  // wording as the `/advisor status` command surface. {route} interpolates
+  // the effective `provider/model`, {configured} the configured/pinned id.
+  sessionEffort: '思考权重',
+  sessionEffortInherit: '继承全局',
+  sessionEffortConfigured: '（已配置）',
+  sessionEffortAuto: '（自动——{route} 声明的最小值）',
+  sessionEffortFallback: '（回退——{route} 未声明 "{configured}"）',
+  sessionEffortNone: '未发送——{route} 未声明任何思考权重',
+  sessionEffortPending: '待定——首次审阅调用时解析',
   nextPrompt: '下一条提示建议',
   nextPromptHint: '在输入框下方以提示条显示审阅者建议的下一条提示；按 → 插入。',
   nextPromptPrefix: '建议',

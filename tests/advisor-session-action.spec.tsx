@@ -23,7 +23,7 @@
  * ⑥ reconnect/focus signal: bumping the refresh epoch while open refetches.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, type RenderResult } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClientConnectionRpc, RpcResult } from '@deepseek-ai/dsh-client-connection/client'
 import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
@@ -417,8 +417,14 @@ describe('advisor session header action (B2)', () => {
     view.rerender(<AdvisorSessionAction {...props} />)
     fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'deepseek-chat' } })
     view.rerender(<AdvisorSessionAction {...props} />)
-    fireEvent.click(screen.getByRole('button', { name: en.sessionPinAction }))
+    // Choosing a model resolves its declared efforts through the shared
+    // capability endpoint (issue #142); settle it before the pin write.
     await waitFor(() => expect(rpc.calls).toHaveLength(2))
+    expect(rpc.last().method).toBe('advisor/modelReasoning')
+    rpc.settle(ok({ efforts: [] }))
+    await waitFor(() => expect(controller.store.getSnapshot().reasoningStatus).toBe('ready'))
+    fireEvent.click(screen.getByRole('button', { name: en.sessionPinAction }))
+    await waitFor(() => expect(rpc.calls).toHaveLength(3))
     expect(rpc.last()).toEqual({
       channel: '/api',
       method: 'advisor/setSessionModel',
@@ -489,5 +495,183 @@ describe('advisor session header action (B2)', () => {
     view.rerender(<AdvisorSessionAction {...props} />)
     await waitFor(() => expect(rpc.calls).toHaveLength(2))
     expect(rpc.last().method).toBe('advisor/getSession')
+  })
+})
+
+describe('advisor session reasoning effort (issue #142)', () => {
+  /** Open the panel and settle the initial snapshot (call 1). */
+  async function openPanel(h: Harness): Promise<RenderResult> {
+    const view = render(<AdvisorSessionAction {...h.props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
+    h.rpc.settle(ok(SESSION_SNAPSHOT))
+    await settled({ controller: h.controller })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    return view
+  }
+
+  /** Stage provider + model (fires the reasoning lookup, the next rpc call). */
+  async function stagePair(h: Harness, view: RenderResult): Promise<void> {
+    fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'deepseek-chat' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+  }
+
+  const EFFORTS = { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] }
+
+  it('the effort select offers Inherit global plus the declared ids of the chosen model', async () => {
+    const h = harness(ok(SESSION_SNAPSHOT))
+    const view = render(<AdvisorSessionAction {...h.props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
+    h.rpc.settle(ok(SESSION_SNAPSHOT))
+    await settled({ controller: h.controller })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+
+    // No model chosen yet: disabled, inherit-only (the declared ids are
+    // unknown until a model is picked).
+    const idle = screen.getByLabelText(en.sessionEffort) as HTMLSelectElement
+    expect(idle.disabled).toBe(true)
+    expect(idle.value).toBe('')
+    expect(Array.from(idle.options).map((o) => o.textContent)).toEqual([en.sessionEffortInherit])
+
+    await stagePair(h, view)
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
+    expect(h.rpc.last()).toEqual({
+      channel: '/api', method: 'advisor/modelReasoning', args: { provider: 'deepseek', model: 'deepseek-chat' },
+    })
+    // The lookup is in flight → the select stays disabled while loading.
+    expect((screen.getByLabelText(en.sessionEffort) as HTMLSelectElement).disabled).toBe(true)
+
+    h.rpc.settle(ok(EFFORTS))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    const select = screen.getByLabelText(en.sessionEffort) as HTMLSelectElement
+    expect(select.disabled).toBe(false)
+    expect(Array.from(select.options).map((o) => [o.value, o.textContent])).toEqual([
+      ['', en.sessionEffortInherit],
+      ['low', 'Low'],
+      ['high', 'High'],
+    ])
+  })
+
+  it('clearing the staged model resets the effort back to inherit (no lookup for an empty model)', async () => {
+    const h = harness(ok(SESSION_SNAPSHOT))
+    const view = await openPanel(h)
+    await stagePair(h, view)
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
+    h.rpc.settle(ok(EFFORTS))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+
+    fireEvent.change(screen.getByLabelText(en.sessionEffort), { target: { value: 'high' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    expect((screen.getByLabelText(en.sessionEffort) as HTMLSelectElement).value).toBe('high')
+
+    // Clearing the model re-inherits the effort and fires no new lookup.
+    fireEvent.change(screen.getByLabelText(en.model), { target: { value: '' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    expect((screen.getByLabelText(en.sessionEffort) as HTMLSelectElement).value).toBe('')
+    expect(h.rpc.calls).toHaveLength(2)
+  })
+
+  it('pinning sends the chosen effort; inherit omits the reasoningEffort key', async () => {
+    const h = harness(ok(SESSION_SNAPSHOT))
+    const view = render(<AdvisorSessionAction {...h.props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
+    h.rpc.settle(ok(SESSION_SNAPSHOT))
+    await settled({ controller: h.controller })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    await stagePair(h, view)
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
+    h.rpc.settle(ok(EFFORTS))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+
+    fireEvent.change(screen.getByLabelText(en.sessionEffort), { target: { value: 'high' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionPinAction }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(3))
+    expect(h.rpc.last()).toEqual({
+      channel: '/api',
+      method: 'advisor/setSessionModel',
+      args: { sessionId: 'sess-1', selection: { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' } },
+    })
+    h.rpc.settle(ok(SESSION_SNAPSHOT))
+    await settled({ controller: h.controller })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+
+    // Back to inherit → the selection carries NO reasoningEffort key at all
+    // (the wire rejects present-as-undefined).
+    fireEvent.change(screen.getByLabelText(en.sessionEffort), { target: { value: '' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionPinAction }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(4))
+    const args = h.rpc.last().args as { selection: Record<string, unknown> }
+    expect(args.selection).toEqual({ provider: 'deepseek', model: 'deepseek-chat' })
+    expect(Object.hasOwn(args.selection, 'reasoningEffort')).toBe(false)
+    h.rpc.settle(ok(SESSION_SNAPSHOT))
+    await settled({ controller: h.controller })
+  })
+
+  it.each([
+    [{ source: 'configured', effective: 'low' }, 'Effort: low (configured)'],
+    [{ source: 'auto', effective: 'low' }, 'Effort: low (auto — smallest declared by deepseek/deepseek-chat)'],
+    [{ source: 'fallback-undeclared', effective: 'low', configured: 'medium' }, 'Effort: low (fallback — "medium" is not declared by deepseek/deepseek-chat)'],
+    [{ source: 'none' }, 'Effort: not sent — deepseek/deepseek-chat declares no reasoning efforts'],
+    [{ source: 'pending' }, 'Effort: pending — resolved on the first review call'],
+  ])('renders the effective-effort line for %o with the status wording', async (reasoningEffort, line) => {
+    const snapshot = {
+      snapshot: {
+        sessionId: 'sess-1',
+        enabled: true,
+        lifetime: 'live-session' as const,
+        modelSource: 'global' as const,
+        effectiveModel: { provider: 'deepseek', model: 'deepseek-chat' },
+        reasoningEffort,
+      },
+    }
+    const h = harness(ok(snapshot))
+    const view = render(<AdvisorSessionAction {...h.props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
+    h.rpc.settle(ok(snapshot))
+    await settled({ controller: h.controller })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    expect(screen.getByRole('dialog').textContent).toContain(line)
+  })
+
+  it('never invents an effort line when the snapshot carries none', async () => {
+    // Effective pair but no recorded resolution → no Effort: line at all.
+    const h = harness(ok(SESSION_SNAPSHOT))
+    const view = render(<AdvisorSessionAction {...h.props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
+    h.rpc.settle(ok(SESSION_SNAPSHOT))
+    await settled({ controller: h.controller })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    expect(screen.getByRole('dialog').textContent).not.toContain('Effort:')
+    view.unmount()
+
+    // Recorded resolution but no effective route (same gate as the status
+    // surface: the line names the route) → still no line.
+    const noRoute = {
+      snapshot: {
+        sessionId: 'sess-1',
+        enabled: true,
+        lifetime: 'live-session' as const,
+        reasoningEffort: { source: 'configured', effective: 'low' },
+      },
+    }
+    const h2 = harness(ok(noRoute))
+    const view2 = render(<AdvisorSessionAction {...h2.props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h2.rpc.calls).toHaveLength(1))
+    h2.rpc.settle(ok(noRoute))
+    await settled({ controller: h2.controller })
+    view2.rerender(<AdvisorSessionAction {...h2.props} />)
+    expect(screen.getByRole('dialog').textContent).not.toContain('Effort:')
   })
 })

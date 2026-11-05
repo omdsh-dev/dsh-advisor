@@ -1057,7 +1057,8 @@ export function refreshIfLoaded(controller: AdvisorSettingsStore): void {
  * `AdvisorSessionSnapshotWire` (src/gateway.ts). Kept as a local structural
  * type because the client bundle may not value-import the node-side module;
  * the wire normalization omits absent keys (modelOverride / modelSource /
- * effectiveModel / disabledReason are simply missing from the JSON).
+ * effectiveModel / reasoningEffortOverride / reasoningEffort /
+ * disabledReason are simply missing from the JSON).
  */
 export interface AdvisorSessionSnapshotView {
   /** The session the snapshot describes (echoes the request's binding). */
@@ -1072,12 +1073,28 @@ export interface AdvisorSessionSnapshotView {
   modelSource?: 'session' | 'global'
   /** The effective route; absent when neither level has a complete pair. */
   effectiveModel?: { provider: string; model: string }
+  /** The session-pinned effort (GitHub issue #142); absent = inherit. */
+  reasoningEffortOverride?: string
+  /**
+   * The effort outcome the live runtime recorded (sent id + source); absent
+   * when the session has no runtime — the client never invents a value.
+   */
+  reasoningEffort?: { readonly source: string; readonly effective?: string; readonly configured?: string }
   /** Present iff the S4 explicit gate blocks model calls. */
   disabledReason?: string
 }
 
-/** One `setSessionModel` selection on the wire: an atomic pair, or null (= reset). */
-export type AdvisorSessionSelection = { readonly provider: string; readonly model: string } | null
+/**
+ * One `setSessionModel` selection on the wire: an atomic pair with an
+ * optional effort (absent = inherit the global value), or null (= reset).
+ * An absent effort is OMITTED from the object — never sent
+ * present-as-undefined (the gateway result validation rejects undefined).
+ */
+export type AdvisorSessionSelection = {
+  readonly provider: string
+  readonly model: string
+  readonly reasoningEffort?: string
+} | null
 
 /**
  * The RPC result union of the session endpoints: a snapshot, or a
@@ -1106,6 +1123,14 @@ export interface AdvisorSessionMenuState {
   unavailable: boolean
   /** A set/reset write is in flight. */
   pending: boolean
+  /**
+   * The declared reasoning efforts of the CURRENTLY selected staged pair
+   * (empty until a lookup succeeds). A failed lookup never clears a previous
+   * pair's options — it only latches `reasoningStatus`.
+   */
+  reasoningEfforts: readonly { readonly id: string; readonly name: string }[]
+  /** Capability lookup state for the currently selected staged pair. */
+  reasoningStatus: 'idle' | 'loading' | 'ready' | 'unavailable'
 }
 
 /**
@@ -1129,6 +1154,8 @@ export class AdvisorSessionModelController {
     error: null,
     unavailable: false,
     pending: false,
+    reasoningEfforts: [],
+    reasoningStatus: 'idle',
   })
 
   /** Fence token: a newer op makes every older settle stale. */
@@ -1186,15 +1213,55 @@ export class AdvisorSessionModelController {
   }
 
   /**
-   * Pin the atomic `{provider, model}` pair for THIS session
-   * (`/api/advisor/setSessionModel`, selection = the pair). Refuses outright
-   * while `unavailable` (store-side defense-in-depth — an unavailable menu
-   * must never issue a write, and must never fall back to the global
-   * `advisor/set` channel). The host validates the pair through the same
-   * rules as the `/advisor model set` command face.
+   * Pin the atomic `{provider, model}` pair — with an optional reasoning
+   * effort, absent = inherit the global value (GitHub issue #142) — for THIS
+   * session (`/api/advisor/setSessionModel`). The effort rides INSIDE the
+   * selection object and is omitted entirely when undefined (the gateway
+   * result validation rejects present-as-undefined). Refuses outright while
+   * `unavailable` (store-side defense-in-depth — an unavailable menu must
+   * never issue a write, and must never fall back to the global `advisor/set`
+   * channel). The host validates the pair and effort through the same rules
+   * as the `/advisor model set` command face.
    */
-  async setSessionModel(provider: string, model: string): Promise<void> {
-    await this.write({ provider, model })
+  async setSessionModel(provider: string, model: string, reasoningEffort?: string): Promise<void> {
+    await this.write(reasoningEffort === undefined ? { provider, model } : { provider, model, reasoningEffort })
+  }
+
+  /**
+   * Resolve the declared reasoning efforts for one staged pair through the
+   * EXISTING capability endpoint (`/api/advisor/modelReasoning` — the same
+   * metadata channel the settings card uses; no second path). Rides the
+   * controller's monotonic request fence like every other op: a lookup whose
+   * settle is superseded by a newer op touches nothing. A successful lookup
+   * replaces the options with this pair's declared efforts (possibly empty);
+   * a failed lookup (tagged error or transport) latches `unavailable` for
+   * the pair WITHOUT clearing a previous pair's options.
+   * @param provider - staged provider route id.
+   * @param model - staged model id.
+   */
+  async loadReasoning(provider: string, model: string): Promise<void> {
+    const seq = ++this.requestSeq
+    this.store.update((s) => {
+      s.reasoningStatus = 'loading'
+    })
+    let payload: AdvisorModelReasoningPayload | undefined
+    try {
+      const result = await this.rpc.call('/api', 'advisor/modelReasoning', { args: { provider, model } })
+      if (seq !== this.requestSeq) return
+      if (result.ok) payload = result.value as AdvisorModelReasoningPayload
+    } catch {
+      if (seq !== this.requestSeq) return
+    }
+    if (payload !== undefined && 'efforts' in payload) {
+      this.store.update((s) => {
+        s.reasoningEfforts = payload.efforts
+        s.reasoningStatus = 'ready'
+      })
+    } else {
+      this.store.update((s) => {
+        s.reasoningStatus = 'unavailable'
+      })
+    }
   }
 
   /**

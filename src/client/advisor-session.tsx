@@ -205,6 +205,10 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
   // pair must not look like staged edits).
   const [provider, setProvider] = useState('')
   const [model, setModel] = useState('')
+  // The staged effort rides the staged pair: '' = inherit the global value
+  // (the select's first option); reset on every provider/model transition
+  // and reloaded through loadReasoning (issue #142).
+  const [effort, setEffort] = useState('')
 
   // Open is a refresh point (fetch on menu open): every open refetches and
   // marks the current signal epoch consumed, so the watcher below does not
@@ -238,6 +242,34 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
     const pair = snapshot.effectiveModel !== undefined
       ? `${snapshot.effectiveModel.provider}/${snapshot.effectiveModel.model}`
       : undefined
+    // ONE `Effort:` line from the recorded resolution, with the same source
+    // wording as `/advisor status` — rendered only when the snapshot carries
+    // both the record and the effective route it names; the surface never
+    // invents a value (issue #142, AC2/AC6).
+    let effortLine: string | null = null
+    if (snapshot.reasoningEffort !== undefined && snapshot.effectiveModel !== undefined) {
+      const route = `${snapshot.effectiveModel.provider}/${snapshot.effectiveModel.model}`
+      const record = snapshot.reasoningEffort
+      switch (record.source) {
+        case 'pending':
+          effortLine = t('sessionEffortPending')
+          break
+        case 'configured':
+          effortLine = `${record.effective} ${t('sessionEffortConfigured')}`
+          break
+        case 'auto':
+          effortLine = `${record.effective} ${t('sessionEffortAuto', { route })}`
+          break
+        case 'fallback-undeclared':
+          effortLine = `${record.effective} ${t('sessionEffortFallback', { configured: record.configured ?? '', route })}`
+          break
+        case 'none':
+          effortLine = t('sessionEffortNone', { route })
+          break
+        default:
+          effortLine = null
+      }
+    }
     body = (
       <>
         {snapshot.enabled ? null : <p className={styles.notice}>{t('sessionAdvisorOff')}</p>}
@@ -254,6 +286,7 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
               )
             : null}
         </p>
+        {effortLine !== null ? <p className={styles.routeLine}>{t('sessionEffort')}: {effortLine}</p> : null}
         <p className={styles.mutedLine}>{t('sessionLifetime')}</p>
         {state.error !== null ? <p className={styles.error} role="status">{state.error}</p> : null}
         <div className={styles.controls}>
@@ -267,6 +300,7 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
                 const next = event.target.value
                 setProvider(next)
                 setModel('')
+                setEffort('')
                 if (next !== '') void directory.ensureModels(next)
               }}
             >
@@ -280,11 +314,37 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
               className={styles.select}
               value={model}
               disabled={busy || provider === '' || (directoryState.modelsByProvider[provider]?.length ?? 0) === 0}
-              onChange={(event) => { setModel(event.target.value) }}
+              onChange={(event) => {
+                const next = event.target.value
+                setModel(next)
+                // A new model re-inherits the effort; its declared ids reload
+                // through the shared capability endpoint (no lookup without
+                // a chosen model).
+                setEffort('')
+                if (next !== '') void controller.loadReasoning(provider, next)
+              }}
             >
               <option value="">{t('modelPlaceholder')}</option>
               {(directoryState.modelsByProvider[provider] ?? []).map((option) => (
                 <option key={option.id} value={option.id}>{option.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className={styles.selectRow}>
+            {/* Inherit global + the declared ids of the currently selected
+                model. Disabled while a lookup is loading or no model is
+                chosen; a failed lookup keeps the select usable on the last
+                known options. */}
+            <select
+              aria-label={t('sessionEffort')}
+              className={styles.select}
+              value={effort}
+              disabled={busy || provider === '' || model === '' || state.reasoningStatus === 'loading'}
+              onChange={(event) => { setEffort(event.target.value) }}
+            >
+              <option value="">{t('sessionEffortInherit')}</option>
+              {state.reasoningEfforts.map((option) => (
+                <option key={option.id} value={option.id}>{option.name || option.id}</option>
               ))}
             </select>
           </div>
@@ -306,7 +366,7 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
               type="button"
               className={styles.pin}
               disabled={busy || provider === '' || model === ''}
-              onClick={() => { void controller.setSessionModel(provider, model) }}
+              onClick={() => { void controller.setSessionModel(provider, model, effort === '' ? undefined : effort) }}
             >
               {busy ? t('sessionPending') : t('sessionPinAction')}
             </button>
