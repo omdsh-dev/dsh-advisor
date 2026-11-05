@@ -881,16 +881,17 @@ describe('session model override — reasoning effort pin (GitHub issue #142)', 
     await invokeAdvisor(handler, ' model set other/other-model', session)
     const rejected = textOf(await invokeAdvisor(handler, ' model set stub/stub-model:medium', session))
     expect(rejected).toContain('Not set:')
-    // Structured facts: the reply names the model and the rejected effort, and
-    // lists BOTH declared ids inside the parenthesised group. Pinning the exact
-    // sentence would couple the assertion to separators and id ordering.
-    expect(rejected).toContain('stub/stub-model')
-    expect(rejected).toContain('"medium"')
+    // The route clause itself: a bare model substring is also satisfied by the
+    // remedy sentence, so pin `"<effort>" is not declared by <route>`.
+    expect(rejected).toMatch(/"medium" is not declared by stub\/stub-model\b/)
+    // Declared ids as TOKENS inside the `(declared: …)` group: split on a
+    // separator class, so ordering and separators are free but a concatenation
+    // such as `off-high` is a single token and fails.
     const declaredGroup = /\(declared: ([^)]*)\)/.exec(rejected)
     expect(declaredGroup).not.toBeNull()
-    const declaredIds = declaredGroup?.[1] ?? ''
-    expect(declaredIds).toMatch(/\boff\b/)
-    expect(declaredIds).toMatch(/\bhigh\b/)
+    const declaredIds = (declaredGroup?.[1] ?? '').split(/[,\s/|;]+/).filter((id) => id.length > 0)
+    expect(declaredIds).toEqual(expect.arrayContaining(['off', 'high']))
+    expect(declaredGroup?.[1] ?? '').not.toContain('off-high')
     expect(rejected).toContain('if the ":" belongs to the model id')
     expect(rejected).toContain('pin the full id with an explicit effort suffix')
     // No fabricated full-id example (the truncated model's ids do not vouch
