@@ -104,10 +104,10 @@ const SUBCOMMAND_DESCRIPTIONS: Readonly<Record<AdvisorSubcommand, { description:
     },
   },
   model: {
-    description: 'Show or re-route the per-session reviewer model (model set <provider> <model> | model reset)',
+    description: 'Show or re-route the per-session reviewer model (model set <provider>/<model>[:<effort>] | model reset)',
     descriptions: {
-      zh: '查看或改设本会话的评审模型（model set <供应商> <模型> | model reset）',
-      en: 'Show or re-route the per-session reviewer model (model set <provider> <model> | model reset)',
+      zh: '查看或改设本会话的评审模型（model set <供应商>/<模型>[:<强度>] | model reset）',
+      en: 'Show or re-route the per-session reviewer model (model set <provider>/<model>[:<effort>] | model reset)',
     },
   },
 }
@@ -115,10 +115,10 @@ const SUBCOMMAND_DESCRIPTIONS: Readonly<Record<AdvisorSubcommand, { description:
 /** zh/en copy per `/advisor model` completion node. */
 const MODEL_SUBCOMMAND_DESCRIPTIONS: Readonly<Record<AdvisorModelSubcommand, { description: string; descriptions: TuiLocalizedDescriptions }>> = {
   set: {
-    description: 'Pin the reviewer model for this session only (separate args; ids may contain /)',
+    description: 'Pin the reviewer model and optionally its reasoning effort for this session only (<provider>/<model>[:<effort>])',
     descriptions: {
-      zh: '仅为本会话钉住评审模型（参数分开传，模型 id 可含 /）',
-      en: 'Pin the reviewer model for this session only (separate args; ids may contain /)',
+      zh: '仅为本会话钉住评审模型，可同时指定推理强度（<供应商>/<模型>[:<强度>]）',
+      en: 'Pin the reviewer model and optionally its reasoning effort for this session only (<provider>/<model>[:<effort>])',
     },
   },
   reset: {

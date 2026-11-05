@@ -40,6 +40,9 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { MemoryEntryConfig, harnessAdvisorPlugin } from './support/memory-settings'
+import { ownerPeer, provideRemoteAccess } from './support/typert-gateway'
+import TypertGatewayService from '@deepseek-ai/dsh-api-gateway'
+import { TypertRegistry } from '@deepseek-ai/dsh-typert-registry'
 import { LlmAdapter, LlmRuntime, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
@@ -154,6 +157,21 @@ class HangingResolveAdapter extends GatedStubAdapter {
   }
 }
 
+/**
+ * Stub adapter for a model that declares NO reasoning metadata (the base
+ * adapter shape). Used to pin the AC4 arm: an explicit effort cannot be
+ * validated against a model that declares none, so it is rejected.
+ */
+class NoReasoningAdapter extends LlmAdapter {
+  override resolveModel(provider: string, model: string, _signal?: undefined): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({ provider, id: model, name: model })
+  }
+
+  override async * stream(): AsyncIterable<StreamChunk> {
+    throw new Error('NoReasoningAdapter: no model call is expected')
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Composed harness (loader double + real plugin + commands registry)
 // ---------------------------------------------------------------------------
@@ -186,6 +204,12 @@ async function composeOverrideHarness(
 }> {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
+  // The wire surface (GitHub issue #142): the SAME elected owner's session
+  // face is reachable through the typert gateway, so the snapshot assertions
+  // read the real projection instead of a hand-built stub.
+  await ctx.plugin(TypertRegistry)
+  await ctx.plugin(TypertGatewayService)
+  provideRemoteAccess(ctx)
   const adapter = new GatedStubAdapter(replies)
   ctx.llm.registerAdapter(['stub', 'other'], adapter)
   ctx.provide('sessions', {} as never)
@@ -209,6 +233,7 @@ async function composeOverrideHarness(
     },
   } as never)
   await vi.waitFor(() => expect(definitions).toHaveLength(1))
+  await vi.waitFor(() => expect(ctx.reflect.props['advisor']).toEqual({ type: 'service' }))
   return { ctx, adapter, entry, handler: definitions[0]!.handler, definitions, agents, fiber: fiber as unknown as { dispose(): Promise<void> } }
 }
 
@@ -359,7 +384,7 @@ describe('session model override — A/B isolation + inheritor tracking (spec §
     const sessionB = makeSession('B')
 
     // Pin session A to the `other` route; B stays on the global default.
-    const setResult = await invokeAdvisor(handler, ' model set other other-model', sessionA.session)
+    const setResult = await invokeAdvisor(handler, ' model set other/other-model', sessionA.session)
     expect(textOf(setResult)).toContain('Session model pinned: other/other-model')
 
     feed(ctx, sessionA.session, sessionA.log, simpleTurn(1, 'a1', 'a1r'))
@@ -388,7 +413,7 @@ describe('session model override — A/B isolation + inheritor tracking (spec §
     const configBefore = await invokeAdvisor(handler, ' config', session)
     expect(textOf(configBefore)).toContain('Model: stub/stub-model')
 
-    await invokeAdvisor(handler, ' model set other other-model', session)
+    await invokeAdvisor(handler, ' model set other/other-model', session)
 
     // /advisor config reads the SESSION-LESS entry config — still the global
     // default (a session pin must never leak into the config readback).
@@ -431,7 +456,7 @@ describe('session model override — explicit gate applies AFTER session resolut
     expect(textOf(before)).toContain('provider and model are missing')
 
     // Pin: the pair satisfies the gate for THIS session only — the advisor runs.
-    const setResult = await invokeAdvisor(handler, ' model set stub stub-model', session)
+    const setResult = await invokeAdvisor(handler, ' model set stub/stub-model', session)
     expect(textOf(setResult)).toContain('Session model pinned: stub/stub-model')
     feed(ctx, session, log, simpleTurn(2, 'u2', 'a2'))
     await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
@@ -447,7 +472,7 @@ describe('session model override — explicit gate applies AFTER session resolut
     const { session, log } = makeSession('s1')
 
     // Turn 1 holds a blocked call on the pinned route; turn 2 queues BEHIND it.
-    await invokeAdvisor(handler, ' model set stub stub-model', session)
+    await invokeAdvisor(handler, ' model set stub/stub-model', session)
     adapter.blockNext()
     feed(ctx, session, log, simpleTurn(1, 'u1', 'a1'))
     await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
@@ -497,7 +522,7 @@ describe('session model override — explicit gate applies AFTER session resolut
 
     // The pin still validates (the LLM service is config-independent) and
     // records, but the effective route stays fail-closed.
-    const setResult = await invokeAdvisor(handler, ' model set other other-model', session)
+    const setResult = await invokeAdvisor(handler, ' model set other/other-model', session)
     expect(textOf(setResult)).toContain('Session model pinned')
     const status = await invokeAdvisor(handler, ' status', session)
     expect(textOf(status)).toContain('unknown config key "evil"')
@@ -523,7 +548,7 @@ describe('session model override — enable-switch independence (spec §5.3)', (
 
     await invokeAdvisor(handler, ' off', session)
     // Pin while OFF: recorded (committed), but no runtime, no model call.
-    const setResult = await invokeAdvisor(handler, ' model set other other-model', session)
+    const setResult = await invokeAdvisor(handler, ' model set other/other-model', session)
     expect(textOf(setResult)).toContain('Session model pinned: other/other-model')
     const status = await invokeAdvisor(handler, ' status', session)
     expect(textOf(status)).toContain('Advisor: disabled')
@@ -554,7 +579,7 @@ describe('session model override — enable-switch independence (spec §5.3)', (
 
     // Pin the SAME route: outcome 'unchanged' — the in-flight call is NOT
     // aborted (an equal pin restarts nothing) and its note still delivers.
-    const setResult = await invokeAdvisor(handler, ' model set stub stub-model', session)
+    const setResult = await invokeAdvisor(handler, ' model set stub/stub-model', session)
     expect(textOf(setResult)).toContain('same effective route, runtime untouched')
     const status = await invokeAdvisor(handler, ' status', session)
     expect(textOf(status)).toContain('(session override)') // recorded as a pin
@@ -591,7 +616,7 @@ describe('session model override — validation fencing (spec §5.3)', () => {
     const { session } = makeSession('s1')
 
     vi.useFakeTimers()
-    const pending = invokeAdvisor(handler, ' model set hang hang-model', session)
+    const pending = invokeAdvisor(handler, ' model set hang/hang-model', session)
     const settled = pending.then(textOf)
     await vi.advanceTimersByTimeAsync(59_000)
     let done = false
@@ -620,7 +645,7 @@ describe('session model override — validation fencing (spec §5.3)', () => {
     const { session } = makeSession('s1')
     const controller = new AbortController()
 
-    const pending = invokeAdvisor(handler, ' model set hang hang-model', session, controller.signal)
+    const pending = invokeAdvisor(handler, ' model set hang/hang-model', session, controller.signal)
     await flush()
     controller.abort()
     const reply = textOf(await pending)
@@ -642,10 +667,10 @@ describe('session model override — validation fencing (spec §5.3)', () => {
     publishAgent(ctx, agents, 's1')
     const { session } = makeSession('s1')
 
-    const first = invokeAdvisor(handler, ' model set hang hang-model', session)
+    const first = invokeAdvisor(handler, ' model set hang/hang-model', session)
     await flush()
     // Second set starts while the first is unresolved: generation bumps.
-    const second = invokeAdvisor(handler, ' model set other other-model', session)
+    const second = invokeAdvisor(handler, ' model set other/other-model', session)
     expect(textOf(await second)).toContain('Session model pinned: other/other-model')
 
     hanging.releaseResolve()
@@ -665,7 +690,7 @@ describe('session model override — validation fencing (spec §5.3)', () => {
     publishAgent(ctx, agents, 's1')
     const { session } = makeSession('s1')
 
-    const pending = invokeAdvisor(handler, ' model set hang hang-model', session)
+    const pending = invokeAdvisor(handler, ' model set hang/hang-model', session)
     await flush()
     const reset = await invokeAdvisor(handler, ' model reset', session)
     expect(textOf(reset)).toContain('already inherits') // nothing pinned yet
@@ -687,7 +712,7 @@ describe('session model override — validation fencing (spec §5.3)', () => {
     publishAgent(ctx, agents, 's1')
     const { session } = makeSession('s1')
 
-    const pending = invokeAdvisor(handler, ' model set hang hang-model', session)
+    const pending = invokeAdvisor(handler, ' model set hang/hang-model', session)
     await flush()
     // Dispose the session while the lookup is in flight: the wiring clears the
     // override state AND the registry entry (the liveness fence).
@@ -711,7 +736,7 @@ describe('session model override — validation fencing (spec §5.3)', () => {
     publishAgent(ctx, agents, 's1')
     const { session } = makeSession('s1')
 
-    const pending = invokeAdvisor(handler, ' model set hang hang-model', session)
+    const pending = invokeAdvisor(handler, ' model set hang/hang-model', session)
     await flush()
     await fiber.dispose() // owner teardown: release the claim + abort validations
     hanging.releaseResolve()
@@ -741,7 +766,7 @@ describe('session model override — route change effect (spec §5.3)', () => {
 
     // ...the pin lands mid-flight: the old call aborts, the queued delta is
     // dropped, the cursor re-seeds.
-    const setResult = await invokeAdvisor(handler, ' model set other other-model', session)
+    const setResult = await invokeAdvisor(handler, ' model set other/other-model', session)
     expect(textOf(setResult)).toContain('Session model pinned: other/other-model')
 
     // The late old-route call settles — its note must NEVER deliver.
@@ -775,7 +800,7 @@ describe('session model override — lifetime (spec §5.3 + KD-5)', () => {
     publishAgent(ctx, agents, 's1')
     const { session } = makeSession('s1')
 
-    await invokeAdvisor(handler, ' model set other other-model', session)
+    await invokeAdvisor(handler, ' model set other/other-model', session)
     let model = await invokeAdvisor(handler, ' model', session)
     expect(textOf(model)).toContain('Source: session override')
 
@@ -813,7 +838,220 @@ describe('session model override — single elected owner (spec §5.3)', () => {
     expect(definitions).toHaveLength(1) // no duplicate registration
 
     // The elected owner still serves the model surface.
-    const result = await invokeAdvisor(handler, ' model set other other-model', session)
+    const result = await invokeAdvisor(handler, ' model set other/other-model', session)
     expect(textOf(result)).toContain('Session model pinned: other/other-model')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 9. Session reasoning-effort pin (GitHub issue #142 · AC1–AC5 live wiring)
+// ---------------------------------------------------------------------------
+
+describe('session model override — reasoning effort pin (GitHub issue #142)', () => {
+  it('pinning <model>:<effort> sends that effort and reports it as configured', async () => {
+    const { ctx, adapter, handler, agents } = await composeOverrideHarness(
+      { provider: 'stub', model: 'stub-model' },
+      [textReply('effort note')],
+    )
+    publishAgent(ctx, agents, 's1')
+    const { session, log } = makeSession('s1')
+
+    const setResult = await invokeAdvisor(handler, ' model set other/other-model:high', session)
+    expect(textOf(setResult)).toContain('Session model pinned: other/other-model:high')
+
+    feed(ctx, session, log, simpleTurn(1, 'u1', 'a1'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+    expect(adapter.requests[0]).toMatchObject({ provider: 'other', model: 'other-model' })
+    expect(adapter.requests[0]!.reasoningEffort).toBe(ReasoningEffortId('high'))
+
+    const status = textOf(await invokeAdvisor(handler, ' status', session))
+    expect(status).toContain('Effort: high (configured)')
+    // Exactly one Effort line on the status surface (AC1).
+    expect(status.split('\n').filter((line) => line.startsWith('Effort:'))).toHaveLength(1)
+  })
+
+  it('an effort the resolved model does not declare is rejected before commit; the selection is untouched (AC4)', async () => {
+    const { ctx, adapter, handler, agents } = await composeOverrideHarness(
+      { provider: 'stub', model: 'stub-model' },
+      [textReply('still the previous route')],
+    )
+    publishAgent(ctx, agents, 's1')
+    const { session, log } = makeSession('s1')
+
+    await invokeAdvisor(handler, ' model set other/other-model', session)
+    const rejected = textOf(await invokeAdvisor(handler, ' model set stub/stub-model:medium', session))
+    expect(rejected).toContain('Not set:')
+    // The rejection names the declared ids so the operator can retry.
+    expect(rejected).toContain('not declared')
+    expect(rejected).toContain('off')
+    expect(rejected).toContain('high')
+
+    // The previous selection stayed in place — route AND (absent) effort.
+    const status = textOf(await invokeAdvisor(handler, ' status', session))
+    expect(status).toContain('Model: other/other-model (session override)')
+    feed(ctx, session, log, simpleTurn(1, 'u1', 'a1'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+    expect(adapter.requests[0]).toMatchObject({ provider: 'other', model: 'other-model' })
+    expect(adapter.requests[0]!.reasoningEffort).toBe(ReasoningEffortId('off'))
+  })
+
+  it('a model that declares no reasoning efforts rejects any explicit effort (AC4)', async () => {
+    const { ctx, handler, agents } = await composeOverrideHarness(
+      { provider: 'stub', model: 'stub-model' },
+      [],
+    )
+    ctx.llm.registerAdapter(['plain'], new NoReasoningAdapter())
+    publishAgent(ctx, agents, 's1')
+    const { session } = makeSession('s1')
+
+    const rejected = textOf(await invokeAdvisor(handler, ' model set plain/plain-model:high', session))
+    expect(rejected).toContain('Not set:')
+    expect(rejected).toContain('declares no reasoning efforts')
+    const status = textOf(await invokeAdvisor(handler, ' status', session))
+    expect(status).toContain('Model: stub/stub-model (global default)')
+  })
+
+  it('reset clears the pinned effort and the session inherits again (AC5)', async () => {
+    const { ctx, adapter, handler, agents } = await composeOverrideHarness(
+      { provider: 'stub', model: 'stub-model' },
+      [textReply('after reset')],
+    )
+    publishAgent(ctx, agents, 's1')
+    const { session, log } = makeSession('s1')
+
+    await invokeAdvisor(handler, ' model set other/other-model:high', session)
+    expect(textOf(await invokeAdvisor(handler, ' model', session))).toContain('Effort: high (session pin')
+
+    const reset = textOf(await invokeAdvisor(handler, ' model reset', session))
+    expect(reset).toContain('pin removed')
+    const after = textOf(await invokeAdvisor(handler, ' model', session))
+    expect(after).toContain('Source: global default')
+    expect(after).not.toContain('session pin')
+
+    // The next call inherits: the global value is unset, so the smallest
+    // declared effort is sent — never the dropped pin.
+    feed(ctx, session, log, simpleTurn(1, 'u1', 'a1'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+    expect(adapter.requests[0]!.reasoningEffort).toBe(ReasoningEffortId('off'))
+  })
+
+  it('an effort-only pin rebuilds the runtime exactly once and the next call uses the new effort', async () => {
+    const { ctx, adapter, handler, agents } = await composeOverrideHarness(
+      { provider: 'stub', model: 'stub-model' },
+      [textReply('first'), textReply('second')],
+    )
+    publishAgent(ctx, agents, 's1')
+    const { session, log } = makeSession('s1')
+
+    feed(ctx, session, log, simpleTurn(1, 'u1', 'a1'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+    expect(adapter.requests[0]!.reasoningEffort).toBe(ReasoningEffortId('off'))
+    expect(textOf(await invokeAdvisor(handler, ' status', session)))
+      .toContain('Effort: off (auto — smallest declared by stub/stub-model)')
+
+    // Same provider/model with a different effort: the signature MUST change,
+    // otherwise the runtime keeps the stale effort for its whole lifetime.
+    const setResult = textOf(await invokeAdvisor(handler, ' model set stub/stub-model:high', session))
+    expect(setResult).toContain('Session model pinned: stub/stub-model:high')
+    expect(setResult).not.toContain('runtime untouched')
+    // A rebuilt runtime has not resolved yet.
+    expect(textOf(await invokeAdvisor(handler, ' status', session)))
+      .toContain('Effort: pending — resolved on the first review call')
+
+    feed(ctx, session, log, simpleTurn(2, 'u2', 'a2'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(2))
+    expect(adapter.requests[1]!.reasoningEffort).toBe(ReasoningEffortId('high'))
+    // Exactly one new call for one delta — no stale second runtime surviving.
+    await flush()
+    expect(adapter.requests).toHaveLength(2)
+    expect(textOf(await invokeAdvisor(handler, ' status', session))).toContain('Effort: high (configured)')
+  })
+
+  it('the wire snapshot carries the pinned effort and the recorded resolution', async () => {
+    const { ctx, adapter, handler, agents } = await composeOverrideHarness(
+      { provider: 'stub', model: 'stub-model' },
+      [textReply('wire note')],
+    )
+    publishAgent(ctx, agents, 's1')
+    const { session, log } = makeSession('s1')
+
+    await invokeAdvisor(handler, ' model set other/other-model:high', session)
+    feed(ctx, session, log, simpleTurn(1, 'u1', 'a1'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+
+    const result = await ctx.typertGateway.invoke({
+      namespace: 'advisor',
+      method: 'getSession',
+      args: { sessionId: 's1' },
+      peer: ownerPeer(ctx),
+    })
+    expect(result).toEqual({
+      snapshot: {
+        sessionId: 's1',
+        enabled: true,
+        lifetime: 'live-session',
+        modelOverride: { provider: 'other', model: 'other-model' },
+        modelSource: 'session',
+        effectiveModel: { provider: 'other', model: 'other-model' },
+        reasoningEffortOverride: 'high',
+        reasoningEffort: { source: 'configured', effective: 'high', configured: 'high' },
+      },
+    })
+  })
+
+  it('an inheriting session omits the override key and reports pending before its first call', async () => {
+    const { ctx, handler, agents } = await composeOverrideHarness(
+      { provider: 'stub', model: 'stub-model' },
+      [],
+    )
+    publishAgent(ctx, agents, 's1')
+    const { session } = makeSession('s1')
+    await invokeAdvisor(handler, ' model set stub/stub-model', session)
+
+    const result = await ctx.typertGateway.invoke({
+      namespace: 'advisor',
+      method: 'getSession',
+      args: { sessionId: 's1' },
+      peer: ownerPeer(ctx),
+    })
+    const snapshot = (result as { snapshot: Record<string, unknown> }).snapshot
+    // Absent keys are omitted, never present-as-undefined (typert result validation).
+    expect('reasoningEffortOverride' in snapshot).toBe(false)
+    expect(snapshot['reasoningEffort']).toEqual({ source: 'pending' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 10. Global effort edits vs pinned efforts (GitHub issue #142 · AC7)
+// ---------------------------------------------------------------------------
+
+describe('session model override — global effort edits (GitHub issue #142 · AC7)', () => {
+  it('a global reasoningEffort edit reaches inheritors, never a session with a pinned effort', async () => {
+    const { ctx, adapter, entry, handler, agents } = await composeOverrideHarness(
+      { provider: 'stub', model: 'stub-model' },
+      [textReply('inheritor'), textReply('pinned')],
+    )
+    publishAgent(ctx, agents, 'A')
+    publishAgent(ctx, agents, 'B')
+    const sessionA = makeSession('A')
+    const sessionB = makeSession('B')
+
+    // B pins the smallest declared effort; A inherits whatever the global says.
+    await invokeAdvisor(handler, ' model set stub/stub-model:off', sessionB.session)
+
+    // The global edit lands: 'high' is NOT the automatic (smallest) choice, so
+    // an inheritor sending 'high' can only have followed this edit.
+    entry.commit(ctx, { reasoningEffort: 'high' })
+
+    feed(ctx, sessionA.session, sessionA.log, simpleTurn(1, 'a1', 'a1r'))
+    feed(ctx, sessionB.session, sessionB.log, simpleTurn(1, 'b1', 'b1r'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(2))
+
+    const efforts = adapter.requests.map((options) => String(options.reasoningEffort)).sort()
+    expect(efforts).toEqual(['high', 'off'])
+    expect(textOf(await invokeAdvisor(handler, ' status', sessionA.session)))
+      .toContain('Effort: high (configured)')
+    expect(textOf(await invokeAdvisor(handler, ' status', sessionB.session)))
+      .toContain('Effort: off (configured)')
   })
 })

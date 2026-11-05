@@ -70,6 +70,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { createEmissionGuard } from './emission-guard.js'
 import type { EmissionGuard } from './emission-guard.js'
+import type { AdvisorReasoningEffortState } from './commands.js'
 import type { Delta } from './transcript.js'
 
 // ---------------------------------------------------------------------------
@@ -477,6 +478,12 @@ export class AdvisorRuntime {
   private readonly reasoningEffortCache = new Map<string, readonly LlmReasoningEffortInfo[]>()
   /** One-shot latch for the undeclared-configured-effort warn line (log-once per runtime). */
   private reasoningEffortWarned = false
+  /**
+   * The last DEFINITIVE effort resolution this runtime performed (GitHub issue
+   * #142) — the read-only status outlet. `undefined` until the first call
+   * resolves; a failed lookup is advisory and never overwrites a record.
+   */
+  private reasoningEffortResolved: AdvisorReasoningEffortState | undefined
 
   private readonly queue: Delta[] = []
   private state: AdvisorRuntimeStatus = 'running'
@@ -536,6 +543,16 @@ export class AdvisorRuntime {
    */
   get lastActivity(): number | undefined {
     return this.lastActivityAt
+  }
+
+  /**
+   * GitHub issue #142 — the last DEFINITIVE reasoning-effort resolution this
+   * runtime performed (what was sent, and why), or `undefined` before the
+   * first review call resolved it. Read-only status outlet, same style as
+   * `pendingCount`/`lastActivity`.
+   */
+  get reasoningEffortResolution(): AdvisorReasoningEffortState | undefined {
+    return this.reasoningEffortResolved
   }
 
   /**
@@ -1015,12 +1032,23 @@ export class AdvisorRuntime {
           { provider: this.provider, model: this.model, configured: this.reasoningEffort },
         )
       }
+      // GitHub issue #142: definitive verdict — the option is omitted.
+      this.reasoningEffortResolved = {
+        source: 'none',
+        ...(this.reasoningEffort === undefined ? {} : { configured: this.reasoningEffort }),
+      }
       return undefined
     }
     const configured = this.reasoningEffort
-    if (configured === undefined) return smallest.id
+    if (configured === undefined) {
+      this.reasoningEffortResolved = { source: 'auto', effective: smallest.id }
+      return smallest.id
+    }
     const declared = efforts.find((entry) => entry.id === ReasoningEffortId(configured))
-    if (declared !== undefined) return declared.id
+    if (declared !== undefined) {
+      this.reasoningEffortResolved = { source: 'configured', effective: declared.id, configured }
+      return declared.id
+    }
     if (!this.reasoningEffortWarned) {
       this.reasoningEffortWarned = true
       this.logger.warn(
@@ -1028,6 +1056,7 @@ export class AdvisorRuntime {
         { provider: this.provider, model: this.model, configured, fallback: smallest.id },
       )
     }
+    this.reasoningEffortResolved = { source: 'fallback-undeclared', effective: smallest.id, configured }
     return smallest.id
   }
 }

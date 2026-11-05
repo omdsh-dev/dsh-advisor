@@ -106,7 +106,7 @@ class FakeController implements AdvisorCommandController {
   nextSetOutcome: AdvisorSetModelOutcome
   nextResetOutcome: AdvisorResetModelOutcome
   readonly setCalls: Array<{ sessionId: string; enabled: boolean; sessionLength?: number }> = []
-  readonly setModelCalls: Array<{ sessionId: string; provider: string; model: string; sessionIdArg: string; signal?: AbortSignal }> = []
+  readonly setModelCalls: Array<{ sessionId: string; provider: string; model: string; reasoningEffort?: string; sessionIdArg: string; signal?: AbortSignal }> = []
   readonly resetModelCalls: Array<{ sessionId: string; sessionLength?: number }> = []
 
   constructor(status: AdvisorSessionStatus, config?: AdvisorComposedConfig) {
@@ -138,10 +138,11 @@ class FakeController implements AdvisorCommandController {
     sessionId: string,
     provider: string,
     model: string,
+    reasoningEffort: string | undefined,
     agent: Agent,
     signal?: AbortSignal,
   ): Promise<AdvisorSetModelOutcome> {
-    this.setModelCalls.push({ sessionId, provider, model, sessionIdArg: agent.session.id, signal })
+    this.setModelCalls.push({ sessionId, provider, model, reasoningEffort, sessionIdArg: agent.session.id, signal })
     return Promise.resolve(this.nextSetOutcome)
   }
 
@@ -296,7 +297,7 @@ describe('USAGE (unknown-subcommand fallback)', () => {
   it('header and subcommand list include config and the model surface', () => {
     expect(USAGE).toContain('Usage: /advisor [on|off|status|config|model]')
     expect(USAGE).toContain('  /advisor config   show the composed advisor config (global defaults readback)')
-    expect(USAGE).toContain('/advisor model set <provider> <model>')
+    expect(USAGE).toContain('/advisor model set <provider>/<model>[:<effort>]')
     expect(USAGE).toContain('/advisor model reset')
   })
 })
@@ -930,35 +931,55 @@ describe('parseAdvisorCommand — model forms (spec §5.3)', () => {
   })
 })
 
-describe('parseModelSetArgs (atomic-pair validation, spec §5.3)', () => {
-  it('accepts exactly two args — outer trim, case retained', () => {
-    expect(parseModelSetArgs('DeepSeek-Official deepseek-V4-Flash')).toEqual({
-      ok: true,
-      provider: 'DeepSeek-Official',
-      model: 'deepseek-V4-Flash',
-    })
-    expect(parseModelSetArgs('  p   m  ')).toEqual({ ok: true, provider: 'p', model: 'm' })
-  })
-
-  it('model ids containing / are fine (separate args)', () => {
-    expect(parseModelSetArgs('openrouter meta-llama/llama-3-70b')).toEqual({
+describe('parseModelSetArgs (one-token grammar, spec §5.3 / GitHub issue #142)', () => {
+  it('the FIRST / splits provider from model, so model ids may contain /', () => {
+    expect(parseModelSetArgs('openrouter/meta-llama/llama-3-70b')).toEqual({
       ok: true,
       provider: 'openrouter',
       model: 'meta-llama/llama-3-70b',
     })
+    expect(parseModelSetArgs('DeepSeek-Official/deepseek-V4-Flash')).toEqual({
+      ok: true,
+      provider: 'DeepSeek-Official',
+      model: 'deepseek-V4-Flash',
+    })
   })
 
-  it('blank / partial pairs rejected', () => {
-    expect(parseModelSetArgs('')).toMatchObject({ ok: false })
+  it('the LAST : after the / splits model from effort, so model ids may contain :', () => {
+    expect(parseModelSetArgs('p/m:high')).toEqual({ ok: true, provider: 'p', model: 'm', reasoningEffort: 'high' })
+    expect(parseModelSetArgs('p/model:variant:high')).toEqual({
+      ok: true,
+      provider: 'p',
+      model: 'model:variant',
+      reasoningEffort: 'high',
+    })
+  })
+
+  it('a pair without an effort is valid (absent = inherit the global value)', () => {
+    const parsed = parseModelSetArgs('  p/m  ')
+    expect(parsed).toEqual({ ok: true, provider: 'p', model: 'm' })
+    expect('reasoningEffort' in parsed).toBe(false)
+  })
+
+  it('an empty effort after the last : is a usage rejection, never a silent inherit', () => {
+    expect(parseModelSetArgs('p/m:')).toMatchObject({ ok: false, reason: expect.stringContaining('effort') })
+  })
+
+  it('missing provider / model / separator rejected', () => {
+    expect(parseModelSetArgs('')).toMatchObject({ ok: false, reason: expect.stringContaining('/advisor model set') })
     expect(parseModelSetArgs('   ')).toMatchObject({ ok: false })
-    expect(parseModelSetArgs('solo')).toMatchObject({ ok: false, reason: expect.stringContaining('incomplete pair') })
+    expect(parseModelSetArgs('no-slash')).toMatchObject({ ok: false, reason: expect.stringContaining('<provider>/<model>') })
+    expect(parseModelSetArgs('/m')).toMatchObject({ ok: false, reason: expect.stringContaining('provider') })
+    expect(parseModelSetArgs('p/')).toMatchObject({ ok: false, reason: expect.stringContaining('model') })
   })
 
-  it('extra fields rejected', () => {
-    expect(parseModelSetArgs('p m extra')).toMatchObject({ ok: false, reason: expect.stringContaining('too many') })
-    // A quoted "identifier with a space" splits on the whitespace — structurally
-    // unable to form a valid pair (whitespace-containing identifiers rejected).
-    expect(parseModelSetArgs('"p x" m')).toMatchObject({ ok: false })
+  it('the retired two-argument form is rejected with a usage message naming the new form', () => {
+    const parsed = parseModelSetArgs('p m')
+    expect(parsed).toMatchObject({ ok: false })
+    expect(parsed.ok ? '' : parsed.reason).toContain('/advisor model set <provider>/<model>[:<effort>]')
+    expect(parsed.ok ? '' : parsed.reason).toContain('retired')
+    // A second whitespace-separated token is the same retired form, not a third field.
+    expect(parseModelSetArgs('p/m high')).toMatchObject({ ok: false })
   })
 })
 
@@ -975,6 +996,14 @@ describe('AdvisorSessionOverrides — model pair API (spec §5.3)', () => {
     expect(overrides.model('s2')).toBeUndefined() // per-session isolation
     expect(overrides.clearModel('s1')).toBe(true)
     expect(overrides.clearModel('s1')).toBe(false) // reset noop on an empty entry
+    expect(overrides.model('s1')).toBeUndefined()
+  })
+
+  it('the pair carries an optional effort; clearing the pair clears the effort with it (AC5)', () => {
+    const overrides = new AdvisorSessionOverrides()
+    overrides.setModel('s1', { provider: 'p', model: 'm', reasoningEffort: 'high' })
+    expect(overrides.model('s1')).toEqual({ provider: 'p', model: 'm', reasoningEffort: 'high' })
+    overrides.clearModel('s1')
     expect(overrides.model('s1')).toBeUndefined()
   })
 
@@ -1055,6 +1084,56 @@ describe('advisorStatusText modelSource label (spec §5.3)', () => {
   })
 })
 
+describe('advisorStatusText Effort line (AC1/AC2, GitHub issue #142)', () => {
+  const withEffort = (reasoningEffort: AdvisorSessionStatus['reasoningEffort']): string =>
+    advisorStatusText(baseStatus({
+      enabled: true,
+      provider: 'p',
+      model: 'm',
+      modelSource: 'session',
+      runtimeStatus: 'running',
+      reasoningEffort,
+    }))
+
+  it('omits the line entirely when the session has no live runtime (AC2)', () => {
+    const text = advisorStatusText(baseStatus({
+      enabled: true, provider: 'p', model: 'm', modelSource: 'global', runtimeStatus: 'disabled',
+    }))
+    expect(text).not.toContain('Effort:')
+  })
+
+  it('pending: a live runtime that has not resolved yet (AC2)', () => {
+    expect(withEffort({ source: 'pending' })).toContain('Effort: pending — resolved on the first review call')
+  })
+
+  it('configured: the configured id is what the model declares (AC1)', () => {
+    expect(withEffort({ source: 'configured', effective: 'medium', configured: 'medium' }))
+      .toContain('Effort: medium (configured)')
+  })
+
+  it('auto: the smallest declared effort (AC1)', () => {
+    expect(withEffort({ source: 'auto', effective: 'low' }))
+      .toContain('Effort: low (auto — smallest declared by p/m)')
+  })
+
+  it('fallback: the configured id is undeclared — names both ids and the model (AC1)', () => {
+    expect(withEffort({ source: 'fallback-undeclared', effective: 'low', configured: 'medium' }))
+      .toContain('Effort: low (fallback — "medium" is not declared by p/m)')
+  })
+
+  it('none: nothing is sent and the reason is the model, not an invented value (AC1)', () => {
+    expect(withEffort({ source: 'none', configured: 'medium' }))
+      .toContain('Effort: not sent — p/m declares no reasoning efforts')
+    expect(withEffort({ source: 'none' }))
+      .toContain('Effort: not sent — p/m declares no reasoning efforts')
+  })
+
+  it('renders exactly ONE Effort line', () => {
+    const text = withEffort({ source: 'fallback-undeclared', effective: 'low', configured: 'medium' })
+    expect(text.split('\n').filter((line) => line.startsWith('Effort:'))).toHaveLength(1)
+  })
+})
+
 describe('advisorModelText / modelSetText / modelResetText (the /advisor model replies)', () => {
   it('show: effective pair + source + the live-session lifetime', () => {
     const session = advisorModelText({ provider: 'p', model: 'm', source: 'session' })
@@ -1064,19 +1143,29 @@ describe('advisorModelText / modelSetText / modelResetText (the /advisor model r
     expect(session).toContain('never persisted')
     const global = advisorModelText({ provider: 'g', model: 'gm', source: 'global' })
     expect(global).toContain('Source: global default')
-    expect(global).toContain('/advisor model set <provider> <model>')
+    expect(global).toContain('/advisor model set <provider>/<model>[:<effort>]')
+  })
+
+  it('show: a pinned effort is named; an inheriting session prints no Effort line', () => {
+    const pinned = advisorModelText({ provider: 'p', model: 'm', source: 'session', reasoningEffort: 'high' })
+    expect(pinned).toContain('Effort: high (session pin')
+    const inheriting = advisorModelText({ provider: 'p', model: 'm', source: 'session' })
+    expect(inheriting).not.toContain('Effort:')
   })
 
   it('show: missing pair names both remediation paths without inventing a route', () => {
     const text = advisorModelText({ source: 'global' })
     expect(text).toContain('Model: none')
-    expect(text).toContain('/advisor model set <provider> <model>')
+    expect(text).toContain('/advisor model set <provider>/<model>[:<effort>]')
     expect(text).toContain('never persisted')
   })
 
   it('set outcomes: committed / unchanged / rejected / failed / cancelled / superseded / gone', () => {
     const status = baseStatus({ enabled: true, provider: 'p', model: 'm', modelSource: 'session', runtimeStatus: 'running' })
     expect(modelSetText({ kind: 'committed', status })).toContain('Session model pinned: p/m')
+    // A pinned effort is named in the commit reply (AC3).
+    expect(modelSetText({ kind: 'committed', status, reasoningEffort: 'high' }))
+      .toContain('Session model pinned: p/m:high')
     expect(modelSetText({ kind: 'unchanged', status })).toContain('same effective route, runtime untouched')
     expect(modelSetText({ kind: 'rejected', reason: 'too many arguments' })).toContain('Not set: too many arguments')
     expect(modelSetText({ kind: 'failed', reason: 'boom' })).toContain('previous selection untouched')
@@ -1151,7 +1240,7 @@ describe('/advisor model handler dispatch (spec §5.3)', () => {
     const invocation: CommandInvocation = {
       commandId: CommandId('cmd-test-1'),
       agent: fakeAgent('session-1'),
-      rawInput: ' model set p m',
+      rawInput: ' model set p/m',
       attachments: [],
       signal: new AbortController().signal,
     }
@@ -1160,7 +1249,28 @@ describe('/advisor model handler dispatch (spec §5.3)', () => {
     expect(result.text).toContain('Session model pinned: p/m')
     expect(controller.setModelCalls).toHaveLength(1)
     expect(controller.setModelCalls[0]).toMatchObject({ sessionId: 'session-1', provider: 'p', model: 'm', sessionIdArg: 'session-1' })
+    // No effort token = inherit: the controller receives an ABSENT effort.
+    expect(controller.setModelCalls[0]!.reasoningEffort).toBeUndefined()
     expect(controller.setModelCalls[0]!.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('set parses the effort token and passes it to the controller', async () => {
+    const controller = new FakeController(baseStatus())
+    controller.nextSetOutcome = {
+      kind: 'committed',
+      status: baseStatus({ enabled: true, provider: 'p', model: 'm', modelSource: 'session', runtimeStatus: 'running' }),
+      reasoningEffort: 'high',
+    }
+    const handler = registerAndGetHandler(controller)
+    const result = await handler({
+      commandId: CommandId('cmd-test-1'),
+      agent: fakeAgent('session-1'),
+      rawInput: ' model set p/m:high',
+      attachments: [],
+      signal: new AbortController().signal,
+    } as CommandInvocation)
+    expect(result.text).toContain('Session model pinned: p/m:high')
+    expect(controller.setModelCalls[0]).toMatchObject({ provider: 'p', model: 'm', reasoningEffort: 'high' })
   })
 
   it('set surfaces a failed validation honestly (previous selection untouched)', async () => {
@@ -1170,7 +1280,7 @@ describe('/advisor model handler dispatch (spec §5.3)', () => {
     const invocation: CommandInvocation = {
       commandId: CommandId('cmd-test-1'),
       agent: fakeAgent('session-1'),
-      rawInput: ' model set p m',
+      rawInput: ' model set p/m',
       attachments: [],
       signal: new AbortController().signal,
     }

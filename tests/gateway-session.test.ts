@@ -123,7 +123,17 @@ describe('advisor session endpoints (unit, scripted face)', () => {
     await gateway.setSessionModel('sess-1', null)
     expect(resetSessionModel).toHaveBeenCalledWith('sess-1')
     await gateway.setSessionModel('sess-1', { provider: '  deepseek  ', model: 'deepseek-chat' })
-    expect(setSessionModel).toHaveBeenCalledWith('sess-1', 'deepseek', 'deepseek-chat')
+    // No effort in the selection → the face receives an ABSENT effort (inherit).
+    expect(setSessionModel).toHaveBeenCalledWith('sess-1', 'deepseek', 'deepseek-chat', undefined)
+    // A present effort is forwarded (GitHub issue #142).
+    await gateway.setSessionModel('sess-1', { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' })
+    expect(setSessionModel).toHaveBeenCalledWith('sess-1', 'deepseek', 'deepseek-chat', 'high')
+    // A malformed (non-string / empty) effort is rejected before the face.
+    for (const reasoningEffort of ['', 42, null]) {
+      const result = await gateway.setSessionModel('sess-1', { provider: 'p', model: 'm', reasoningEffort })
+      expect(result).toEqual({ error: { tag: 'advisor/rejected', message: expect.any(String) } })
+    }
+    expect(setSessionModel).toHaveBeenCalledTimes(2)
     expect(resetSessionModel).toHaveBeenCalledTimes(1)
   })
 })
@@ -247,6 +257,9 @@ describe('composed session endpoints (apply wiring)', () => {
         modelOverride: { provider: 'deepseek', model: 'deepseek-chat' },
         modelSource: 'session',
         effectiveModel: { provider: 'deepseek', model: 'deepseek-chat' },
+        // GitHub issue #142: the pin carries no effort (inherit), and the fresh
+        // runtime has not resolved its capability yet.
+        reasoningEffort: { source: 'pending' },
       },
     })
     // The write rode the B1 controller: exactly one pre-commit validation.
