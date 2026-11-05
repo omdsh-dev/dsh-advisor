@@ -202,17 +202,29 @@ describe('advisor session header action (B2)', () => {
   it('the portalled dialog stays wired to the trigger: aria-controls + focus hand-off', () => {
     // The portal severed the pre-portal DOM sibling path (Tab from the
     // trigger used to reach the panel); the wiring must restore it.
-    const { props } = harness(ok(SESSION_SNAPSHOT))
-    render(<AdvisorSessionAction {...props} />)
-    const trigger = screen.getByRole('button', { name: en.sessionExpand })
-    fireEvent.click(trigger)
-    const panel = screen.getByRole('dialog')
-    expect(panel.id).not.toBe('')
-    expect(trigger.getAttribute('aria-controls')).toBe(panel.id)
-    // Focus moves into the panel on open and returns to the trigger on close.
-    expect(document.activeElement).toBe(panel)
-    fireEvent.click(screen.getByRole('button', { name: en.sessionCollapse }))
-    expect(document.activeElement).toBe(trigger)
+    // jsdom focuses regardless of CSS visibility; real browsers refuse to
+    // focus a hidden element. Stub focus() to enforce the browser rule so
+    // the timing (focus only after the panel commits visible) is proven.
+    const originalFocus = HTMLElement.prototype.focus
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+      if ((this.style?.visibility ?? 'visible') === 'hidden') return
+      originalFocus.call(this, options)
+    })
+    try {
+      const { props } = harness(ok(SESSION_SNAPSHOT))
+      render(<AdvisorSessionAction {...props} />)
+      const trigger = screen.getByRole('button', { name: en.sessionExpand })
+      fireEvent.click(trigger)
+      const panel = screen.getByRole('dialog')
+      expect(panel.id).not.toBe('')
+      expect(trigger.getAttribute('aria-controls')).toBe(panel.id)
+      // Focus moves into the panel on open and returns to the trigger on close.
+      expect(document.activeElement).toBe(panel)
+      fireEvent.click(screen.getByRole('button', { name: en.sessionCollapse }))
+      expect(document.activeElement).toBe(trigger)
+    } finally {
+      focusSpy.mockRestore()
+    }
   })
 
   it('a reopen after close is measured and visible again (the skip-unchanged ref must not strand it hidden)', () => {

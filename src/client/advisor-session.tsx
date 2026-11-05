@@ -170,10 +170,6 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
       }
     }
     update()
-    // The portal severed the DOM sibling relationship the pre-portal panel
-    // relied on for keyboard order: move focus into the panel on open so
-    // the keyboard path reaches its controls directly.
-    panelRef.current?.focus({ preventScroll: true })
     // Async snapshot/directory loads grow the panel's height while `open`
     // stays true; re-clamp whenever the measured size actually changes.
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(update) : null
@@ -185,6 +181,21 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
       window.removeEventListener('resize', update)
       window.removeEventListener('scroll', update, true)
     }
+  }, [open])
+  // The portal severed the DOM sibling relationship the pre-portal panel
+  // relied on for keyboard order: move focus into the panel once it is
+  // actually visible (browsers refuse to focus a visibility:hidden panel,
+  // and the measuring effect above commits `visible` only in a later
+  // layout pass). Runs once per open; position re-clamps on scroll/resize
+  // do not re-fire it because `visibility` never changes while open.
+  const focusHandedOffRef = useRef(false)
+  useLayoutEffect(() => {
+    if (!open || position.visibility !== 'visible' || focusHandedOffRef.current) return
+    focusHandedOffRef.current = true
+    panelRef.current?.focus({ preventScroll: true })
+  }, [open, position.visibility])
+  useLayoutEffect(() => {
+    if (!open) focusHandedOffRef.current = false
   }, [open])
   // The staged pin selection is LOCAL user input (never seeded from the
   // snapshot — the effective pair is displayed as text above; a stale host
