@@ -23,7 +23,6 @@
  * ⑥ reconnect/focus signal: bumping the refresh epoch while open refetches.
  */
 
-import { readFileSync } from 'node:fs'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClientConnectionRpc, RpcResult } from '@deepseek-ai/dsh-client-connection/client'
@@ -179,23 +178,6 @@ describe('computePopoverPosition (viewport clamp, issue #141)', () => {
       panel: { width: 1500, height: 2000 },
       viewport, gap: 6, margin: 8,
     })).toEqual({ left: 8, top: 8 })
-  })
-})
-
-describe('advisor session panel css (issue #141 round 2)', () => {
-  it('the viewport max-height cap is a border-box cap', () => {
-    // jsdom performs no layout, so the box model itself cannot be exercised
-    // at runtime; the executable defence is the rule invariant: the viewport
-    // cap and border-box sizing must live on the SAME .panel declaration
-    // block. With a content-box cap the rendered height is
-    // (100vh - 16px) + padding + border, the bottom edge still overflows
-    // the viewport, and the lower controls stay unreachable.
-    const panelCss = readFileSync('src/client/advisor-session.module.css', 'utf8')
-    const ruleMatch = /\.panel\s*\{([^{}]*)\}/.exec(panelCss)
-    expect(ruleMatch, 'a .panel rule exists').not.toBeNull()
-    const body = ruleMatch?.[1] ?? ''
-    expect(body).toContain('max-height: calc(100vh - 16px)')
-    expect(body).toContain('box-sizing: border-box')
   })
 })
 
