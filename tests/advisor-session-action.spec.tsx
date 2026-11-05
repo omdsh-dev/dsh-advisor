@@ -898,6 +898,71 @@ describe('advisor session reasoning effort (issue #142)', () => {
     await settled({ controller: h.controller })
   })
 
+  it('a user edit does not block the reopen probe; the edit itself survives it', async () => {
+    const pinnedA = {
+      snapshot: {
+        sessionId: 'sess-1',
+        enabled: true,
+        lifetime: 'live-session' as const,
+        modelOverride: { provider: 'prov-a', model: 'model-a' },
+        modelSource: 'session' as const,
+        effectiveModel: { provider: 'prov-a', model: 'model-a' },
+        reasoningEffortOverride: 'high',
+      },
+    }
+    const h = harness(ok(pinnedA))
+    h.props.directory.store.update((s: AdvisorSettingsState) => {
+      s.providers = [{ provider: 'prov-a', displayName: 'A', settingsNs: 'llm-a', settingsPath: [], configured: true }]
+      s.modelsByProvider = { 'prov-a': [{ id: 'model-a', name: 'Model A' }] }
+    })
+    const view = render(<AdvisorSessionAction {...h.props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
+    h.rpc.settle(ok(pinnedA))
+    await settled({ controller: h.controller })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'prov-a' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'model-a' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
+    h.rpc.settle(ok({ error: { tag: 'advisor/model-reasoning-failed', message: 'adapter down' } }))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('unavailable'))
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    // The seeded pin shows via the labelled fallback option.
+    expect((screen.getByLabelText(en.sessionEffort) as HTMLSelectElement).value).toBe('high')
+
+    // The user overrides the seed with Inherit global...
+    fireEvent.change(screen.getByLabelText(en.sessionEffort), { target: { value: '' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    expect((screen.getByLabelText(en.sessionEffort) as HTMLSelectElement).value).toBe('')
+
+    // ...and reopens: the probe must STILL fire (the edit suppresses the
+    // VALUE seed only), settle to ready with the declared options, and the
+    // user's Inherit global must survive the re-run seed effect.
+    fireEvent.click(screen.getByRole('button', { name: en.sessionCollapse }))
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(4))
+    const lookups = h.rpc.calls.filter((call) => call.method === 'advisor/modelReasoning')
+    expect(lookups).toHaveLength(2)
+    expect(lookups.at(-1)!.args).toEqual({ provider: 'prov-a', model: 'model-a' })
+    h.rpc.settle(ok({ snapshot: { ...pinnedA.snapshot } }))
+    h.rpc.settle(ok({ efforts: [{ id: 'high', name: 'High' }, { id: 'max', name: 'Max' }] }))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
+    expect(h.controller.store.getSnapshot().reasoningEfforts).toEqual([
+      { id: 'high', name: 'High' },
+      { id: 'max', name: 'Max' },
+    ])
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    const select = screen.getByLabelText(en.sessionEffort) as HTMLSelectElement
+    expect(select.value).toBe('')
+    expect(Array.from(select.options).map((o) => [o.value, o.textContent])).toEqual([
+      ['', en.sessionEffortInherit],
+      ['high', 'High'],
+      ['max', 'Max'],
+    ])
+  })
+
   it('a user-edited effort is not overwritten when a refresh settles', async () => {
     const h = harness(ok(PINNED_HIGH))
     const view = render(<AdvisorSessionAction {...h.props} />)
