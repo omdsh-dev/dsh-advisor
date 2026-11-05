@@ -43,8 +43,8 @@ import type { AdvisorConfig, ResolvedAdvisorConfig } from 'dsh-advisor'
 | 端点 | 作用域 | 说明 |
 |---|---|---|
 | `/api/advisor/get` / `/api/advisor/set` | **全局** | entry config 的读取/写入（经硬门禁的 resolved 值）。 |
-| `/api/advisor/getSession`（B2） | **会话** | 返回权威会话快照 `{ sessionId, enabled, modelOverride?, modelSource?, effectiveModel?, disabledReason?, lifetime: 'live-session' }`（缺省键在 wire 上省略）。只读，不分配状态。 |
-| `/api/advisor/setSessionModel`（B2） | **会话** | `{ sessionId, selection: { provider, model } \| null }`：钉住/更新原子对；`selection: null` = reset（重新继承当前全局默认，从不触碰启用开关）。返回提交后的同一快照。写入经**同一** `AdvisorCommandController`（`resolveModelInfo` 60 秒校验、按会话 generation 栅栏、路由变更语义继承自指令面）。 |
+| `/api/advisor/getSession`（B2） | **会话** | 返回权威会话快照 `{ sessionId, enabled, modelOverride?, modelSource?, effectiveModel?, reasoningEffortOverride?, reasoningEffort?, disabledReason?, lifetime: 'live-session' }`（缺省键在 wire 上省略）：`modelOverride` **只**是 `{ provider, model }` 原子 pair，会话钉住的 effort 走独立顶层字段 `reasoningEffortOverride`，`reasoningEffort` 是运行时记录的解析结果 `{ source, effective?, configured? }`。只读，不分配状态。 |
+| `/api/advisor/setSessionModel`（B2） | **会话** | `{ sessionId, selection: { provider, model, reasoningEffort? } \| null }`：钉住/更新原子记录——`reasoningEffort` 可选，缺省 = 继承全局值，未声明的 id 在提交前被拒绝，未知的额外字段按缺省键读取并忽略；`selection: null` = reset（重新继承当前全局默认，从不触碰启用开关）。返回提交后的同一快照。写入经**同一** `AdvisorCommandController`（`resolveModelInfo` 60 秒校验、按会话 generation 栅栏、路由变更语义继承自指令面）。 |
 
 业务结果（未知/已销毁会话、无 elected owner、校验拒绝/失败、被更新/取消）以**插件域错误标签**在返回数据中表达（`{ error: { tag, message } }`，`advisor/session-unknown` / `advisor/unavailable` / `advisor/rejected` / `advisor/failed` / `advisor/superseded` / `advisor/cancelled`）—— 不抛新的 coded 失败、不扩展 dsh 的失败词汇。未知/已销毁的会话目标在校验开始**之前**拒绝（不为死目标分配状态）；SessionId 不是授权——请求仍先经过 Connection 的 Host/Origin + 浏览器认证边界；无裸 HTTP 端点、无自创会话 ACL。两个会话端点由**获得 reviewer 角色的 fiber**的控制器提供（懒解析的 session face）；持有 `advisor` 服务键但无 elected owner 的 fiber 对其回答 `advisor/unavailable` 并保持惰性（无自动晋升）。
 

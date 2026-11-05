@@ -95,7 +95,7 @@ dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-adv
 
 在 **dsh-tui** profile 中，`/advisor config` 额外回读组合配置——即全局默认值，只读，编辑提示指向真实的写路径：TUI `/settings` 屏幕（Advisor 分节，dsh-tui ≥ v0.8.0）与 profile 补丁层。`/advisor` / `on|off|status|config|model` 指令出现在 TUI 的 `/` 菜单中并带子命令补全（指令发现要求 `dsh-tui-command-trees` 行——随附的 dsh-tui 组合包自带）。
 
-在 **web** 端，同样的会话级模型控制由会话头部的 **Advisor 动作**承载（要求 dsh web 构建的 shell 声明 `conversation.session.header.actions` 插槽——dsh ≥ 0.1.7-rc.1）。该动作绑定在它所在的会话上：显示生效的评审 pair、其来源（`session override` / `global default`）、live-session 生存期，以及一行与 `/advisor status` 同措辞的 `Effort:`，另加一个 effort 选择（`Inherit global` + 所选模型声明的档位——切换 provider 或 model 时回到继承并重新加载该模型的档位）；**Pin this model** 为该会话钉住所选 provider + model 与所选 effort（选择停在 `Inherit global` 时即继承全局值），**Use global default** 去除钉住（模型与 effort 一并清除）。它只通过插件会话端点（`/api/advisor/getSession` + `/api/advisor/setSessionModel`）写入——与 `/advisor model` 同一控制器、同一校验与栅栏，从不写持久化配置——并且当会话控制面不可用时，绝不回退到全局配置写通道。控件在打开时刷新（打开期间断连/聚焦也会刷新）；没有后台轮询。插件页上的全局卡片保持仅全局。
+在 **web** 端，同样的会话级模型控制由会话头部的 **Advisor 动作**承载（要求 dsh web 构建的 shell 声明 `conversation.session.header.actions` 插槽——dsh ≥ 0.1.7-rc.1）。该动作绑定在它所在的会话上：显示生效的评审 pair、其来源（`session override` / `global default`）、live-session 生存期，以及一行 `Effort:`——与 `/advisor status` 同一信息、同一来源结构（英文界面字符串逐字一致；中文界面为对应译文），另加一个 effort 选择（`Inherit global` + 所选模型声明的档位——切换 provider 或 model 时回到继承并重新加载该模型的档位）；**Pin this model** 为该会话钉住所选 provider + model 与所选 effort（选择停在 `Inherit global` 时即继承全局值），**Use global default** 去除钉住（模型与 effort 一并清除）。它只通过插件会话端点（`/api/advisor/getSession` + `/api/advisor/setSessionModel`）写入——与 `/advisor model` 同一控制器、同一校验与栅栏，从不写持久化配置——并且当会话控制面不可用时，绝不回退到全局配置写通道。控件在打开时刷新（打开期间断连/聚焦也会刷新）；没有后台轮询。插件页上的全局卡片保持仅全局。
 
 ![会话头部 Advisor 动作弹层:显示生效的评审 pair、其来源与钉住控件](docs/screenshots/advisor-session-action.webp)
 
