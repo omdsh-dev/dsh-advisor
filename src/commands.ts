@@ -11,8 +11,10 @@
  * - `/advisor status`    — report the per-session status surface;
  * - `/advisor config`    — show the composed advisor config (global defaults);
  * - `/advisor model`     — show the effective reviewer route + source;
- * - `/advisor model set <provider> <model>` — pin an atomic pair for the
- *   invoking session only (validated via `resolveModelInfo`, 60 s, no retry);
+ * - `/advisor model set <provider>/<model>[:<effort>]` — pin an atomic pair
+ *   (and optionally its reasoning effort; an absent effort inherits the global
+ *   value) for the invoking session only (validated via `resolveModelInfo`,
+ *   60 s, no retry);
  * - `/advisor model reset` — re-inherit the current global defaults;
  * - anything else        — usage text.
  *
@@ -54,7 +56,7 @@ export type AdvisorCommand =
 
 /**
  * The parsed form of the text following `/advisor model` (spec §5.3 B1
- * surface): bare → show, `set <provider> <model>` → set (parsed by
+ * surface): bare → show, `set <provider>/<model>[:<effort>]` → set (parsed by
  * {@link parseModelSetArgs}), `reset` → reset, anything else → model usage.
  */
 export type AdvisorModelCommand =
