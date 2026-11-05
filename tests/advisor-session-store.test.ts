@@ -286,21 +286,41 @@ describe('advisor session reasoning effort (issue #142)', () => {
     expect(state.snapshot?.modelSource).toBe('session')
   })
 
-  it('a failed lookup latches unavailable without clearing a previous pair\'s options', async () => {
+  it('a failed lookup for a NEW pair clears the previous pair\'s options (they must not render under the new model)', async () => {
     const rpc = new ScriptedRpc()
     const controller = new AdvisorSessionModelController('sess-A', rpc as unknown as ClientConnectionRpc)
     const first = controller.loadReasoning('p', 'model-a')
     rpc.settle(ok({ efforts: [{ id: 'low', name: 'Low' }] }))
     await first
-    expect(controller.store.getSnapshot().reasoningStatus).toBe('ready')
+    expect(controller.store.getSnapshot().reasoningEfforts).toEqual([{ id: 'low', name: 'Low' }])
 
+    // Switch to a different pair whose lookup FAILS: the new lookup starts
+    // for a different model, so model-a's ids must already be gone — a
+    // failure can never leave them selectable under model-b (AC6: only the
+    // currently selected model's declared ids).
     const second = controller.loadReasoning('p', 'model-b')
+    expect(controller.store.getSnapshot().reasoningEfforts).toEqual([])
     rpc.settle(ok({ error: { tag: 'advisor/model-reasoning-failed', message: 'adapter down' } }))
     await second
     const state = controller.store.getSnapshot()
     expect(state.reasoningStatus).toBe('unavailable')
-    // The failure latches for the new pair but never wipes the options the
-    // previous pair resolved.
+    expect(state.reasoningEfforts).toEqual([])
+  })
+
+  it('a same-pair re-probe failure keeps that pair\'s own options (truthful — nothing invented)', async () => {
+    const rpc = new ScriptedRpc()
+    const controller = new AdvisorSessionModelController('sess-A', rpc as unknown as ClientConnectionRpc)
+    const first = controller.loadReasoning('p', 'model-a')
+    rpc.settle(ok({ efforts: [{ id: 'low', name: 'Low' }] }))
+    await first
+
+    // The same pair re-probes and fails: the retained options still describe
+    // THIS pair, so they stay (no invented replacement, no unrelated ids).
+    const retry = controller.loadReasoning('p', 'model-a')
+    rpc.settle(ok({ error: { tag: 'advisor/model-reasoning-failed', message: 'adapter down' } }))
+    await retry
+    const state = controller.store.getSnapshot()
+    expect(state.reasoningStatus).toBe('unavailable')
     expect(state.reasoningEfforts).toEqual([{ id: 'low', name: 'Low' }])
   })
 

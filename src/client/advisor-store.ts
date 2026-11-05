@@ -1125,8 +1125,9 @@ export interface AdvisorSessionMenuState {
   pending: boolean
   /**
    * The declared reasoning efforts of the CURRENTLY selected staged pair
-   * (empty until a lookup succeeds). A failed lookup never clears a previous
-   * pair's options — it only latches `reasoningStatus`.
+   * (empty until a lookup succeeds). The list is bound to its pair: starting
+   * a lookup for a different pair clears it immediately, so a failure can
+   * never resurface another model's ids under the newly selected one.
    */
   reasoningEfforts: readonly { readonly id: string; readonly name: string }[]
   /** Capability lookup state for the currently selected staged pair. */
@@ -1169,6 +1170,15 @@ export class AdvisorSessionModelController {
    * at `Loading…`.
    */
   private reasoningSeq = 0
+
+  /**
+   * The pair the current `reasoningEfforts` belong to
+   * (`${provider}\u0000${model}`); undefined while no pair has resolved.
+   * The option list is bound to this pair: a lookup for a DIFFERENT pair
+   * clears the list up front, so a failed lookup can never resurface
+   * another model's declared ids under the newly selected one.
+   */
+  private reasoningKey: string | undefined
 
   /** Last consumed refresh-signal epoch (reconnect / focus bumps). */
   private lastSignal: number | undefined
@@ -1242,18 +1252,32 @@ export class AdvisorSessionModelController {
    * metadata channel the settings card uses; no second path). Rides its OWN
    * monotonic fence (`reasoningSeq`): a lookup whose settle is superseded by
    * a newer lookup touches nothing, while a lookup never invalidates an
-   * in-flight refresh/write settle (and is not invalidated by one). A
-   * successful lookup replaces the options with this pair's declared efforts
-   * (possibly empty); a failed lookup (tagged error or transport) latches
-   * `unavailable` for the pair WITHOUT clearing a previous pair's options.
+   * in-flight refresh/write settle (and is not invalidated by one). The
+   * option list is bound to its pair: starting a lookup for a different
+   * pair clears the previous options immediately, so a failed lookup latches
+   * `unavailable` for the pair without ever resurfacing another model's ids
+   * under the newly selected one. A same-pair re-probe failure keeps the
+   * options (they still describe this pair — nothing invented).
    * @param provider - staged provider route id.
    * @param model - staged model id.
    */
   async loadReasoning(provider: string, model: string): Promise<void> {
+    const key = `${provider}\u0000${model}`
     const seq = ++this.reasoningSeq
-    this.store.update((s) => {
-      s.reasoningStatus = 'loading'
-    })
+    if (key !== this.reasoningKey) {
+      // Different pair (or none resolved yet): the current options, if any,
+      // belong to another model — drop them BEFORE the fetch so no failure
+      // path can leave them selectable under the new pair (AC6).
+      this.reasoningKey = undefined
+      this.store.update((s) => {
+        s.reasoningEfforts = []
+        s.reasoningStatus = 'loading'
+      })
+    } else {
+      this.store.update((s) => {
+        s.reasoningStatus = 'loading'
+      })
+    }
     let payload: AdvisorModelReasoningPayload | undefined
     try {
       const result = await this.rpc.call('/api', 'advisor/modelReasoning', { args: { provider, model } })
@@ -1263,6 +1287,7 @@ export class AdvisorSessionModelController {
       if (seq !== this.reasoningSeq) return
     }
     if (payload !== undefined && 'efforts' in payload) {
+      this.reasoningKey = key
       this.store.update((s) => {
         s.reasoningEfforts = payload.efforts
         s.reasoningStatus = 'ready'

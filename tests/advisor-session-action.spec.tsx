@@ -556,6 +556,53 @@ describe('advisor session reasoning effort (issue #142)', () => {
     ])
   })
 
+  it('a failed lookup for a newly selected model leaves only Inherit global and cannot pin the stale effort', async () => {
+    const h = harness(ok(SESSION_SNAPSHOT))
+    h.props.directory.store.update((s: AdvisorSettingsState) => {
+      s.modelsByProvider = {
+        deepseek: [
+          { id: 'model-a', name: 'Model A' },
+          { id: 'model-b', name: 'Model B' },
+        ],
+      }
+    })
+    const view = await openPanel(h)
+
+    // Stage model A and resolve its efforts; pick A's 'low'.
+    fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'model-a' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
+    h.rpc.settle(ok({ efforts: [{ id: 'low', name: 'Low' }] }))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    fireEvent.change(screen.getByLabelText(en.sessionEffort), { target: { value: 'low' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+
+    // Switch to model B: the staged effort re-inherits and the lookup for B
+    // FAILS → A's ids must not be present or selectable, and the pin must
+    // not carry A's effort under B.
+    fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'model-b' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(3))
+    h.rpc.settle(ok({ error: { tag: 'advisor/model-reasoning-failed', message: 'adapter down' } }))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('unavailable'))
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+
+    const select = screen.getByLabelText(en.sessionEffort) as HTMLSelectElement
+    expect(Array.from(select.options).map((o) => [o.value, o.textContent])).toEqual([['', en.sessionEffortInherit]])
+    expect(select.value).toBe('')
+
+    fireEvent.click(screen.getByRole('button', { name: en.sessionPinAction }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(4))
+    const args = h.rpc.last().args as { selection: Record<string, unknown> }
+    expect(args.selection).toEqual({ provider: 'deepseek', model: 'model-b' })
+    expect(Object.hasOwn(args.selection, 'reasoningEffort')).toBe(false)
+    h.rpc.settle(ok(SESSION_SNAPSHOT))
+    await settled({ controller: h.controller })
+  })
+
   it('clearing the staged model resets the effort back to inherit (no lookup for an empty model)', async () => {
     const h = harness(ok(SESSION_SNAPSHOT))
     const view = await openPanel(h)
