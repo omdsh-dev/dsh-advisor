@@ -881,12 +881,11 @@ describe('session model override — reasoning effort pin (GitHub issue #142)', 
     await invokeAdvisor(handler, ' model set other/other-model', session)
     const rejected = textOf(await invokeAdvisor(handler, ' model set stub/stub-model:medium', session))
     expect(rejected).toContain('Not set:')
-    // The rejection names the declared ids so the operator can retry, and it
-    // names the colon remedy for a model id whose own ":" was parsed as an
-    // effort suffix (QC2 F-001).
-    expect(rejected).toContain('not declared')
-    expect(rejected).toContain('off')
-    expect(rejected).toContain('high')
+    // The rejection names the declared ids so the operator can retry — assert
+    // the EXACT parenthesised list: bare `off`/`high` substrings would also
+    // match the echoed model and the remedy sentence, so they would stay green
+    // even if the list were dropped.
+    expect(rejected).toContain('is not declared by stub/stub-model (declared: off, high)')
     expect(rejected).toContain('if the ":" belongs to the model id')
     expect(rejected).toContain('pin the full id with an explicit effort suffix')
     // No fabricated full-id example (the truncated model's ids do not vouch
@@ -1079,6 +1078,51 @@ describe('session model override — reasoning effort pin (GitHub issue #142)', 
     await invokeAdvisor(handler, ' model set stub/stub-model:high', session)
     entry.commit(ctx, { reasoningEffort: 'off' })
     expect(await status()).toContain('Effort: high (session override)')
+  })
+
+  it('re-pinning the same pair without an effort drops the pinned effort (AC5)', async () => {
+    const { ctx, adapter, handler, agents } = await composeOverrideHarness(
+      { provider: 'stub', model: 'stub-model', reasoningEffort: 'off' },
+      [textReply('after drop')],
+    )
+    publishAgent(ctx, agents, 's1')
+    const { session, log } = makeSession('s1')
+
+    await invokeAdvisor(handler, ' model set stub/stub-model:high', session)
+    expect(textOf(await invokeAdvisor(handler, ' model', session))).toContain('Effort: high (session pin')
+
+    // Same pair, NO effort: the record is replaced without the effort, which
+    // IS a real route change (the effective effort falls back to the global).
+    const repinned = textOf(await invokeAdvisor(handler, ' model set stub/stub-model', session))
+    expect(repinned).toContain('Session model pinned: stub/stub-model')
+    expect(repinned).not.toContain('stub/stub-model:high')
+    expect(repinned).not.toContain('runtime untouched')
+
+    // The show surface no longer claims a session pin, and the next call
+    // resolves the GLOBAL value again.
+    const model = textOf(await invokeAdvisor(handler, ' model', session))
+    expect(model).not.toContain('session pin')
+    expect(model).not.toContain('Effort:')
+    feed(ctx, session, log, simpleTurn(1, 'u1', 'a1'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+    expect(adapter.requests[0]!.reasoningEffort).toBe(ReasoningEffortId('off'))
+    expect(textOf(await invokeAdvisor(handler, ' status', session)))
+      .toContain('Effort: off (global default)')
+  })
+
+  it('re-pinning the same pair with the identical effort restarts nothing (AC5)', async () => {
+    const { ctx, handler, agents } = await composeOverrideHarness(
+      { provider: 'stub', model: 'stub-model', reasoningEffort: 'off' },
+      [],
+    )
+    publishAgent(ctx, agents, 's1')
+    const { session } = makeSession('s1')
+
+    await invokeAdvisor(handler, ' model set stub/stub-model:high', session)
+    const again = textOf(await invokeAdvisor(handler, ' model set stub/stub-model:high', session))
+    expect(again).toContain('Session model pinned: stub/stub-model:high')
+    expect(again).toContain('same effective route, runtime untouched')
+    expect(textOf(await invokeAdvisor(handler, ' model', session))).toContain('Effort: high (session pin')
   })
 })
 

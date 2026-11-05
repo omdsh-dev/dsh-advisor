@@ -113,7 +113,14 @@ describe('advisor session endpoints (unit, scripted face)', () => {
   })
 
   it('routes selection null to the reset arm and a valid pair (trimmed) to the set arm', async () => {
-    const setSessionModel = vi.fn(async (): Promise<AdvisorSessionRpcResult> => snapshot(undefined as never))
+    // Params are declared so `mock.calls` is typed: the inherit case must pin
+    // the forwarded FOURTH argument explicitly.
+    const setSessionModel = vi.fn(async (
+      _sessionId: string,
+      _provider: string,
+      _model: string,
+      _reasoningEffort?: string,
+    ): Promise<AdvisorSessionRpcResult> => snapshot(undefined as never))
     const resetSessionModel = vi.fn((): AdvisorSessionRpcResult => snapshot(undefined as never))
     const { gateway } = scripted({
       getSession: () => snapshot(undefined as never),
@@ -124,7 +131,7 @@ describe('advisor session endpoints (unit, scripted face)', () => {
     expect(resetSessionModel).toHaveBeenCalledWith('sess-1')
     await gateway.setSessionModel('sess-1', { provider: '  deepseek  ', model: 'deepseek-chat' })
     // No effort in the selection → the face receives an ABSENT effort (inherit).
-    expect(setSessionModel).toHaveBeenCalledWith('sess-1', 'deepseek', 'deepseek-chat', undefined)
+    expect(setSessionModel.mock.calls.at(-1)?.[3]).toBeUndefined()
     // A present effort is forwarded (GitHub issue #142).
     await gateway.setSessionModel('sess-1', { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' })
     expect(setSessionModel).toHaveBeenCalledWith('sess-1', 'deepseek', 'deepseek-chat', 'high')

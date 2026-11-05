@@ -978,7 +978,11 @@ describe('parseModelSetArgs (one-token grammar, spec §5.3 / GitHub issue #142)'
     // to a malformed-pair message (QC2 F-001).
     for (const raw of ['', 'p', '/m', 'p/', 'p/m:']) {
       const parsed = parseModelSetArgs(raw)
-      expect(parsed.ok ? '' : parsed.reason).not.toContain('model id containing')
+      // Pin the shape FIRST: without this, a successful parse would make the
+      // negation below pass vacuously.
+      expect(parsed.ok).toBe(false)
+      if (parsed.ok) continue
+      expect(parsed.reason).not.toContain('model id containing')
     }
   })
 
