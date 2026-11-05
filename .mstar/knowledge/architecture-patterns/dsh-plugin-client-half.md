@@ -6,7 +6,7 @@ category: architecture-patterns
 severity: medium
 title: Adding a dsh web Settings section to a standalone plugin (client half contract)
 description: Verified recipe for a standalone dsh plugin's browser half: the dsh.client declaration (nested under dsh, post-20da39e), closure-factory CJS bundle served from /plugins/<id>/client.js, CSS-modules inline injection with style-tag lifecycle, settings.section slot registration (LEGACY for the advisor — the configuration surface now registers a settings.plugin.item card, see architecture-patterns/dsh-plugin-config-card-surface.md), and the frozen externals/purity/JSX contracts — plus the host-side settings namespace wiring it edits.
-last_updated: 2026-08-12
+last_updated: 2026-11-05
 tags:
   - dsh
   - plugin
@@ -72,6 +72,35 @@ Mirror `ui-models`: `inject = ['slots','locale','connection']`; `ctx.effect(() =
 > The `settings.section` mechanics in this section stay correct for
 > host-integrated plugins, but a third-party plugin should prefer the card
 > surface; the section recipe is kept here as the historical record.
+
+### Header-surface popovers: portal out of the clipping column
+
+`conversation.session.header.actions` is rendered inside the host's conversation column
+(`.centerCol { overflow: hidden }`), so an **absolutely positioned** panel anchored in the
+header action is clipped at the column's left edge whenever the trigger sits closer to it
+than the panel is wide — the panel's border, radius and padding, and at narrower widths its
+text, disappear. The host's own header menus avoid this by rendering their surface outside
+the column.
+
+- **Render through `createPortal(panel, document.body)`** with `position: fixed` and body-layer
+  stacking (`z-index: 1100`, the host's own header-panel value). `react-dom` is already a
+  `CLIENT_EXTERNALS` entry, so the portal costs no dependency.
+- **Position from measurement, clamped**: `left = clamp(anchor.right - panel.width, margin,
+  viewport.width - panel.width - margin)` and the same shape on `top` (below the trigger).
+  Right-aligning preserves the geometry the anchored panel had before.
+- **First paint is hidden**: `{ visibility: 'hidden', left: 0, top: 0 }`, cleared in the same
+  `useLayoutEffect` that sets the measured position, so no unpositioned frame is visible.
+- **Recompute while open** on `resize`, on capture-phase `scroll` (any scrolling ancestor,
+  not just the window), and on panel size change (`ResizeObserver`): the panel's content
+  settles asynchronously (snapshot and directory fetches), so a one-shot measurement leaves
+  a stale clamp and a grown panel can leave the viewport bottom.
+- **Leaving the header subtree costs the DOM adjacency**: `aria-expanded` / `aria-haspopup`
+  survive on the trigger, but the dialog needs its own `id` plus `aria-controls` on the
+  trigger to keep an explicit relationship for assistive technology.
+- The host's `ContextMeter` panel is the reference implementation. Its positioning/dismiss
+  hooks live in `@deepseek-ai/dsh-client-ui-primitives`, but that package is not a peer of
+  this plugin — ~30 lines of local clamp math is cheaper than a new peer, lockfile churn and
+  the peer-contract test update.
 
 ### Settings section data flow
 
