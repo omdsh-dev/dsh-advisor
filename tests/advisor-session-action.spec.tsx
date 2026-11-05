@@ -29,7 +29,7 @@ import type { ClientConnectionRpc, RpcResult } from '@deepseek-ai/dsh-client-con
 import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { fakeSchema } from './support/schema-ops'
-import { AdvisorSessionAction } from '../src/client/advisor-session'
+import { AdvisorSessionAction, computePopoverPosition } from '../src/client/advisor-session'
 import type { AdvisorSessionActionProps } from '../src/client/advisor-session'
 import { AdvisorSessionModelController, AdvisorSettingsStore } from '../src/client/advisor-store'
 import type { AdvisorSettingsState } from '../src/client/advisor-store'
@@ -137,6 +137,39 @@ const SESSION_SNAPSHOT = {
   },
 }
 
+describe('computePopoverPosition (viewport clamp, issue #141)', () => {
+  const viewport = { width: 1280, height: 800 }
+  const panel = { width: 300, height: 200 }
+
+  it('right-aligns the panel under the trigger when everything fits', () => {
+    expect(computePopoverPosition({
+      anchor: { left: 400, top: 40, right: 460, bottom: 64 },
+      panel, viewport, gap: 6, margin: 8,
+    })).toEqual({ left: 160, top: 70 })
+  })
+
+  it('clamps to the left viewport margin when the anchor sits near the left edge', () => {
+    expect(computePopoverPosition({
+      anchor: { left: 20, top: 40, right: 80, bottom: 64 },
+      panel, viewport, gap: 6, margin: 8,
+    })).toEqual({ left: 8, top: 70 })
+  })
+
+  it('clamps to the right viewport margin when right-aligned would overflow', () => {
+    expect(computePopoverPosition({
+      anchor: { left: 1240, top: 40, right: 1300, bottom: 64 },
+      panel, viewport, gap: 6, margin: 8,
+    })).toEqual({ left: 972, top: 70 })
+  })
+
+  it('clamps vertically so the panel never overflows the viewport bottom', () => {
+    expect(computePopoverPosition({
+      anchor: { left: 400, top: 726, right: 460, bottom: 750 },
+      panel, viewport, gap: 6, margin: 8,
+    })).toEqual({ left: 160, top: 592 })
+  })
+})
+
 describe('advisor session header action (B2)', () => {
   it('the closed action is neutral: plugin name only, no model label, no panel', () => {
     const { props } = harness(ok(SESSION_SNAPSHOT))
@@ -146,6 +179,13 @@ describe('advisor session header action (B2)', () => {
     // No model text anywhere in the closed surface, and no panel.
     expect(screen.queryByText('deepseek/deepseek-chat')).toBeNull()
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('the panel portals into document.body so the column overflow cannot clip it', () => {
+    const { props } = harness(ok(SESSION_SNAPSHOT))
+    render(<AdvisorSessionAction {...props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    expect(screen.getByRole('dialog').parentElement).toBe(document.body)
   })
 
   it('open is a refresh point: the panel renders pair, source badge, and lifetime', async () => {

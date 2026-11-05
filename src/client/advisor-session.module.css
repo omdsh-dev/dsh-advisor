@@ -38,19 +38,17 @@
   outline-offset: 1px;
 }
 
-/* Wrapper anchoring the popover under the trigger (the header action cell is
-   the positioning context). */
+/* Wrapper holding the trigger; the panel no longer anchors here — it portals
+   into document.body and positions itself from measured viewport rects. */
 .anchor {
-  position: relative;
   display: inline-flex;
 }
 
-/* The open panel: a bordered popover card above the header's z-plane. */
+/* The open panel: a bordered popover card on the body layer (position: fixed
+   via portal; left/top come from computePopoverPosition). */
 .panel {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 30;
+  position: fixed;
+  z-index: 1100;
   width: 300px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;

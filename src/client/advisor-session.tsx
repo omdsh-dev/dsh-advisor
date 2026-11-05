@@ -30,7 +30,8 @@
  * falsely claiming continuous synchronization.
  */
 
-import { useState, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { AdvisorSessionMenuState, AdvisorSessionModelController, AdvisorSettingsState, AdvisorSettingsStore } from './advisor-store.ts'
@@ -72,6 +73,40 @@ export type AdvisorSessionActionProps =
   & InjectFace<AdvisorSessionActionInjected>
 
 /**
+ * Measured rects of the popover geometry. `anchor` is the trigger's viewport
+ * rect; `panel`/`viewport` are plain sizes. Pure so the clamp contract is
+ * unit-testable (issue #141).
+ */
+export interface PopoverGeometry {
+  anchor: { left: number; top: number; right: number; bottom: number }
+  panel: { width: number; height: number }
+  viewport: { width: number; height: number }
+  gap: number
+  margin: number
+}
+
+/**
+ * Clamp the panel to the viewport: right-aligned under the trigger (matching
+ * the pre-portal geometry), pushed inside `margin` on whichever edge the
+ * natural position would cross.
+ */
+export function computePopoverPosition({ anchor, panel, viewport, gap, margin }: PopoverGeometry): { left: number; top: number } {
+  const left = Math.min(
+    Math.max(anchor.right - panel.width, margin),
+    viewport.width - panel.width - margin,
+  )
+  const top = Math.min(
+    Math.max(anchor.bottom + gap, margin),
+    viewport.height - panel.height - margin,
+  )
+  return { left, top }
+}
+
+/** Popover placement constants (the old CSS `100% + 6px` offset; 8px screen margin). */
+const POPOVER_GAP = 6
+const POPOVER_MARGIN = 8
+
+/**
  * Render the session header's Advisor action: a neutral trigger plus, when
  * open, a popover panel holding the refreshable snapshot and the pin/reset
  * controls.
@@ -84,6 +119,41 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
   const epoch = useRefreshSignal((s) => s.epoch)
   const directoryState = useDirectory((s) => s)
   const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  // First paint hides the panel at 0,0 (mirroring the host's ContextMeter):
+  // the layout effect then measures and pins the clamped position before
+  // paint, so no unpositioned frame is ever visible.
+  const [position, setPosition] = useState<{ left: number; top: number; visibility: CSSProperties['visibility'] }>({ left: 0, top: 0, visibility: 'hidden' })
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition({ left: 0, top: 0, visibility: 'hidden' })
+      return
+    }
+    const update = (): void => {
+      const trigger = triggerRef.current
+      const panel = panelRef.current
+      if (trigger === null || panel === null) return
+      setPosition({
+        ...computePopoverPosition({
+          anchor: trigger.getBoundingClientRect(),
+          panel: { width: panel.offsetWidth, height: panel.offsetHeight },
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+          gap: POPOVER_GAP,
+          margin: POPOVER_MARGIN,
+        }),
+        visibility: 'visible',
+      })
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
+  }, [open])
   // The staged pin selection is LOCAL user input (never seeded from the
   // snapshot — the effective pair is displayed as text above; a stale host
   // pair must not look like staged edits).
@@ -205,6 +275,7 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
       {/* Neutral closed label: the plugin name only — a closed action claims
           no model and no continuous synchronization. */}
       <button
+        ref={triggerRef}
         type="button"
         className={styles.trigger}
         aria-expanded={open}
@@ -215,14 +286,25 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
         {t('sessionTrigger')}
       </button>
       {open
-        ? (
-            <div className={styles.panel} role="dialog" aria-label={t('sessionModelHeading')}>
+        ? createPortal(
+            // The panel lives on document.body (position: fixed, z-index
+            // 1100) so the host conversation column's overflow: hidden can
+            // never crop it, however far the header action sits toward the
+            // column's left edge (issue #141).
+            <div
+              ref={panelRef}
+              className={styles.panel}
+              role="dialog"
+              aria-label={t('sessionModelHeading')}
+              style={{ left: position.left, top: position.top, visibility: position.visibility }}
+            >
               <p className={styles.panelHeading}>{t('sessionModelHeading')}</p>
               {directoryState.providers.length === 0 && directoryState.status === 'ready' && !state.unavailable
                 ? <p className={styles.mutedLine}>{t('noProviders')}</p>
                 : null}
               {body}
-            </div>
+            </div>,
+            document.body,
           )
         : null}
     </div>
