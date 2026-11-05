@@ -222,6 +222,9 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
   // model's declared efforts (the pinned id must be a selectable option).
   // Runs whenever the snapshot or the staged pair changes; a user edit
   // (effortEditedRef) suppresses the seed until the next pair transition.
+  // The load is gated on the STAGED pair matching the effective one: a pair
+  // the user has staged past must never be superseded by this load (QC1-W2
+  // — it would bump reasoningSeq and discard the staged lookup).
   const snapshotForSeed = state.snapshot
   useEffect(() => {
     if (effortEditedRef.current) return
@@ -231,7 +234,7 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
       && provider === effective.provider
       && model === effective.model
     setEffort(stagedMatchesEffective && pinnedEffort !== undefined ? pinnedEffort : '')
-    if (pinnedEffort !== undefined && effective !== undefined) {
+    if (stagedMatchesEffective && pinnedEffort !== undefined && effective !== undefined) {
       const key = `${effective.provider}/${effective.model}`
       if (key !== lastReasoningKeyRef.current) {
         lastReasoningKeyRef.current = key

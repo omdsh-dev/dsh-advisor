@@ -694,21 +694,20 @@ describe('advisor session reasoning effort (issue #142)', () => {
     h.rpc.settle(ok(PINNED_HIGH))
     await settled({ controller: h.controller })
     view.rerender(<AdvisorSessionAction {...h.props} />)
-    // Open on a pinned session resolves the pinned model's declared efforts
-    // (the pinned id must be a selectable option).
-    await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
-    expect(h.rpc.last().method).toBe('advisor/modelReasoning')
-    h.rpc.settle(ok(EFFORTS))
-    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
-    view.rerender(<AdvisorSessionAction {...h.props} />)
+    // Open with nothing staged: no capability load (QC1-W2 — the load runs
+    // only for the staged pair, never unprompted for the pinned one).
 
-    // Re-select the same pair: the pinned effort pre-selects (the select
-    // must NOT sit on Inherit global — that would silently drop the pin).
+    // Re-select the same pair: the staged lookup resolves the declared
+    // efforts, and the pinned effort pre-selects (the select must NOT sit
+    // on Inherit global — that would silently drop the pin).
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek' } })
     view.rerender(<AdvisorSessionAction {...h.props} />)
     fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'deepseek-chat' } })
     view.rerender(<AdvisorSessionAction {...h.props} />)
-    await waitFor(() => expect(h.rpc.calls).toHaveLength(3))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
+    expect(h.rpc.last()).toEqual({
+      channel: '/api', method: 'advisor/modelReasoning', args: { provider: 'deepseek', model: 'deepseek-chat' },
+    })
     h.rpc.settle(ok(EFFORTS))
     await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
     view.rerender(<AdvisorSessionAction {...h.props} />)
@@ -716,13 +715,68 @@ describe('advisor session reasoning effort (issue #142)', () => {
 
     // Pin WITHOUT touching the select → the selection carries the effort.
     fireEvent.click(screen.getByRole('button', { name: en.sessionPinAction }))
-    await waitFor(() => expect(h.rpc.calls).toHaveLength(4))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(3))
     expect(h.rpc.last().args).toEqual({
       sessionId: 'sess-1',
       selection: { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' },
     })
     h.rpc.settle(ok(PINNED_HIGH))
     await settled({ controller: h.controller })
+  })
+
+  it('switching the staged pair past the pinned one loads reasoning only for the staged model', async () => {
+    const pinnedA = {
+      snapshot: {
+        sessionId: 'sess-1',
+        enabled: true,
+        lifetime: 'live-session' as const,
+        modelOverride: { provider: 'prov-a', model: 'model-a' },
+        modelSource: 'session' as const,
+        effectiveModel: { provider: 'prov-a', model: 'model-a' },
+        reasoningEffortOverride: 'high',
+      },
+    }
+    const h = harness(ok(pinnedA))
+    h.props.directory.store.update((s: AdvisorSettingsState) => {
+      s.providers = [
+        { provider: 'prov-a', displayName: 'A', settingsNs: 'llm-a', settingsPath: [], configured: true },
+        { provider: 'prov-b', displayName: 'B', settingsNs: 'llm-b', settingsPath: [], configured: true },
+      ]
+      s.modelsByProvider = {
+        'prov-a': [{ id: 'model-a', name: 'Model A' }],
+        'prov-b': [{ id: 'model-b', name: 'Model B' }],
+      }
+    })
+    const view = render(<AdvisorSessionAction {...h.props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
+    h.rpc.settle(ok(pinnedA))
+    await settled({ controller: h.controller })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    // Open on the pinned session with nothing staged: no capability load —
+    // the pinned pair is not the staged pair.
+    expect(h.rpc.calls.filter((call) => call.method === 'advisor/modelReasoning')).toEqual([])
+
+    // Stage B/model-b — past the pinned pair. Exactly ONE lookup, for B;
+    // the pinned pair's lookup must not fire and must not supersede B's.
+    fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'prov-b' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'model-b' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
+    expect(h.rpc.last()).toEqual({
+      channel: '/api', method: 'advisor/modelReasoning', args: { provider: 'prov-b', model: 'model-b' },
+    })
+
+    h.rpc.settle(ok({ efforts: [{ id: 'max', name: 'Max' }] }))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    const select = screen.getByLabelText(en.sessionEffort) as HTMLSelectElement
+    expect(Array.from(select.options).map((o) => [o.value, o.textContent])).toEqual([
+      ['', en.sessionEffortInherit],
+      ['max', 'Max'],
+    ])
+    expect(select.value).toBe('')
   })
 
   it('a user-edited effort is not overwritten when a refresh settles', async () => {
@@ -733,15 +787,11 @@ describe('advisor session reasoning effort (issue #142)', () => {
     h.rpc.settle(ok(PINNED_HIGH))
     await settled({ controller: h.controller })
     view.rerender(<AdvisorSessionAction {...h.props} />)
-    await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
-    h.rpc.settle(ok(EFFORTS))
-    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
-    view.rerender(<AdvisorSessionAction {...h.props} />)
     fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek' } })
     view.rerender(<AdvisorSessionAction {...h.props} />)
     fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'deepseek-chat' } })
     view.rerender(<AdvisorSessionAction {...h.props} />)
-    await waitFor(() => expect(h.rpc.calls).toHaveLength(3))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
     h.rpc.settle(ok(EFFORTS))
     await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
     view.rerender(<AdvisorSessionAction {...h.props} />)
@@ -755,7 +805,7 @@ describe('advisor session reasoning effort (issue #142)', () => {
     // A refresh settles a snapshot that still pins 'high' — the user's
     // choice must survive (seeding never clobbers a user edit).
     const refresh = h.controller.refresh()
-    await waitFor(() => expect(h.rpc.calls).toHaveLength(4))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(3))
     h.rpc.settle(ok(PINNED_HIGH))
     await refresh
     await settled({ controller: h.controller })
