@@ -779,6 +779,64 @@ describe('advisor session reasoning effort (issue #142)', () => {
     expect(select.value).toBe('')
   })
 
+  it('a seeded effort stays visible when its lookup fails, and reopening retries the lookup', async () => {
+    const pinnedA = {
+      snapshot: {
+        sessionId: 'sess-1',
+        enabled: true,
+        lifetime: 'live-session' as const,
+        modelOverride: { provider: 'prov-a', model: 'model-a' },
+        modelSource: 'session' as const,
+        effectiveModel: { provider: 'prov-a', model: 'model-a' },
+        reasoningEffortOverride: 'high',
+      },
+    }
+    const h = harness(ok(pinnedA))
+    h.props.directory.store.update((s: AdvisorSettingsState) => {
+      s.providers = [{ provider: 'prov-a', displayName: 'A', settingsNs: 'llm-a', settingsPath: [], configured: true }]
+      s.modelsByProvider = { 'prov-a': [{ id: 'model-a', name: 'Model A' }] }
+    })
+    const view = render(<AdvisorSessionAction {...h.props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
+    h.rpc.settle(ok(pinnedA))
+    await settled({ controller: h.controller })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+
+    // Stage the pinned pair; its lookup FAILS → the seeded 'high' has no
+    // declared option, but the select must show the pin, not a blank.
+    fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'prov-a' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'model-a' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
+    h.rpc.settle(ok({ error: { tag: 'advisor/model-reasoning-failed', message: 'adapter down' } }))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('unavailable'))
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    const select = screen.getByLabelText(en.sessionEffort) as HTMLSelectElement
+    expect(select.value).toBe('high')
+    expect(Array.from(select.options).map((o) => [o.value, o.textContent])).toEqual([
+      ['', en.sessionEffortInherit],
+      ['high', t('sessionEffortStaged', { id: 'high' })],
+    ])
+
+    // Reopen is the retry point (BUG-01): the refresh refetches AND the
+    // seed effect re-probes the pinned pair — exactly one new lookup for
+    // it, not latched out for the menu lifetime.
+    fireEvent.click(screen.getByRole('button', { name: en.sessionCollapse }))
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(4))
+    expect(h.rpc.calls[2]!.method).toBe('advisor/getSession')
+    expect(h.rpc.last()).toEqual({
+      channel: '/api', method: 'advisor/modelReasoning', args: { provider: 'prov-a', model: 'model-a' },
+    })
+    h.rpc.settle(ok({ snapshot: { ...pinnedA.snapshot } }))
+    await settled({ controller: h.controller })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    // The retry settled into the same pair's options — no second lookup.
+    expect(h.rpc.calls).toHaveLength(4)
+  })
+
   it('a user-edited effort is not overwritten when a refresh settles', async () => {
     const h = harness(ok(PINNED_HIGH))
     const view = render(<AdvisorSessionAction {...h.props} />)
@@ -803,10 +861,13 @@ describe('advisor session reasoning effort (issue #142)', () => {
     expect((screen.getByLabelText(en.sessionEffort) as HTMLSelectElement).value).toBe('low')
 
     // A refresh settles a snapshot that still pins 'high' — the user's
-    // choice must survive (seeding never clobbers a user edit).
+    // choice must survive (seeding never clobbers a user edit). The snapshot
+    // must be a FRESH object: applyOutcome assigns it by reference, so the
+    // same PINNED_HIGH identity would leave the effect deps unchanged and
+    // never re-run the seed (the guard this test names).
     const refresh = h.controller.refresh()
     await waitFor(() => expect(h.rpc.calls).toHaveLength(3))
-    h.rpc.settle(ok(PINNED_HIGH))
+    h.rpc.settle(ok({ snapshot: { ...PINNED_HIGH.snapshot } }))
     await refresh
     await settled({ controller: h.controller })
     view.rerender(<AdvisorSessionAction {...h.props} />)

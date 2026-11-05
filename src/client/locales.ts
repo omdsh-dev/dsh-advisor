@@ -72,6 +72,11 @@ export const en = {
   // the effective `provider/model`, {configured} the configured/pinned id.
   sessionEffort: 'Effort',
   sessionEffortInherit: 'Inherit global',
+  // The staged/seeded effort id the resolved option list does not contain
+  // (lookup failed or the model changed underneath) — rendered as its own
+  // option so the select shows the pin instead of a blank. {id} interpolates
+  // the effort id.
+  sessionEffortStaged: '{id} (pinned)',
   sessionEffortConfigured: '(configured)',
   sessionEffortConfiguredGlobal: '(global default)',
   sessionEffortConfiguredSession: '(session override)',
@@ -151,6 +156,11 @@ export const zh: typeof en = {
   // the effective `provider/model`, {configured} the configured/pinned id.
   sessionEffort: '思考权重',
   sessionEffortInherit: '继承全局',
+  // The staged/seeded effort id the resolved option list does not contain
+  // (lookup failed or the model changed underneath) — rendered as its own
+  // option so the select shows the pin instead of a blank. {id} interpolates
+  // the effort id.
+  sessionEffortStaged: '{id}（已固定）',
   sessionEffortConfigured: '（已配置）',
   sessionEffortConfiguredGlobal: '（全局默认）',
   sessionEffortConfiguredSession: '（会话覆盖）',

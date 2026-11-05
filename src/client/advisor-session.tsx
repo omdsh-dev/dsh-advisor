@@ -250,6 +250,10 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
   // writes through it.
   const openAdvisor = (): void => {
     setOpen(true)
+    // The open is the retry point: a failed lookup latches `unavailable`
+    // and the dedupe key would otherwise block a re-probe for the menu
+    // lifetime (BUG-01) — reopening gets one fresh attempt per pair.
+    lastReasoningKeyRef.current = ''
     controller.takeSignal(epoch)
     void controller.refresh()
     if (directoryState.status === 'idle') void directory.load()
@@ -396,6 +400,13 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
               {state.reasoningEfforts.map((option) => (
                 <option key={option.id} value={option.id}>{option.name || option.id}</option>
               ))}
+              {/* A seeded/staged effort the resolved list does not contain
+                  (lookup failed, or the model changed underneath): render it
+                  as its own labelled option so the select shows the pin
+                  instead of a blank (BUG-01). */}
+              {effort !== '' && !state.reasoningEfforts.some((option) => option.id === effort)
+                ? <option value={effort}>{t('sessionEffortStaged', { id: effort })}</option>
+                : null}
             </select>
           </div>
           {provider !== '' && (directoryState.modelsByProvider[provider]?.length ?? 0) === 0
