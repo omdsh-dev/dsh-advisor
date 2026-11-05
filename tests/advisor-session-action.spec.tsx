@@ -23,6 +23,7 @@
  * ⑥ reconnect/focus signal: bumping the refresh epoch while open refetches.
  */
 
+import { readFileSync } from 'node:fs'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClientConnectionRpc, RpcResult } from '@deepseek-ai/dsh-client-connection/client'
@@ -181,6 +182,23 @@ describe('computePopoverPosition (viewport clamp, issue #141)', () => {
   })
 })
 
+describe('advisor session panel css (issue #141 round 2)', () => {
+  it('the viewport max-height cap is a border-box cap', () => {
+    // jsdom performs no layout, so the box model itself cannot be exercised
+    // at runtime; the executable defence is the rule invariant: the viewport
+    // cap and border-box sizing must live on the SAME .panel declaration
+    // block. With a content-box cap the rendered height is
+    // (100vh - 16px) + padding + border, the bottom edge still overflows
+    // the viewport, and the lower controls stay unreachable.
+    const panelCss = readFileSync('src/client/advisor-session.module.css', 'utf8')
+    const ruleMatch = /\.panel\s*\{([^{}]*)\}/.exec(panelCss)
+    expect(ruleMatch, 'a .panel rule exists').not.toBeNull()
+    const body = ruleMatch?.[1] ?? ''
+    expect(body).toContain('max-height: calc(100vh - 16px)')
+    expect(body).toContain('box-sizing: border-box')
+  })
+})
+
 describe('advisor session header action (B2)', () => {
   it('the closed action is neutral: plugin name only, no model label, no panel', () => {
     const { props } = harness(ok(SESSION_SNAPSHOT))
@@ -214,6 +232,9 @@ describe('advisor session header action (B2)', () => {
       const { props } = harness(ok(SESSION_SNAPSHOT))
       render(<AdvisorSessionAction {...props} />)
       const trigger = screen.getByRole('button', { name: en.sessionExpand })
+      // Closed: the panel (the id's owner) does not exist yet, so the
+      // trigger must not advertise a dangling IDREF.
+      expect(trigger.getAttribute('aria-controls')).toBeNull()
       fireEvent.click(trigger)
       const panel = screen.getByRole('dialog')
       expect(panel.id).not.toBe('')
@@ -222,8 +243,27 @@ describe('advisor session header action (B2)', () => {
       expect(document.activeElement).toBe(panel)
       fireEvent.click(screen.getByRole('button', { name: en.sessionCollapse }))
       expect(document.activeElement).toBe(trigger)
+      // Closed again: the reference must go away with the panel.
+      expect(trigger.getAttribute('aria-controls')).toBeNull()
     } finally {
       focusSpy.mockRestore()
+    }
+  })
+
+  it('a closed first mount never steals page focus', () => {
+    // The return-focus path must fire on open→close transitions only: focus
+    // an external element, mount the component closed, and require focus to
+    // stay put. Without that guard the first mount takes the close path and
+    // pulls focus into the closed trigger.
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    outside.focus()
+    try {
+      const { props } = harness(ok(SESSION_SNAPSHOT))
+      render(<AdvisorSessionAction {...props} />)
+      expect(document.activeElement).toBe(outside)
+    } finally {
+      outside.remove()
     }
   })
 
@@ -263,15 +303,17 @@ describe('advisor session header action (B2)', () => {
     // First-paint contract: the panel mounts `visibility: hidden` and turns
     // visible only once the layout effect has measured and clamped it.
     // React applies style through the CSSStyleDeclaration accessor, so a
-    // prototype spy observes the hidden → visible order.
-    const appliedVisibilities: string[] = []
+    // prototype spy observes the hidden → visible order. Every write is
+    // recorded with its declaration so the assertion can scope to the panel
+    // — an unrelated element's write must not satisfy it.
+    const appliedVisibilities: Array<{ decl: CSSStyleDeclaration; value: string }> = []
     const styleProto = Object.getPrototypeOf(document.createElement('div').style) as CSSStyleDeclaration
     const visibilityDescriptor = Object.getOwnPropertyDescriptor(styleProto, 'visibility')
     if (visibilityDescriptor !== undefined && visibilityDescriptor.set !== undefined) {
       const { set: setVisibility, get: getVisibility } = visibilityDescriptor
       Object.defineProperty(styleProto, 'visibility', {
         set(this: CSSStyleDeclaration, value: string) {
-          appliedVisibilities.push(value)
+          appliedVisibilities.push({ decl: this, value })
           setVisibility.call(this, value)
         },
         get: getVisibility,
@@ -304,7 +346,10 @@ describe('advisor session header action (B2)', () => {
       observed.filter((entry) => entry.element === panel).forEach((entry) => { entry.callback() })
       await waitFor(() => { expect(panel.style.top).toBe('42px') })
       expect(panel.style.visibility).toBe('visible')
-      expect(appliedVisibilities.slice(0, 2)).toEqual(['hidden', 'visible'])
+      const panelVisibilities = appliedVisibilities
+        .filter((entry) => entry.decl === panel.style)
+        .map((entry) => entry.value)
+      expect(panelVisibilities.slice(0, 2)).toEqual(['hidden', 'visible'])
     } finally {
       if (visibilityDescriptor !== undefined) {
         Object.defineProperty(styleProto, 'visibility', visibilityDescriptor)

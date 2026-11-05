@@ -88,9 +88,12 @@ export interface PopoverGeometry {
 /**
  * Clamp the panel to the viewport: right-aligned under the trigger (matching
  * the pre-portal geometry), pushed inside `margin` on whichever edge the
- * natural position would cross. The outer `Math.max(margin, …)` keeps the
- * result on-screen even when the panel itself is larger than the viewport
- * (the inner upper bound would then be below `margin`).
+ * natural position would cross. The outer `Math.max(margin, …)` guarantees
+ * only that the top-left corner lands inside `margin` and never a negative
+ * offset — even when the panel itself is larger than the viewport (the
+ * inner upper bound would then be below `margin`); it does NOT keep an
+ * oversized panel fully on-screen. Vertical containment comes from the CSS
+ * `max-height` cap on `.panel`.
  */
 export function computePopoverPosition({ anchor, panel, viewport, gap, margin }: PopoverGeometry): { left: number; top: number } {
   const left = Math.max(
@@ -323,7 +326,9 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
         className={styles.trigger}
         aria-expanded={open}
         aria-haspopup="dialog"
-        aria-controls={panelId}
+        /* Only advertise the id while the panel exists — a closed trigger
+           pointing at a missing element is a dangling IDREF. */
+        aria-controls={open ? panelId : undefined}
         aria-label={t(open ? 'sessionCollapse' : 'sessionExpand')}
         onClick={() => { if (open) setOpen(false); else openAdvisor() }}
       >
