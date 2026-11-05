@@ -248,7 +248,7 @@ describe('advisor session reasoning effort (issue #142)', () => {
     expect(state.reasoningEfforts).toEqual([{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }])
   })
 
-  it('a stale loadReasoning settle is discarded (the newer lookup wins the request fence)', async () => {
+  it('a stale loadReasoning settle is discarded (the newer lookup wins the reasoning fence)', async () => {
     const rpc = new ScriptedRpc()
     const controller = new AdvisorSessionModelController('sess-A', rpc as unknown as ClientConnectionRpc)
     const stale = controller.loadReasoning('p', 'old-model') // parked first
@@ -261,6 +261,29 @@ describe('advisor session reasoning effort (issue #142)', () => {
     const state = controller.store.getSnapshot()
     expect(state.reasoningStatus).toBe('ready')
     expect(state.reasoningEfforts).toEqual([{ id: 'high', name: 'High' }])
+  })
+
+  it('the reasoning fence is independent: a newer lookup neither supersedes an in-flight refresh settle nor is superseded by it', async () => {
+    const rpc = new ScriptedRpc()
+    const controller = new AdvisorSessionModelController('sess-A', rpc as unknown as ClientConnectionRpc)
+
+    // The exact production interleave: the open-menu refresh is unresolved
+    // when the user picks a model and the capability lookup fires.
+    const refresh = controller.refresh() // parked first
+    const lookup = controller.loadReasoning('deepseek', 'deepseek-chat') // parked second
+
+    // The lookup settles FIRST: it commits on its own fence...
+    rpc.settleLast(ok({ efforts: [{ id: 'low', name: 'Low' }] }))
+    await lookup
+    expect(controller.store.getSnapshot().reasoningStatus).toBe('ready')
+
+    // ...and the older refresh settle STILL commits — the lookup never
+    // superseded it (the panel must not strand at Loading…).
+    rpc.settle(ok(snapshotOf({ modelSource: 'session' })))
+    await refresh
+    const state = controller.store.getSnapshot()
+    expect(state.phase).toBe('ready')
+    expect(state.snapshot?.modelSource).toBe('session')
   })
 
   it('a failed lookup latches unavailable without clearing a previous pair\'s options', async () => {

@@ -1161,6 +1161,15 @@ export class AdvisorSessionModelController {
   /** Fence token: a newer op makes every older settle stale. */
   private requestSeq = 0
 
+  /**
+   * Fence token for capability lookups, INDEPENDENT of {@link requestSeq}:
+   * a newer `loadReasoning` supersedes an older unresolved one, but a
+   * lookup never invalidates an in-flight refresh/write settle (and is not
+   * invalidated by one) — a mid-refresh model pick cannot strand the panel
+   * at `Loading…`.
+   */
+  private reasoningSeq = 0
+
   /** Last consumed refresh-signal epoch (reconnect / focus bumps). */
   private lastSignal: number | undefined
 
@@ -1230,27 +1239,28 @@ export class AdvisorSessionModelController {
   /**
    * Resolve the declared reasoning efforts for one staged pair through the
    * EXISTING capability endpoint (`/api/advisor/modelReasoning` — the same
-   * metadata channel the settings card uses; no second path). Rides the
-   * controller's monotonic request fence like every other op: a lookup whose
-   * settle is superseded by a newer op touches nothing. A successful lookup
-   * replaces the options with this pair's declared efforts (possibly empty);
-   * a failed lookup (tagged error or transport) latches `unavailable` for
-   * the pair WITHOUT clearing a previous pair's options.
+   * metadata channel the settings card uses; no second path). Rides its OWN
+   * monotonic fence (`reasoningSeq`): a lookup whose settle is superseded by
+   * a newer lookup touches nothing, while a lookup never invalidates an
+   * in-flight refresh/write settle (and is not invalidated by one). A
+   * successful lookup replaces the options with this pair's declared efforts
+   * (possibly empty); a failed lookup (tagged error or transport) latches
+   * `unavailable` for the pair WITHOUT clearing a previous pair's options.
    * @param provider - staged provider route id.
    * @param model - staged model id.
    */
   async loadReasoning(provider: string, model: string): Promise<void> {
-    const seq = ++this.requestSeq
+    const seq = ++this.reasoningSeq
     this.store.update((s) => {
       s.reasoningStatus = 'loading'
     })
     let payload: AdvisorModelReasoningPayload | undefined
     try {
       const result = await this.rpc.call('/api', 'advisor/modelReasoning', { args: { provider, model } })
-      if (seq !== this.requestSeq) return
+      if (seq !== this.reasoningSeq) return
       if (result.ok) payload = result.value as AdvisorModelReasoningPayload
     } catch {
-      if (seq !== this.requestSeq) return
+      if (seq !== this.reasoningSeq) return
     }
     if (payload !== undefined && 'efforts' in payload) {
       this.store.update((s) => {
