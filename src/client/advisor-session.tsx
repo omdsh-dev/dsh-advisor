@@ -213,27 +213,34 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
   // (the select's first option); reset on every provider/model transition
   // and reloaded through loadReasoning (issue #142).
   const [effort, setEffort] = useState('')
-  /** True once the user touches the effort select — seeding must stand down. */
+  /** True once the user touches the effort select — the VALUE seed must stand down. */
   const effortEditedRef = useRef(false)
-  /** The pair whose options were last resolved (dedupes the open-time load). */
+  /** The pair whose options were last resolved (dedupes the capability probe). */
   const lastReasoningKeyRef = useRef('')
+  /**
+   * Bumped on every menu open that may re-probe (no lookup in flight) — a
+   * REACTIVE retry trigger the seed effect depends on, so the re-probe does
+   * not silently depend on `refresh()` producing a new snapshot object.
+   */
+  const [probeEpoch, setProbeEpoch] = useState(0)
 
   // Seed the staged effort from the pinned override and resolve the pinned
   // model's declared efforts (the pinned id must be a selectable option).
-  // Runs whenever the snapshot or the staged pair changes; a user edit
-  // (effortEditedRef) suppresses the seed until the next pair transition.
-  // The load is gated on the STAGED pair matching the effective one: a pair
-  // the user has staged past must never be superseded by this load (QC1-W2
-  // — it would bump reasoningSeq and discard the staged lookup).
+  // Runs whenever the snapshot, the staged pair, or the probe epoch changes.
+  // The capability probe is gated ONLY by the pair match + the per-pair
+  // dedupe key (QC1-W2): a user edit suppresses the VALUE seed, never the
+  // probe — otherwise a reopen after a failed lookup could never re-probe
+  // once the user touched the select.
   const snapshotForSeed = state.snapshot
   useEffect(() => {
-    if (effortEditedRef.current) return
     const effective = snapshotForSeed?.effectiveModel
     const pinnedEffort = snapshotForSeed?.reasoningEffortOverride
     const stagedMatchesEffective = effective !== undefined
       && provider === effective.provider
       && model === effective.model
-    setEffort(stagedMatchesEffective && pinnedEffort !== undefined ? pinnedEffort : '')
+    if (!effortEditedRef.current) {
+      setEffort(stagedMatchesEffective && pinnedEffort !== undefined ? pinnedEffort : '')
+    }
     if (stagedMatchesEffective && pinnedEffort !== undefined && effective !== undefined) {
       const key = `${effective.provider}/${effective.model}`
       if (key !== lastReasoningKeyRef.current) {
@@ -241,7 +248,7 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
         void controller.loadReasoning(effective.provider, effective.model)
       }
     }
-  }, [snapshotForSeed, provider, model, controller])
+  }, [snapshotForSeed, provider, model, controller, probeEpoch])
 
   // Open is a refresh point (fetch on menu open): every open refetches and
   // marks the current signal epoch consumed, so the watcher below does not
@@ -250,10 +257,15 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
   // writes through it.
   const openAdvisor = (): void => {
     setOpen(true)
-    // The open is the retry point: a failed lookup latches `unavailable`
-    // and the dedupe key would otherwise block a re-probe for the menu
-    // lifetime (BUG-01) — reopening gets one fresh attempt per pair.
-    lastReasoningKeyRef.current = ''
+    // The open is the retry point (BUG-01): one re-probe per open — but
+    // ONLY when no lookup is in flight: a close/reopen during 'loading'
+    // would otherwise supersede the first (possibly successful) response,
+    // and the retry rides a reactive epoch so it does not depend on
+    // `refresh()` producing a new snapshot object.
+    if (state.reasoningStatus !== 'loading') {
+      lastReasoningKeyRef.current = ''
+      setProbeEpoch((n) => n + 1)
+    }
     controller.takeSignal(epoch)
     void controller.refresh()
     if (directoryState.status === 'idle') void directory.load()

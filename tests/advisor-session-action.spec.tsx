@@ -820,21 +820,82 @@ describe('advisor session reasoning effort (issue #142)', () => {
       ['high', t('sessionEffortStaged', { id: 'high' })],
     ])
 
-    // Reopen is the retry point (BUG-01): the refresh refetches AND the
-    // seed effect re-probes the pinned pair — exactly one new lookup for
-    // it, not latched out for the menu lifetime.
+    // Reopen is the retry point (BUG-01): exactly ONE new lookup, naming
+    // the pinned pair, and its payload must actually land.
     fireEvent.click(screen.getByRole('button', { name: en.sessionCollapse }))
     fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
     await waitFor(() => expect(h.rpc.calls).toHaveLength(4))
-    expect(h.rpc.calls[2]!.method).toBe('advisor/getSession')
-    expect(h.rpc.last()).toEqual({
-      channel: '/api', method: 'advisor/modelReasoning', args: { provider: 'prov-a', model: 'model-a' },
-    })
+    const lookups = h.rpc.calls.filter((call) => call.method === 'advisor/modelReasoning')
+    expect(lookups).toHaveLength(2)
+    expect(lookups.at(-1)!.args).toEqual({ provider: 'prov-a', model: 'model-a' })
+
+    // Settle BOTH parked calls in FIFO order: the refresh, then the retried
+    // lookup — the retry's declared ids must commit and turn the select to
+    // the real options (no fallback option, no stale 'unavailable').
     h.rpc.settle(ok({ snapshot: { ...pinnedA.snapshot } }))
-    await settled({ controller: h.controller })
+    h.rpc.settle(ok({ efforts: [{ id: 'high', name: 'High' }, { id: 'max', name: 'Max' }] }))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
+    expect(h.controller.store.getSnapshot().reasoningEfforts).toEqual([
+      { id: 'high', name: 'High' },
+      { id: 'max', name: 'Max' },
+    ])
     view.rerender(<AdvisorSessionAction {...h.props} />)
+    const retried = screen.getByLabelText(en.sessionEffort) as HTMLSelectElement
+    expect(Array.from(retried.options).map((o) => [o.value, o.textContent])).toEqual([
+      ['', en.sessionEffortInherit],
+      ['high', 'High'],
+      ['max', 'Max'],
+    ])
+    expect(retried.value).toBe('high')
     // The retry settled into the same pair's options — no second lookup.
     expect(h.rpc.calls).toHaveLength(4)
+  })
+
+  it('reopening while a lookup is in flight does not supersede it', async () => {
+    const pinnedA = {
+      snapshot: {
+        sessionId: 'sess-1',
+        enabled: true,
+        lifetime: 'live-session' as const,
+        modelOverride: { provider: 'prov-a', model: 'model-a' },
+        modelSource: 'session' as const,
+        effectiveModel: { provider: 'prov-a', model: 'model-a' },
+        reasoningEffortOverride: 'high',
+      },
+    }
+    const h = harness(ok(pinnedA))
+    h.props.directory.store.update((s: AdvisorSettingsState) => {
+      s.providers = [{ provider: 'prov-a', displayName: 'A', settingsNs: 'llm-a', settingsPath: [], configured: true }]
+      s.modelsByProvider = { 'prov-a': [{ id: 'model-a', name: 'Model A' }] }
+    })
+    const view = render(<AdvisorSessionAction {...h.props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
+    h.rpc.settle(ok(pinnedA))
+    await settled({ controller: h.controller })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'prov-a' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'model-a' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
+    expect(h.controller.store.getSnapshot().reasoningStatus).toBe('loading')
+
+    // Close + reopen while the lookup is in flight: the retry point must
+    // NOT fire (no key reset, no new probe) — the in-flight response is
+    // still authoritative.
+    fireEvent.click(screen.getByRole('button', { name: en.sessionCollapse }))
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(3))
+    expect(h.rpc.last().method).toBe('advisor/getSession')
+    expect(h.rpc.calls.filter((call) => call.method === 'advisor/modelReasoning')).toHaveLength(1)
+
+    // The first lookup settles AFTER the reopen — it must still commit.
+    h.rpc.settle(ok({ efforts: [{ id: 'high', name: 'High' }] }))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
+    expect(h.controller.store.getSnapshot().reasoningEfforts).toEqual([{ id: 'high', name: 'High' }])
+    h.rpc.settle(ok(pinnedA))
+    await settled({ controller: h.controller })
   })
 
   it('a user-edited effort is not overwritten when a refresh settles', async () => {
