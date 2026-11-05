@@ -2,6 +2,12 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.6.6] - 2026-11-05
+
+- 265f16c feat: pin and surface the advisor reasoning effort per session (#142) (#144)
+- d5710f9 fix: portal the advisor session popover out of the clipped column (#141) (#143)
+- dd967b3 chore(deps): 升级 dsh peers 到 0.2.1-rc.5 / upgrade dsh peers to 0.2.1-rc.5 (#140)
+
 ## [0.6.5] - 2026-10-28
 
 - b355049 chore(deps): 升级 dsh peers 到 0.2.1-rc.4 / upgrade dsh peers to 0.2.1-rc.4 (#138)
