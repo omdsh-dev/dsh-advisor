@@ -130,8 +130,11 @@ describe('advisor session endpoints (unit, scripted face)', () => {
     await gateway.setSessionModel('sess-1', null)
     expect(resetSessionModel).toHaveBeenCalledWith('sess-1')
     await gateway.setSessionModel('sess-1', { provider: '  deepseek  ', model: 'deepseek-chat' })
-    // No effort in the selection → the face receives an ABSENT effort (inherit).
-    expect(setSessionModel.mock.calls.at(-1)?.[3]).toBeUndefined()
+    // No effort in the selection → the face receives the TRIMMED pair plus an
+    // ABSENT effort. Pin the WHOLE call: a lone `at(-1)` check would pass with
+    // zero calls and would drop the forwarding coverage the title claims.
+    expect(setSessionModel.mock.calls).toHaveLength(1)
+    expect(setSessionModel).toHaveBeenLastCalledWith('sess-1', 'deepseek', 'deepseek-chat', undefined)
     // A present effort is forwarded (GitHub issue #142).
     await gateway.setSessionModel('sess-1', { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' })
     expect(setSessionModel).toHaveBeenCalledWith('sess-1', 'deepseek', 'deepseek-chat', 'high')

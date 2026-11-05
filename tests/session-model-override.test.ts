@@ -881,11 +881,16 @@ describe('session model override — reasoning effort pin (GitHub issue #142)', 
     await invokeAdvisor(handler, ' model set other/other-model', session)
     const rejected = textOf(await invokeAdvisor(handler, ' model set stub/stub-model:medium', session))
     expect(rejected).toContain('Not set:')
-    // The rejection names the declared ids so the operator can retry — assert
-    // the EXACT parenthesised list: bare `off`/`high` substrings would also
-    // match the echoed model and the remedy sentence, so they would stay green
-    // even if the list were dropped.
-    expect(rejected).toContain('is not declared by stub/stub-model (declared: off, high)')
+    // Structured facts: the reply names the model and the rejected effort, and
+    // lists BOTH declared ids inside the parenthesised group. Pinning the exact
+    // sentence would couple the assertion to separators and id ordering.
+    expect(rejected).toContain('stub/stub-model')
+    expect(rejected).toContain('"medium"')
+    const declaredGroup = /\(declared: ([^)]*)\)/.exec(rejected)
+    expect(declaredGroup).not.toBeNull()
+    const declaredIds = declaredGroup?.[1] ?? ''
+    expect(declaredIds).toMatch(/\boff\b/)
+    expect(declaredIds).toMatch(/\bhigh\b/)
     expect(rejected).toContain('if the ":" belongs to the model id')
     expect(rejected).toContain('pin the full id with an explicit effort suffix')
     // No fabricated full-id example (the truncated model's ids do not vouch
