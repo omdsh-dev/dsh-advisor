@@ -50,6 +50,10 @@
   position: fixed;
   z-index: 1100;
   width: 300px;
+  /* A panel taller than the viewport scrolls its own content (matching the
+     8px screen margin on both edges) instead of losing its lower controls. */
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);

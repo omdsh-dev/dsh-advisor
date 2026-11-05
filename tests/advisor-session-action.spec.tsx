@@ -168,6 +168,17 @@ describe('computePopoverPosition (viewport clamp, issue #141)', () => {
       panel, viewport, gap: 6, margin: 8,
     })).toEqual({ left: 160, top: 592 })
   })
+
+  it('never returns a negative offset when the panel is larger than the viewport', () => {
+    // 1280×800 viewport, 1500×2000 panel: the naive upper clamp
+    // (viewport − size − margin) lands below the margin, and plain
+    // min(max(natural, margin), upper) would paint the panel off-screen.
+    expect(computePopoverPosition({
+      anchor: { left: 20, top: 40, right: 80, bottom: 64 },
+      panel: { width: 1500, height: 2000 },
+      viewport, gap: 6, margin: 8,
+    })).toEqual({ left: 8, top: 8 })
+  })
 })
 
 describe('advisor session header action (B2)', () => {
@@ -188,6 +199,34 @@ describe('advisor session header action (B2)', () => {
     expect(screen.getByRole('dialog').parentElement).toBe(document.body)
   })
 
+  it('the portalled dialog stays wired to the trigger: aria-controls + focus hand-off', () => {
+    // The portal severed the pre-portal DOM sibling path (Tab from the
+    // trigger used to reach the panel); the wiring must restore it.
+    const { props } = harness(ok(SESSION_SNAPSHOT))
+    render(<AdvisorSessionAction {...props} />)
+    const trigger = screen.getByRole('button', { name: en.sessionExpand })
+    fireEvent.click(trigger)
+    const panel = screen.getByRole('dialog')
+    expect(panel.id).not.toBe('')
+    expect(trigger.getAttribute('aria-controls')).toBe(panel.id)
+    // Focus moves into the panel on open and returns to the trigger on close.
+    expect(document.activeElement).toBe(panel)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionCollapse }))
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('a reopen after close is measured and visible again (the skip-unchanged ref must not strand it hidden)', () => {
+    const { props } = harness(ok(SESSION_SNAPSHOT))
+    render(<AdvisorSessionAction {...props} />)
+    const trigger = screen.getByRole('button', { name: en.sessionExpand })
+    fireEvent.click(trigger)
+    expect(screen.getByRole('dialog').style.visibility).toBe('visible')
+    fireEvent.click(screen.getByRole('button', { name: en.sessionCollapse }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(trigger)
+    expect(screen.getByRole('dialog').style.visibility).toBe('visible')
+  })
+
   it('re-clamps the open panel when async content growth changes its measured height', async () => {
     // jsdom measures nothing: drive the geometry the layout effect reads.
     let panelHeight = 80
@@ -196,14 +235,37 @@ describe('advisor session header action (B2)', () => {
     const originalInnerHeight = window.innerHeight
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 250 })
     // The size-change channel the panel relies on (jsdom has no
-    // ResizeObserver): record the callbacks so a growth can be reported.
-    const observerCallbacks = new Set<() => void>()
+    // ResizeObserver): contract-mirror stub — each instance records the
+    // element it was asked to observe, and growth is reported only through
+    // instances that actually observed the panel. Deleting
+    // `observer.observe(panel)` in production leaves no matching instance,
+    // the growth below is never reported, and this test goes red.
+    const observed: Array<{ callback: () => void; element: Element }> = []
     vi.stubGlobal('ResizeObserver', class {
-      constructor(cb: () => void) { observerCallbacks.add(cb) }
-      observe(): void {}
+      #callback: () => void
+      constructor(callback: () => void) { this.#callback = callback }
+      observe(element: Element): void { observed.push({ callback: this.#callback, element }) }
       unobserve(): void {}
       disconnect(): void {}
     })
+    // First-paint contract: the panel mounts `visibility: hidden` and turns
+    // visible only once the layout effect has measured and clamped it.
+    // React applies style through the CSSStyleDeclaration accessor, so a
+    // prototype spy observes the hidden → visible order.
+    const appliedVisibilities: string[] = []
+    const styleProto = Object.getPrototypeOf(document.createElement('div').style) as CSSStyleDeclaration
+    const visibilityDescriptor = Object.getOwnPropertyDescriptor(styleProto, 'visibility')
+    if (visibilityDescriptor !== undefined && visibilityDescriptor.set !== undefined) {
+      const { set: setVisibility, get: getVisibility } = visibilityDescriptor
+      Object.defineProperty(styleProto, 'visibility', {
+        set(this: CSSStyleDeclaration, value: string) {
+          appliedVisibilities.push(value)
+          setVisibility.call(this, value)
+        },
+        get: getVisibility,
+        configurable: true,
+      })
+    }
     try {
       const { props, rpc, controller } = harness(ok(SESSION_SNAPSHOT))
       const view = render(<AdvisorSessionAction {...props} />)
@@ -213,9 +275,12 @@ describe('advisor session header action (B2)', () => {
       } as DOMRect)
 
       fireEvent.click(trigger)
+      const panel = screen.getByRole('dialog')
       // Open at height 80 under a 250px viewport: natural top 70 fits the
-      // bottom clamp (250 − 80 − 8 = 162), so it applies as-is.
-      expect(screen.getByRole('dialog').style.top).toBe('70px')
+      // bottom clamp (250 − 80 − 8 = 162), so it applies as-is — measured
+      // and visible.
+      expect(panel.style.top).toBe('70px')
+      expect(panel.style.visibility).toBe('visible')
 
       // The snapshot settles (loading → loaded body) and the panel grows to
       // 200; the position must re-clamp to 250 − 200 − 8 = 42 — without any
@@ -224,9 +289,14 @@ describe('advisor session header action (B2)', () => {
       await settled({ controller })
       view.rerender(<AdvisorSessionAction {...props} />)
       panelHeight = 200
-      observerCallbacks.forEach((cb) => { cb() })
-      await waitFor(() => { expect(screen.getByRole('dialog').style.top).toBe('42px') })
+      observed.filter((entry) => entry.element === panel).forEach((entry) => { entry.callback() })
+      await waitFor(() => { expect(panel.style.top).toBe('42px') })
+      expect(panel.style.visibility).toBe('visible')
+      expect(appliedVisibilities.slice(0, 2)).toEqual(['hidden', 'visible'])
     } finally {
+      if (visibilityDescriptor !== undefined) {
+        Object.defineProperty(styleProto, 'visibility', visibilityDescriptor)
+      }
       Object.defineProperty(window, 'innerHeight', { configurable: true, value: originalInnerHeight })
       vi.unstubAllGlobals()
       vi.restoreAllMocks()
