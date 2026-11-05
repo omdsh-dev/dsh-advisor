@@ -66,7 +66,7 @@
 | 指令 | 行为 |
 |---|---|
 | `/advisor model` | 显示有效评审模型（provider/model）、来源（`session` 覆盖或 `global` 默认）与生存期说明；会话钉住了 effort 时追加一行 `Effort: <id> (session pin — cleared by /advisor model reset)`（继承全局的会话不打印该行） |
-| `/advisor model set <provider>/<model>[:<effort>]` | 仅为**发起调用的会话**钉住模型，可选同时钉住思考权重。**单个 token**：第一个 `/` 分隔 provider 与 model，其后最后一个 `:` 分隔 model 与 effort（model id 本身可含 `/` 与 `:`）；`:` 后为空是用法拒绝，不是静默继承；旧的两参数 `<provider> <model>` 形式已退役，按用法错误拒绝；不接受任意 session-id 参数 |
+| `/advisor model set <provider>/<model>[:<effort>]` | 仅为**发起调用的会话**钉住模型，可选同时钉住思考权重。**单个 token**：第一个 `/` 分隔 provider 与 model；**最后一个** `:` 一律是 effort 分隔符——因此含 `:` 的 model id 只有带上显式 `:<effort>` 后缀才能表达（如 `p/m:chat:high`）；`:` 后为空是用法拒绝，不是静默继承；显式 effort 必须由解析出的模型声明，否则提交前即被拒绝（`Not set: …` 并列出已声明 id）；旧的两参数 `<provider> <model>` 形式已退役，按用法错误拒绝；不接受任意 session-id 参数 |
 | `/advisor model reset` | 删除本会话覆盖（模型对**与**钉住的 effort 一并清除），重新继承**当前**全局默认值；从不触碰启用开关 |
 
 - **解析顺序（单一有效解析器）**：(1) 先校验全局配置形状（非法仍然失败关闭）；(2) 启用 = 会话启用 override（`/advisor on|off`）?? 持久化 `defaultEnabled`（默认 `true`；GitHub issue #124），**再与** post-gate `enabled` 取 AND——插件行在运行且 pair 齐全时，只有显式 `/advisor off` 或 `defaultEnabled: false`（且无该会话 override）会关闭会话；`defaultEnabled: false` 时 `/advisor on` 写入该会话的显式 override，只影响该会话，不改持久化配置；显式 `/advisor on|off` **总会记录**该会话的选择（即使与当前有效值相同），因此之后翻转 `defaultEnabled` 不会覆盖它；(3) 路由 = 会话的**完整** `modelOverride` 对 ?? 组合后的全局 advisor 对——两级之间的**半个 pair 永不拼接**；(4) 全局组合保持 用户设置 → 插件行基础值 → schema 默认值。`/advisor model set|reset` 从不改变启用开关。
