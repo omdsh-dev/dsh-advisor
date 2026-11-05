@@ -521,10 +521,6 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       // Plan dsh-advisor-reasoning-effort (RD-1/RD-2): absent/empty = the
       // smallest effort the resolved model declares.
       reasoningEffort: effectiveReasoningEffort(sessionId),
-      // Origin label for the status surface (issue #142 review): a pinned
-      // effort is this session's own choice; an absent pin inherits the
-      // persisted global value.
-      reasoningEffortOrigin: overrides.model(sessionId)?.reasoningEffort === undefined ? 'global' : 'session',
       llm: appRootLlm(),
       onNote: (note: AdviceNote) => {
         // Accepted notes only — the runtime's emission guard (T5) already
@@ -810,18 +806,32 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       : pair !== undefined && pair.provider === effective.provider && pair.model === effective.model
         ? 'session'
         : 'global'
+    // GitHub issue #142: the live runtime's recorded effort outcome — absent
+    // when there is no runtime (the surface never invents a value), `pending`
+    // when it has not resolved yet.
+    //
+    // QC2 W-001: the ORIGIN is derived HERE, from the live override, never
+    // snapshotted at runtime construction — an equal-value pin/un-pin changes
+    // no rebuild input (the runtime is correctly reused), so only this label
+    // may move.
+    const recordedEffort = runtime?.reasoningEffortResolution
+    const reasoningEffort = runtime === undefined
+      ? undefined
+      : recordedEffort === undefined
+        ? { source: 'pending' as const }
+        : recordedEffort.configured === undefined
+          ? recordedEffort
+          : {
+              ...recordedEffort,
+              origin: pair?.reasoningEffort === undefined ? ('global' as const) : ('session' as const),
+            }
     return {
       enabled: effective.enabled,
       ...(effective.disabledReason === undefined ? {} : { disabledReason: effective.disabledReason }),
       provider: effective.provider,
       model: effective.model,
       ...(source === undefined ? {} : { modelSource: source }),
-      // GitHub issue #142: the live runtime's recorded effort outcome. Absent
-      // when there is no runtime (the surface never invents a value); a live
-      // runtime that has not resolved yet reports `pending`.
-      ...(runtime === undefined
-        ? {}
-        : { reasoningEffort: runtime.reasoningEffortResolution ?? { source: 'pending' as const } }),
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       runtimeStatus: runtime?.status() ?? 'disabled',
       pendingCount: runtime?.pendingCount ?? 0,
       lastActivityAt: runtime?.lastActivity,

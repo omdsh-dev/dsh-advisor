@@ -166,14 +166,6 @@ export interface AdvisorRuntimeOptions {
    * omitted entirely.
    */
   readonly reasoningEffort?: string
-  /**
-   * Where the configured `reasoningEffort` came from (GitHub issue #142
-   * review of the visibility surface): `global` = the persisted config value,
-   * `session` = this session's own pin. Absent = unknown (direct construction);
-   * the recorded state then omits `origin` and `/advisor status` falls back to
-   * the neutral `(configured)` label.
-   */
-  readonly reasoningEffortOrigin?: 'global' | 'session'
   /** The llm service (`ctx.llm`); injectable for tests. */
   readonly llm: AdvisorLlm
   /**
@@ -464,8 +456,6 @@ export class AdvisorRuntime {
   private readonly proseFallback: boolean
   /** Configured effort id, normalized: `undefined` = automatic (smallest declared). */
   private readonly reasoningEffort: string | undefined
-  /** Origin of the configured effort (issue #142 review); see the option doc. */
-  private readonly reasoningEffortOrigin: 'global' | 'session' | undefined
   private readonly retryBackoffMs: number
   private readonly callTimeoutMs: number
   private readonly maxQueued: number
@@ -528,7 +518,6 @@ export class AdvisorRuntime {
     // snapshot already normalizes it, and re-checking here keeps a direct
     // construction from sending '' or warning about a blank value.
     this.reasoningEffort = options.reasoningEffort?.trim() || undefined
-    this.reasoningEffortOrigin = options.reasoningEffortOrigin
     this.retryBackoffMs = options.retryBackoffMs ?? DEFAULT_RETRY_BACKOFF_MS
     this.callTimeoutMs = options.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS
     this.maxQueued = options.maxQueued ?? DEFAULT_MAX_QUEUED
@@ -1031,11 +1020,6 @@ export class AdvisorRuntime {
       this.reasoningEffortCache.set(key, efforts)
     }
     const configured = this.reasoningEffort
-    // The origin label travels ONLY with a configured id (issue #142 review):
-    // `auto` has no configured value and `pending` is a status-only state.
-    const configuredOrigin = configured === undefined || this.reasoningEffortOrigin === undefined
-      ? {}
-      : { origin: this.reasoningEffortOrigin }
     const smallest = efforts[0]
     if (smallest === undefined) {
       // A configured value that cannot be sent because the model declares no
@@ -1052,7 +1036,7 @@ export class AdvisorRuntime {
       // GitHub issue #142: definitive verdict — the option is omitted.
       this.reasoningEffortResolved = configured === undefined
         ? { source: 'none' }
-        : { source: 'none', configured, ...configuredOrigin }
+        : { source: 'none', configured }
       return undefined
     }
     if (configured === undefined) {
@@ -1061,12 +1045,7 @@ export class AdvisorRuntime {
     }
     const declared = efforts.find((entry) => entry.id === ReasoningEffortId(configured))
     if (declared !== undefined) {
-      this.reasoningEffortResolved = {
-        source: 'configured',
-        effective: declared.id,
-        configured,
-        ...configuredOrigin,
-      }
+      this.reasoningEffortResolved = { source: 'configured', effective: declared.id, configured }
       return declared.id
     }
     if (!this.reasoningEffortWarned) {
@@ -1076,12 +1055,7 @@ export class AdvisorRuntime {
         { provider: this.provider, model: this.model, configured, fallback: smallest.id },
       )
     }
-    this.reasoningEffortResolved = {
-      source: 'fallback-undeclared',
-      effective: smallest.id,
-      configured,
-      ...configuredOrigin,
-    }
+    this.reasoningEffortResolved = { source: 'fallback-undeclared', effective: smallest.id, configured }
     return smallest.id
   }
 }

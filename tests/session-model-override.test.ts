@@ -1050,6 +1050,36 @@ describe('session model override — reasoning effort pin (GitHub issue #142)', 
     expect('reasoningEffortOverride' in snapshot).toBe(false)
     expect(snapshot['reasoningEffort']).toEqual({ source: 'pending' })
   })
+
+  it('an equal-value pin/un-pin flips the origin label live, without a runtime rebuild (QC2 W-001)', async () => {
+    const { ctx, adapter, entry, handler, agents } = await composeOverrideHarness(
+      { provider: 'stub', model: 'stub-model', reasoningEffort: 'high' },
+      [textReply('note')],
+    )
+    publishAgent(ctx, agents, 's1')
+    const { session, log } = makeSession('s1')
+    const status = async (): Promise<string> => textOf(await invokeAdvisor(handler, ' status', session))
+
+    // The session inherits the global 'high'; the first call resolves it.
+    feed(ctx, session, log, simpleTurn(1, 'u1', 'a1'))
+    await vi.waitFor(() => expect(adapter.requests).toHaveLength(1))
+    expect(await status()).toContain('Effort: high (global default)')
+
+    // Pin the SAME id: no rebuild input changes, so the outcome is 'unchanged'
+    // — the label must flip anyway (a construction-time snapshot would not).
+    const pinned = textOf(await invokeAdvisor(handler, ' model set stub/stub-model:high', session))
+    expect(pinned).toContain('same effective route, runtime untouched')
+    expect(await status()).toContain('Effort: high (session override)')
+
+    // Un-pin the equal value: the sent value is identical, the label flips back.
+    expect(textOf(await invokeAdvisor(handler, ' model reset', session))).toContain('pin removed')
+    expect(await status()).toContain('Effort: high (global default)')
+
+    // A global edit never steals a pinned session's label.
+    await invokeAdvisor(handler, ' model set stub/stub-model:high', session)
+    entry.commit(ctx, { reasoningEffort: 'off' })
+    expect(await status()).toContain('Effort: high (session override)')
+  })
 })
 
 // ---------------------------------------------------------------------------
