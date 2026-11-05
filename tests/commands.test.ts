@@ -1120,6 +1120,21 @@ describe('advisorStatusText Effort line (AC1/AC2, GitHub issue #142)', () => {
       .toContain('Effort: medium (configured)')
   })
 
+  it('configured: names the origin — global default vs session override', () => {
+    expect(withEffort({ source: 'configured', effective: 'medium', configured: 'medium', origin: 'global' }))
+      .toContain('Effort: medium (global default)')
+    expect(withEffort({ source: 'configured', effective: 'medium', configured: 'medium', origin: 'session' }))
+      .toContain('Effort: medium (session override)')
+  })
+
+  it('configured: falls back to the neutral label when the origin is unknown', () => {
+    const text = withEffort({ source: 'configured', effective: 'medium', configured: 'medium' })
+    // Assert the Effort line itself — the Model line of a pinned fixture
+    // legitimately says "session override".
+    expect(text.split('\n').find((line) => line.startsWith('Effort:')))
+      .toBe('Effort: medium (configured)')
+  })
+
   it('auto: the smallest declared effort (AC1)', () => {
     expect(withEffort({ source: 'auto', effective: 'low' }))
       .toContain('Effort: low (auto — smallest declared by p/m)')

@@ -84,8 +84,9 @@ export interface AdvisorPairWire {
  *   complete pair;
  * - `reasoningEffortOverride` — the session-pinned effort (GitHub issue #142);
  *   omitted while the session inherits the global value;
- * - `reasoningEffort` — the effort outcome the live runtime recorded (sent id
- *   + source); omitted when the session has no runtime;
+ * - `reasoningEffort` — the effort outcome the live runtime recorded (sent id,
+ *   source, and — for a configured id — its `origin`: the persisted global
+ *   value vs the session pin); omitted when the session has no runtime;
  * - `disabledReason` — the S4 explicit-gate reason when it blocks.
  */
 export interface AdvisorSessionSnapshotWire {

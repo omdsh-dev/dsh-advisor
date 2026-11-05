@@ -848,7 +848,7 @@ describe('session model override — single elected owner (spec §5.3)', () => {
 // ---------------------------------------------------------------------------
 
 describe('session model override — reasoning effort pin (GitHub issue #142)', () => {
-  it('pinning <model>:<effort> sends that effort and reports it as configured', async () => {
+  it('pinning <model>:<effort> sends that effort and reports it as a session override', async () => {
     const { ctx, adapter, handler, agents } = await composeOverrideHarness(
       { provider: 'stub', model: 'stub-model' },
       [textReply('effort note')],
@@ -865,7 +865,7 @@ describe('session model override — reasoning effort pin (GitHub issue #142)', 
     expect(adapter.requests[0]!.reasoningEffort).toBe(ReasoningEffortId('high'))
 
     const status = textOf(await invokeAdvisor(handler, ' status', session))
-    expect(status).toContain('Effort: high (configured)')
+    expect(status).toContain('Effort: high (session override)')
     // Exactly one Effort line on the status surface (AC1).
     expect(status.split('\n').filter((line) => line.startsWith('Effort:'))).toHaveLength(1)
   })
@@ -887,8 +887,11 @@ describe('session model override — reasoning effort pin (GitHub issue #142)', 
     expect(rejected).toContain('not declared')
     expect(rejected).toContain('off')
     expect(rejected).toContain('high')
-    expect(rejected).toContain('a model id containing ":" needs an explicit effort suffix')
-    expect(rejected).toContain('stub/stub-model:medium:off')
+    expect(rejected).toContain('if the ":" belongs to the model id')
+    expect(rejected).toContain('pin the full id with an explicit effort suffix')
+    // No fabricated full-id example (the truncated model's ids do not vouch
+    // for it).
+    expect(rejected).not.toContain('stub/stub-model:medium:off')
 
     // The previous selection stayed in place — route AND (absent) effort.
     const status = textOf(await invokeAdvisor(handler, ' status', session))
@@ -909,10 +912,13 @@ describe('session model override — reasoning effort pin (GitHub issue #142)', 
 
     // `other/other-model:4o` parses as model `other-model` + effort `4o`; the
     // gate rejects that undeclared suffix and must name the way to pin the
-    // model id the operator meant.
+    // model id the operator meant — WITHOUT fabricating a full-id example
+    // (the truncated model's declared ids do not vouch for the full id).
     const rejected = textOf(await invokeAdvisor(handler, ' model set other/other-model:4o', session))
-    expect(rejected).toContain('a model id containing ":" needs an explicit effort suffix')
-    expect(rejected).toContain('other/other-model:4o:off')
+    expect(rejected).toContain('if the ":" belongs to the model id')
+    expect(rejected).toContain('pin the full id with an explicit effort suffix')
+    expect(rejected).not.toContain('other/other-model:4o:off')
+    expect(rejected).not.toContain('e.g.')
     // Nothing was committed.
     expect(textOf(await invokeAdvisor(handler, ' status', session)))
       .toContain('Model: stub/stub-model (global default)')
@@ -989,7 +995,7 @@ describe('session model override — reasoning effort pin (GitHub issue #142)', 
     // Exactly one new call for one delta — no stale second runtime surviving.
     await flush()
     expect(adapter.requests).toHaveLength(2)
-    expect(textOf(await invokeAdvisor(handler, ' status', session))).toContain('Effort: high (configured)')
+    expect(textOf(await invokeAdvisor(handler, ' status', session))).toContain('Effort: high (session override)')
   })
 
   it('the wire snapshot carries the pinned effort and the recorded resolution', async () => {
@@ -1019,7 +1025,7 @@ describe('session model override — reasoning effort pin (GitHub issue #142)', 
         modelSource: 'session',
         effectiveModel: { provider: 'other', model: 'other-model' },
         reasoningEffortOverride: 'high',
-        reasoningEffort: { source: 'configured', effective: 'high', configured: 'high' },
+        reasoningEffort: { source: 'configured', effective: 'high', configured: 'high', origin: 'session' },
       },
     })
   })
@@ -1075,8 +1081,8 @@ describe('session model override — global effort edits (GitHub issue #142 · A
     const efforts = adapter.requests.map((options) => String(options.reasoningEffort)).sort()
     expect(efforts).toEqual(['high', 'off'])
     expect(textOf(await invokeAdvisor(handler, ' status', sessionA.session)))
-      .toContain('Effort: high (configured)')
+      .toContain('Effort: high (global default)')
     expect(textOf(await invokeAdvisor(handler, ' status', sessionB.session)))
-      .toContain('Effort: off (configured)')
+      .toContain('Effort: off (session override)')
   })
 })

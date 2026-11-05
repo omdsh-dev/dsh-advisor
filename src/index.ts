@@ -521,6 +521,10 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       // Plan dsh-advisor-reasoning-effort (RD-1/RD-2): absent/empty = the
       // smallest effort the resolved model declares.
       reasoningEffort: effectiveReasoningEffort(sessionId),
+      // Origin label for the status surface (issue #142 review): a pinned
+      // effort is this session's own choice; an absent pin inherits the
+      // persisted global value.
+      reasoningEffortOrigin: overrides.model(sessionId)?.reasoningEffort === undefined ? 'global' : 'session',
       llm: appRootLlm(),
       onNote: (note: AdviceNote) => {
         // Accepted notes only — the runtime's emission guard (T5) already
@@ -965,11 +969,12 @@ export function apply(ctx: Context, config: AdvisorConfig) {
         }
         if (!declaredEfforts.includes(reasoningEffort)) {
           // The parser cannot tell a model id ending in ":" from an effort
-          // suffix, so this branch names the remedy: re-pin with an explicit
-          // declared effort (QC2 F-001).
+          // suffix, so this branch names the remedy — without inventing an
+          // example: the listed ids belong to the TRUNCATED model, which says
+          // nothing about the full id the operator may have meant (QC2 F-001).
           return {
             kind: 'rejected',
-            reason: `"${reasoningEffort}" is not declared by ${provider}/${model} (declared: ${declaredEfforts.join(', ')}) — a model id containing ":" needs an explicit effort suffix, e.g. ${provider}/${model}:${reasoningEffort}:${declaredEfforts[0]}`,
+            reason: `"${reasoningEffort}" is not declared by ${provider}/${model} (declared: ${declaredEfforts.join(', ')}) — if the ":" belongs to the model id, pin the full id with an explicit effort suffix; these are ${provider}/${model}'s ids, not the full id's`,
           }
         }
       }

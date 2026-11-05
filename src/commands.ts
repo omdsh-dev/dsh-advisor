@@ -354,6 +354,11 @@ export interface AdvisorReasoningEffortState {
   readonly effective?: string
   /** The configured/pinned id, when one existed. */
   readonly configured?: string
+  /**
+   * Where a `configured` id came from (GitHub issue #142 review): the persisted
+   * global value or this session's pin. Present only alongside `configured`.
+   */
+  readonly origin?: 'global' | 'session'
 }
 
 /**
@@ -441,9 +446,17 @@ export function advisorStatusText(status: AdvisorSessionStatus): string {
       case 'pending':
         lines.push('Effort: pending — resolved on the first review call')
         break
-      case 'configured':
-        lines.push(`Effort: ${effort.effective} (configured)`)
+      case 'configured': {
+        // GitHub issue #142 asks for the SOURCE: name the origin when the
+        // runtime recorded one, else keep the neutral label.
+        const label = effort.origin === 'session'
+          ? 'session override'
+          : effort.origin === 'global'
+            ? 'global default'
+            : 'configured'
+        lines.push(`Effort: ${effort.effective} (${label})`)
         break
+      }
       case 'auto':
         lines.push(`Effort: ${effort.effective} (auto — smallest declared by ${route})`)
         break
