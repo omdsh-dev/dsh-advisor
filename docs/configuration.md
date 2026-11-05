@@ -61,21 +61,44 @@
 
 ## 会话级评审模型覆盖（运行时，临时）
 
-除上表九个**持久化的全局默认值**键外，插件还支持一个**运行时、内存态、按会话**的评审模型覆盖：`modelOverride: { provider, model }` 原子对。它**绝不**写入 entry config、绝不持久化（持久化 schema 冻结在上述九键），由 `/advisor model` 指令面驱动：
+除上表九个**持久化的全局默认值**键外，插件还支持一个**运行时、内存态、按会话**的评审模型覆盖：`modelOverride: { provider, model, reasoningEffort? }` 原子记录（`reasoningEffort` 可选，缺省 = 继承全局 `reasoningEffort`）。它**绝不**写入 entry config、绝不持久化（持久化 schema 冻结在上述九键），由 `/advisor model` 指令面驱动：
 
 | 指令 | 行为 |
 |---|---|
-| `/advisor model` | 显示有效评审模型（provider/model）、来源（`session` 覆盖或 `global` 默认）与生存期说明 |
-| `/advisor model set <provider> <model>` | 仅为**发起调用的会话**钉住模型；参数分开传，允许模型 id 含 `/`；不接受任意 session-id 参数 |
-| `/advisor model reset` | 删除本会话覆盖，重新继承**当前**全局默认值；从不触碰启用开关 |
+| `/advisor model` | 显示有效评审模型（provider/model）、来源（`session` 覆盖或 `global` 默认）与生存期说明；会话钉住了 effort 时追加一行 `Effort: <id> (session pin — cleared by /advisor model reset)`（继承全局的会话不打印该行） |
+| `/advisor model set <provider>/<model>[:<effort>]` | 仅为**发起调用的会话**钉住模型，可选同时钉住思考权重。**单个 token**：第一个 `/` 分隔 provider 与 model，其后最后一个 `:` 分隔 model 与 effort（model id 本身可含 `/` 与 `:`）；`:` 后为空是用法拒绝，不是静默继承；旧的两参数 `<provider> <model>` 形式已退役，按用法错误拒绝；不接受任意 session-id 参数 |
+| `/advisor model reset` | 删除本会话覆盖（模型对**与**钉住的 effort 一并清除），重新继承**当前**全局默认值；从不触碰启用开关 |
 
 - **解析顺序（单一有效解析器）**：(1) 先校验全局配置形状（非法仍然失败关闭）；(2) 启用 = 会话启用 override（`/advisor on|off`）?? 持久化 `defaultEnabled`（默认 `true`；GitHub issue #124），**再与** post-gate `enabled` 取 AND——插件行在运行且 pair 齐全时，只有显式 `/advisor off` 或 `defaultEnabled: false`（且无该会话 override）会关闭会话；`defaultEnabled: false` 时 `/advisor on` 写入该会话的显式 override，只影响该会话，不改持久化配置；显式 `/advisor on|off` **总会记录**该会话的选择（即使与当前有效值相同），因此之后翻转 `defaultEnabled` 不会覆盖它；(3) 路由 = 会话的**完整** `modelOverride` 对 ?? 组合后的全局 advisor 对——两级之间的**半个 pair 永不拼接**；(4) 全局组合保持 用户设置 → 插件行基础值 → schema 默认值。`/advisor model set|reset` 从不改变启用开关。
 - **与 S4 门禁的关系**：显式 pair 门禁在会话解析**之后**作用于*有效*路由——全局默认缺 pair 时，完整的会话对可为该会话满足门禁；但**非法的全局配置**（未知键、坏值）无法被任何会话覆盖绕过。
 - **对校验**：缺失即继承、reset 即删除；空白/不完整对、含空白的标识符、多余字段一律拒绝；外侧空白裁剪；大小写保留。set/reset **从不**改变启用开关；`/advisor off` 保留会话对供之后 `/advisor on` 使用；钉住与今日全局默认相同的对仍然有效（保护会话免受日后默认值修改影响）。
 - **校验提交**：提交前经 app 根 LLM 服务 `resolveModelInfo(provider, model, signal)` 解析（catalog 成员资格仅是参考——手填可路由 id 允许）；查找绑定 60 秒（与运行时调用 deadline 默认一致）、可取消、**无自动重试**；失败时先前选择与运行时保持不变。
+- **按会话的思考权重（GitHub issue #142）**：`reasoningEffort` 可选，**缺省 = 继承全局 `reasoningEffort`**（全局未设置 = 自动：发送该模型声明的最小档位；模型不声明任何档位则整体不发送）。显式钉住的 id 在提交前与解析出的模型声明档位比对：未声明的 id 被拒绝（`Not set: …` 并列出已声明 id），模型不声明任何档位时任何显式 effort 都被拒绝，先前选择保持不动；从未声明的 id 永远不会被发送。它与模型对同属一条内存记录、同一生存期——`reset`、dispose、owner 卸载、冷恢复、重启一并清除，永不持久化；全局 `reasoningEffort` 的修改只影响继承该值的会话，不影响已钉住 effort 的会话。
 - **生存期（KD-5）**：与启用 override 同一临时类别——同一 Agent 与 advisor owner 存活期间有效（导航/重连保持），agent/session dispose、owner 卸载、冷恢复、重启即清除；fork 的新会话继承全局默认值。状态是 O(活跃覆盖数)：reset 移除空条目，无历史 SessionId 堆积、无 TTL/GC。
 - **路由变更生效**：有效对变化时中止该会话旧的 advisor 调用、丢弃 backlog、重新 seed 到当前会话 seq，在**下一个**新的可评审 delta 上生效；有效对不变则不重启运行时。全局默认值修改影响继承者，不影响已钉住的会话。
-- **Web 会话控制面（B2）**：同一控制器经两个插件自有端点暴露给 web 客户端——`/api/advisor/getSession`（返回权威会话快照：`sessionId`、`enabled`、`modelOverride`、`modelSource`、`effectiveModel`、可选 `disabledReason`、`lifetime: 'live-session'`）与 `/api/advisor/setSessionModel`（`selection` 为原子对或 `null`=reset），提交后返回同一快照。业务结果以插件域错误标签在返回数据中表达（如 `advisor/session-unknown` / `advisor/unavailable` / `advisor/rejected` / `advisor/failed`），不扩展 dsh 的失败词汇；未知/已销毁的会话目标直接拒绝且**不分配任何状态**；SessionId 不是授权——请求仍先经过 Connection 的 Host/Origin + 浏览器认证边界。web 界面是 `conversation.session.header.actions` 上的 **Advisor 动作**（非主模型插槽、非根卡片——全局卡片保持仅全局）：显示有效 pair/来源/生存期，支持钉住与「Use global default」；打开时（及打开期间断连/聚焦时）刷新，无推送事件、无轮询；控制面不可用时不提供写入，也**绝不回退**到全局写通道。
+- **Web 会话控制面（B2）**：同一控制器经两个插件自有端点暴露给 web 客户端——`/api/advisor/getSession`（返回权威会话快照：`sessionId`、`enabled`、`modelOverride`（含可选的 `reasoningEffort`）、`modelSource`、`effectiveModel`、可选的 `disabledReason` 与 `reasoningEffort` 解析记录、`lifetime: 'live-session'`）与 `/api/advisor/setSessionModel`（`selection` 为原子记录 `{ provider, model, reasoningEffort? }` 或 `null`=reset），提交后返回同一快照。业务结果以插件域错误标签在返回数据中表达（如 `advisor/session-unknown` / `advisor/unavailable` / `advisor/rejected` / `advisor/failed`），不扩展 dsh 的失败词汇；未知/已销毁的会话目标直接拒绝且**不分配任何状态**；SessionId 不是授权——请求仍先经过 Connection 的 Host/Origin + 浏览器认证边界。web 界面是 `conversation.session.header.actions` 上的 **Advisor 动作**（非主模型插槽、非根卡片——全局卡片保持仅全局）：显示有效 pair/来源/生存期，渲染与 `/advisor status` 同一措辞的一行 `Effort:`，并提供 effort 选择（`Inherit global` + 所选模型声明的档位；切换 provider/model 时回到继承、重新加载档位；查找进行中或无模型时不可选），支持钉住与「Use global default」；打开时（及打开期间断连/聚焦时）刷新，无推送事件、无轮询；控制面不可用时不提供写入，也**绝不回退**到全局写通道。
+
+### `/advisor status` 的 `Effort:` 行
+
+`/advisor status` 只增加一行 `Effort:`，来源是运行时**实际发送**的解析结果，绝不臆造值：尚未解析（活跃运行时、首次审阅调用之前）→ `Effort: pending — resolved on the first review call`；无运行时的会话不打印该行。四种已解析来源：
+
+| 来源 | 输出 |
+|---|---|
+| configured | `Effort: medium (configured)` —— 配置/钉住的 id 已被该模型声明，按原值发送 |
+| auto | `Effort: low (auto — smallest declared by <provider>/<model>)` —— 没有配置值，发送模型声明的最小档位 |
+| fallback-undeclared | `Effort: low (fallback — "medium" is not declared by <provider>/<model>)` —— 配置值不在声明列表（如切换模型后的遗留值），改发最小声明档位并 warn 一次 |
+| none | `Effort: not sent — <provider>/<model> declares no reasoning efforts` —— 模型无推理元数据，选项整体不发送 |
+
+```text
+$ /advisor status
+Advisor: enabled
+Model: deepseek-official/deepseek-flash (global default)
+Effort: medium (configured)
+Runtime: running
+Last activity: 2026-11-05T09:12:41.000Z
+```
+
+会话钉住 effort 后 `Model:` 行标注 `(session override)`，`Effort:` 行随之反映该模型下的解析结果。
 
 ## 配置读取模型（composition）
 
