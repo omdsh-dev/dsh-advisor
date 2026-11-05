@@ -1057,7 +1057,8 @@ export function refreshIfLoaded(controller: AdvisorSettingsStore): void {
  * `AdvisorSessionSnapshotWire` (src/gateway.ts). Kept as a local structural
  * type because the client bundle may not value-import the node-side module;
  * the wire normalization omits absent keys (modelOverride / modelSource /
- * effectiveModel / disabledReason are simply missing from the JSON).
+ * effectiveModel / reasoningEffortOverride / reasoningEffort /
+ * disabledReason are simply missing from the JSON).
  */
 export interface AdvisorSessionSnapshotView {
   /** The session the snapshot describes (echoes the request's binding). */
@@ -1072,12 +1073,34 @@ export interface AdvisorSessionSnapshotView {
   modelSource?: 'session' | 'global'
   /** The effective route; absent when neither level has a complete pair. */
   effectiveModel?: { provider: string; model: string }
+  /** The session-pinned effort (GitHub issue #142); absent = inherit. */
+  reasoningEffortOverride?: string
+  /**
+   * The effort outcome the live runtime recorded (sent id + source, and
+   * where a configured effort came from); absent when the session has no
+   * runtime — the client never invents a value.
+   */
+  reasoningEffort?: {
+    readonly source: string
+    readonly effective?: string
+    readonly configured?: string
+    readonly origin?: 'global' | 'session'
+  }
   /** Present iff the S4 explicit gate blocks model calls. */
   disabledReason?: string
 }
 
-/** One `setSessionModel` selection on the wire: an atomic pair, or null (= reset). */
-export type AdvisorSessionSelection = { readonly provider: string; readonly model: string } | null
+/**
+ * One `setSessionModel` selection on the wire: an atomic pair with an
+ * optional effort (absent = inherit the global value), or null (= reset).
+ * An absent effort is OMITTED from the object — never sent
+ * present-as-undefined (the gateway result validation rejects undefined).
+ */
+export type AdvisorSessionSelection = {
+  readonly provider: string
+  readonly model: string
+  readonly reasoningEffort?: string
+} | null
 
 /**
  * The RPC result union of the session endpoints: a snapshot, or a
@@ -1106,6 +1129,15 @@ export interface AdvisorSessionMenuState {
   unavailable: boolean
   /** A set/reset write is in flight. */
   pending: boolean
+  /**
+   * The declared reasoning efforts of the CURRENTLY selected staged pair
+   * (empty until a lookup succeeds). The list is bound to its pair: starting
+   * a lookup for a different pair clears it immediately, so a failure can
+   * never resurface another model's ids under the newly selected one.
+   */
+  reasoningEfforts: readonly { readonly id: string; readonly name: string }[]
+  /** Capability lookup state for the currently selected staged pair. */
+  reasoningStatus: 'idle' | 'loading' | 'ready' | 'unavailable'
 }
 
 /**
@@ -1129,10 +1161,30 @@ export class AdvisorSessionModelController {
     error: null,
     unavailable: false,
     pending: false,
+    reasoningEfforts: [],
+    reasoningStatus: 'idle',
   })
 
   /** Fence token: a newer op makes every older settle stale. */
   private requestSeq = 0
+
+  /**
+   * Fence token for capability lookups, INDEPENDENT of {@link requestSeq}:
+   * a newer `loadReasoning` supersedes an older unresolved one, but a
+   * lookup never invalidates an in-flight refresh/write settle (and is not
+   * invalidated by one) — a mid-refresh model pick cannot strand the panel
+   * at `Loading…`.
+   */
+  private reasoningSeq = 0
+
+  /**
+   * The pair the current `reasoningEfforts` belong to
+   * (`${provider}\u0000${model}`); undefined while no pair has resolved.
+   * The option list is bound to this pair: a lookup for a DIFFERENT pair
+   * clears the list up front, so a failed lookup can never resurface
+   * another model's declared ids under the newly selected one.
+   */
+  private reasoningKey: string | undefined
 
   /** Last consumed refresh-signal epoch (reconnect / focus bumps). */
   private lastSignal: number | undefined
@@ -1186,15 +1238,71 @@ export class AdvisorSessionModelController {
   }
 
   /**
-   * Pin the atomic `{provider, model}` pair for THIS session
-   * (`/api/advisor/setSessionModel`, selection = the pair). Refuses outright
-   * while `unavailable` (store-side defense-in-depth — an unavailable menu
-   * must never issue a write, and must never fall back to the global
-   * `advisor/set` channel). The host validates the pair through the same
-   * rules as the `/advisor model set` command face.
+   * Pin the atomic `{provider, model}` pair — with an optional reasoning
+   * effort, absent = inherit the global value (GitHub issue #142) — for THIS
+   * session (`/api/advisor/setSessionModel`). The effort rides INSIDE the
+   * selection object and is omitted entirely when undefined (the gateway
+   * result validation rejects present-as-undefined). Refuses outright while
+   * `unavailable` (store-side defense-in-depth — an unavailable menu must
+   * never issue a write, and must never fall back to the global `advisor/set`
+   * channel). The host validates the pair and effort through the same rules
+   * as the `/advisor model set` command face.
    */
-  async setSessionModel(provider: string, model: string): Promise<void> {
-    await this.write({ provider, model })
+  async setSessionModel(provider: string, model: string, reasoningEffort?: string): Promise<void> {
+    await this.write(reasoningEffort === undefined ? { provider, model } : { provider, model, reasoningEffort })
+  }
+
+  /**
+   * Resolve the declared reasoning efforts for one staged pair through the
+   * EXISTING capability endpoint (`/api/advisor/modelReasoning` — the same
+   * metadata channel the settings card uses; no second path). Rides its OWN
+   * monotonic fence (`reasoningSeq`): a lookup whose settle is superseded by
+   * a newer lookup touches nothing, while a lookup never invalidates an
+   * in-flight refresh/write settle (and is not invalidated by one). The
+   * option list is bound to its pair: starting a lookup for a different
+   * pair clears the previous options immediately, so a failed lookup latches
+   * `unavailable` for the pair without ever resurfacing another model's ids
+   * under the newly selected one. A same-pair re-probe failure keeps the
+   * options (they still describe this pair — nothing invented).
+   * @param provider - staged provider route id.
+   * @param model - staged model id.
+   */
+  async loadReasoning(provider: string, model: string): Promise<void> {
+    const key = `${provider}\u0000${model}`
+    const seq = ++this.reasoningSeq
+    if (key !== this.reasoningKey) {
+      // Different pair (or none resolved yet): the current options, if any,
+      // belong to another model — drop them BEFORE the fetch so no failure
+      // path can leave them selectable under the new pair (AC6).
+      this.reasoningKey = undefined
+      this.store.update((s) => {
+        s.reasoningEfforts = []
+        s.reasoningStatus = 'loading'
+      })
+    } else {
+      this.store.update((s) => {
+        s.reasoningStatus = 'loading'
+      })
+    }
+    let payload: AdvisorModelReasoningPayload | undefined
+    try {
+      const result = await this.rpc.call('/api', 'advisor/modelReasoning', { args: { provider, model } })
+      if (seq !== this.reasoningSeq) return
+      if (result.ok) payload = result.value as AdvisorModelReasoningPayload
+    } catch {
+      if (seq !== this.reasoningSeq) return
+    }
+    if (payload !== undefined && 'efforts' in payload) {
+      this.reasoningKey = key
+      this.store.update((s) => {
+        s.reasoningEfforts = payload.efforts
+        s.reasoningStatus = 'ready'
+      })
+    } else {
+      this.store.update((s) => {
+        s.reasoningStatus = 'unavailable'
+      })
+    }
   }
 
   /**

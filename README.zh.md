@@ -83,19 +83,19 @@ dsh --profile web --dump-config   # 显示带 advisor 配置行的 "# == dsh-adv
 /advisor            toggle the advisor for this session
 /advisor on         enable the advisor for this session
 /advisor off        disable the advisor for this session
-/advisor status     show state, model, runtime status, pending count, last activity, and drop counters when non-zero
+/advisor status     show state, model, the effective reasoning effort, runtime status, pending count, last activity, and drop counters when non-zero
 /advisor model      show the effective reviewer model and its source (session override or global default)
-/advisor model set <provider> <model>   pin a reviewer model for this session only
-/advisor model reset    drop the session pin and re-inherit the global defaults
+/advisor model set <provider>/<model>[:<effort>]   pin a reviewer model (and optionally its reasoning effort) for this session only
+/advisor model reset    drop the session pin — model and reasoning effort — and re-inherit the global defaults
 ```
 
 `/advisor on|off|toggle` 是会话级且临时的：它们翻转的是按会话的 override，从不修改持久化配置。启用一个 config 缺少 `provider`/`model` 的会话不会发起模型调用——`/advisor status`（以及 `/advisor on` 的回复）会显示门禁原因：advisor 只有在两者均已配置时才运行。`/advisor on` 也是手动恢复路径：被 quota/rate-limit 暂停的会话 advisor（`quota_exhausted`——无自动恢复定时器）会在原地恢复；被终止的 advisor（永久性模型错误，如凭据无效）会为该会话全新重建。
 
-`/advisor model set` 只为**发起调用的会话**钉住一个评审模型——一个内存中的原子 `provider + model` 对，生存期为活跃会话（dispose、owner 卸载、冷恢复或重启时清除；fork 的新会话继承全局默认值）。它叠加在持久化的全局默认值之上而不改写它们：全局配置还没有 pair 时，完整的会话对即可生效；全局配置非法时所有会话照旧被阻挡；两级之间的半个 pair 永不拼接；set/reset 从不触碰启用开关。提交前会经 LLM 服务解析校验该对（60 秒上界、可取消、无自动重试）；失败时先前选择保持不变。`/advisor config` 始终是**全局默认值**的回读，不是会话状态。
+`/advisor model set <provider>/<model>[:<effort>]` 只为**发起调用的会话**钉住一个评审模型——单个 token，第一个 `/` 分隔 provider 与 model，其后最后一个 `:` 分隔 model 与可选的思考权重（model id 本身可含 `/`，但**最后一个** `:` 一律是 effort 分隔符，因此含 `:` 的 model id 只有带上显式 `:<effort>` 后缀才能表达，如 `p/m:chat:high`；只留结尾 `:` 是用法错误，不是继承）。钉住的是内存中的 `{provider, model, reasoningEffort?}` 记录，生存期为活跃会话（dispose、owner 卸载、冷恢复或重启时清除；fork 的新会话继承全局默认值）。**省略 effort = 继承全局 `reasoningEffort`**，并跟随之后对全局值的修改；显式钉住的 effort 只属于该会话，不受全局修改影响。它叠加在持久化的全局默认值之上而不改写它们：全局配置还没有 pair 时，完整的会话对即可生效；全局配置非法时所有会话照旧被阻挡；两级之间的半个 pair 永不拼接；set/reset 从不触碰启用开关。提交前会经 LLM 服务解析校验该对（60 秒上界、可取消、无自动重试）；显式 effort 未被解析出的模型声明时会被拒绝（`Not set: …` 并列出已声明 id），先前选择保持不变——未声明的 id 永不发送。`/advisor model reset` 同时清除模型**与** effort；`/advisor model` 在会话钉住 effort 时追加一行 `Effort:`；`/advisor status` 报告运行时**实际发送**的 effort——`configured`、`auto`（声明的最小档位）、`fallback`（配置的 id 未被声明）、`not sent`（模型未声明任何档位），首次审阅调用之前为 `pending`。`/advisor config` 始终是**全局默认值**的回读，不是会话状态。
 
 在 **dsh-tui** profile 中，`/advisor config` 额外回读组合配置——即全局默认值，只读，编辑提示指向真实的写路径：TUI `/settings` 屏幕（Advisor 分节，dsh-tui ≥ v0.8.0）与 profile 补丁层。`/advisor` / `on|off|status|config|model` 指令出现在 TUI 的 `/` 菜单中并带子命令补全（指令发现要求 `dsh-tui-command-trees` 行——随附的 dsh-tui 组合包自带）。
 
-在 **web** 端，同样的会话级模型控制由会话头部的 **Advisor 动作**承载（要求 dsh web 构建的 shell 声明 `conversation.session.header.actions` 插槽——dsh ≥ 0.1.7-rc.1）。该动作绑定在它所在的会话上：显示生效的评审 pair、其来源（`session override` / `global default`）与 live-session 生存期；**Pin this model** 为该会话钉住 provider + model，**Use global default** 去除钉住（即 reset 路径）。它只通过插件会话端点（`/api/advisor/getSession` + `/api/advisor/setSessionModel`）写入——与 `/advisor model` 同一控制器、同一校验与栅栏，从不写持久化配置——并且当会话控制面不可用时，绝不回退到全局配置写通道。控件在打开时刷新（打开期间断连/聚焦也会刷新）；没有后台轮询。插件页上的全局卡片保持仅全局。
+在 **web** 端，同样的会话级模型控制由会话头部的 **Advisor 动作**承载（要求 dsh web 构建的 shell 声明 `conversation.session.header.actions` 插槽——dsh ≥ 0.1.7-rc.1）。该动作绑定在它所在的会话上：显示生效的评审 pair、其来源（`session override` / `global default`）、live-session 生存期，以及一行 `Effort:`——与 `/advisor status` 同一信息、同一来源结构（英文界面字符串逐字一致；中文界面为对应译文），另加一个 effort 选择（`Inherit global` + 所选模型声明的档位——切换 provider 或 model 时回到继承并重新加载该模型的档位）；**Pin this model** 为该会话钉住所选 provider + model 与所选 effort（选择停在 `Inherit global` 时即继承全局值），**Use global default** 去除钉住（模型与 effort 一并清除）。它只通过插件会话端点（`/api/advisor/getSession` + `/api/advisor/setSessionModel`）写入——与 `/advisor model` 同一控制器、同一校验与栅栏，从不写持久化配置——并且当会话控制面不可用时，绝不回退到全局配置写通道。控件在打开时刷新（打开期间断连/聚焦也会刷新）；没有后台轮询。插件页上的全局卡片保持仅全局。
 
 ![会话头部 Advisor 动作弹层:显示生效的评审 pair、其来源与钉住控件](docs/screenshots/advisor-session-action.webp)
 

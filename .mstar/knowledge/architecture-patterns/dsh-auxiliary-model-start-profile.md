@@ -5,7 +5,7 @@ problem_type: knowledge
 source_plan: dsh-advisor-minimal-start
 iteration: iter-20260815-dsh-advisor-n7
 created: 2026-08-15
-last_updated: 2026-10-18
+last_updated: 2026-11-05
 status: active
 ---
 
@@ -37,6 +37,15 @@ The original implementation cached the failure as permanent `undefined` — one 
 
 **Capability surface for a settings UI.** A settings surface that offers efforts must query the host through a capability endpoint over `ctx.llm.resolveModelInfo` with a bounded deadline; a client-side model catalog is not a second source — it may omit profile-declared models, so a model declared in the provider profile would render no options. The endpoint bounds the lookup at 60 s and maps a timeout (or a resolver throw) to a tagged data error instead of throwing, so an unanswerable query degrades the control to its automatic option rather than failing the settings card.
 
+### Session-scoped capability pins and truthful visibility
+
+A plugin that lets one session pin a capability-gated option (here `reasoningEffort`) adds no second config surface: the pin rides the SAME atomic route override, and every read surface reports what the runtime actually resolved.
+
+1. **A per-session effort is part of the atomic route override, and memory-only.** `src/commands.ts` `AdvisorModelPair` is `{provider, model, reasoningEffort?}`; an absent `reasoningEffort` means "inherit the global value", and the three fields are never merged across levels. The record lives for the live-session lifetime only — cleared with the pair by reset, dispose, owner teardown, cold resume or restart — never persisted. `src/index.ts` `effectiveReasoningEffort` (`overrides.model(sessionId)?.reasoningEffort ?? safeResolved().reasoningEffort`) is the single read of that precedence, and both `runtimeSignature` and the `AdvisorRuntime` construction consume it: an effort-only pin changes the signature and rebuilds the runtime exactly once, and `applyRouteChange` compares the effective effort so a pin that changes neither the pair nor the effort is `unchanged` with the runtime untouched. Because the signature reads the EFFECTIVE value, a global effort edit changes it only for unpinned sessions — it never reaches a pinned one.
+2. **Normalize the command grammar at the parser, not at the callers.** `src/commands.ts` `parseModelSetArgs` validates ONE token: the first `/` splits provider from model, and the last `:` after that `/` splits model from effort, so a model id may itself contain `/` and `:`. The split delegates shape and effort validation to `parseModelPair`, the single authority the command face and the web gateway face share. The last-`:` rule leaves a model id ending in `:` undecidable, so the declared-effort rejection in `src/index.ts` `setModel` names the remedy instead of a bare mismatch: re-pin with an explicit declared effort suffix (`<provider>/<model>:<effort>:<declared-effort>`).
+3. **Surface the resolved effort; do not recompute it.** `src/advisor-runtime.ts` `resolveReasoningEffort` records its definitive outcome once per runtime in `reasoningEffortResolved` — `configured`, `fallback-undeclared`, `auto` or `none` — and exposes it read-only through `reasoningEffortResolution`. `src/index.ts` `sessionStatus` passes that record on (`{source: 'pending'}` before the first review call, never a guess), `advisorStatusText` renders it as one `Effort:` line, and `snapshotOfStatus` ships it on the session wire. The failure path returns before any record write, so a failed lookup is advisory and never overwrites a prior verdict.
+4. **Bind the capability option list to the pair it was resolved for.** `src/client/advisor-store.ts` `loadReasoning` keys the options by `${provider}\u0000${model}`: a lookup for a different pair clears the previous `reasoningEfforts` BEFORE the fetch, so a failed lookup leaves only the inherit option and can never surface another model's ids under the newly staged one. A same-pair re-probe failure keeps the list — those options still describe that pair.
+
 ## Why This Matters
 
 - Auxiliary callers are invisible: nothing surfaces "advisor quietly started thinking again" or "an unsupported effort was sent" — only the closed-whitelist, capability-gated selection and no-latch tests make the guarantee falsifiable.
@@ -50,6 +59,7 @@ The original implementation cached the failure as permanent `undefined` — one 
 - Any dsh plugin making independent `ctx.llm.stream` calls (compaction helpers, title generators, reviewers, subagents).
 - Any capability-gated option where the capability lookup itself can fail transiently (adapter throw, deadline abort, unknown route).
 - Any settings surface that enumerates model capabilities (effort tiers, limits): read them from a host capability endpoint with a bounded deadline, never from a client-side catalog.
+- Any plugin that exposes a per-session override of a capability-gated option: carry it inside the atomic route override, read the runtime's recorded verdict instead of recomputing it, and bind the settings option list to the pair it was resolved for.
 - Roadmap: per-role start profiles for dsh subagents (next iteration candidate) should reuse this exact pattern instead of forking a second config surface.
 
 ## Examples
@@ -60,3 +70,7 @@ The original implementation cached the failure as permanent `undefined` — one 
 - `src/client/advisor-store.ts` `ensureModelReasoning` — the per-key capability cache that feeds the settings control.
 - `tests/advisor-runtime.test.ts`: closed-whitelist pins (KD-6 back-pointers), smallest-declared default, configured-hit and undeclared-fallback + warn-once, resolution failure not cached, log-once via the injectable `logger` spy seam, and the N-5 deadline-bounded rewrite asserting `resolveSignals[1].aborted === false`.
 - `src/advisor-runtime.ts` `classifyFailure` — `EMPTY_RESPONSE` returns the `'empty'` class (2026-10-18): no retry, counted into the empty-reply counters, no-note outcome, failure detail in the drop warn.
+- `src/commands.ts` `parseModelSetArgs` + `parseModelPair` — the one-token `<provider>/<model>[:<effort>]` grammar (first `/`, last `:`) and the shape/effort validator the command face and `src/gateway.ts` both call.
+- `src/index.ts` `effectiveReasoningEffort` + `runtimeSignature` — the session pin wins over the global value in both the signature and the runtime construction, so an effort-only pin rebuilds once and a global edit never reaches a pinned session.
+- `src/advisor-runtime.ts` `resolveReasoningEffort` → `reasoningEffortResolution`, read by `src/index.ts` `sessionStatus` / `snapshotOfStatus` and rendered by `src/commands.ts` `advisorStatusText` — one recorded verdict per runtime, `pending` before the first call, failure never overwrites.
+- `src/client/advisor-store.ts` `loadReasoning` — the settings option list is keyed to its `${provider}\u0000${model}` pair and cleared before a different pair's lookup.

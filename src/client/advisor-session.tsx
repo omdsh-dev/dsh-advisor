@@ -30,7 +30,7 @@
  * falsely claiming continuous synchronization.
  */
 
-import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
@@ -200,11 +200,55 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
   useLayoutEffect(() => {
     if (!open) focusHandedOffRef.current = false
   }, [open])
-  // The staged pin selection is LOCAL user input (never seeded from the
-  // snapshot — the effective pair is displayed as text above; a stale host
-  // pair must not look like staged edits).
+  // The staged pin selection is LOCAL user input — the provider/model are
+  // never seeded from the snapshot (the effective pair is displayed as text
+  // above; a stale host pair must not look like staged edits). The staged
+  // EFFORT is the one exception (issue #142, PR #144 review): a session
+  // pinned to the effective pair pre-selects its pinned effort so
+  // re-pinning without touching the select never drops the pin. A user
+  // edit always wins over the seed.
   const [provider, setProvider] = useState('')
   const [model, setModel] = useState('')
+  // The staged effort rides the staged pair: '' = inherit the global value
+  // (the select's first option); reset on every provider/model transition
+  // and reloaded through loadReasoning (issue #142).
+  const [effort, setEffort] = useState('')
+  /** True once the user touches the effort select — the VALUE seed must stand down. */
+  const effortEditedRef = useRef(false)
+  /** The pair whose options were last resolved (dedupes the capability probe). */
+  const lastReasoningKeyRef = useRef('')
+  /**
+   * Bumped on every menu open that may re-probe (no lookup in flight) — a
+   * REACTIVE retry trigger the seed effect depends on, so the re-probe does
+   * not silently depend on `refresh()` producing a new snapshot object.
+   */
+  const [probeEpoch, setProbeEpoch] = useState(0)
+
+  // Seed the staged effort from the pinned override and resolve the pinned
+  // model's declared efforts (the pinned id must be a selectable option).
+  // Runs whenever the snapshot, the staged pair, or the probe epoch changes.
+  // The capability probe is gated ONLY by the pair match + the per-pair
+  // dedupe key (QC1-W2): a user edit suppresses the VALUE seed, never the
+  // probe — otherwise a reopen after a failed lookup could never re-probe
+  // once the user touched the select.
+  const snapshotForSeed = state.snapshot
+  useEffect(() => {
+    const effective = snapshotForSeed?.effectiveModel
+    const pinnedEffort = snapshotForSeed?.reasoningEffortOverride
+    const stagedMatchesEffective = effective !== undefined
+      && provider === effective.provider
+      && model === effective.model
+    if (!effortEditedRef.current) {
+      setEffort(stagedMatchesEffective && pinnedEffort !== undefined ? pinnedEffort : '')
+    }
+    if (stagedMatchesEffective && pinnedEffort !== undefined && effective !== undefined) {
+      const key = `${effective.provider}/${effective.model}`
+      if (key !== lastReasoningKeyRef.current) {
+        lastReasoningKeyRef.current = key
+        void controller.loadReasoning(effective.provider, effective.model)
+      }
+    }
+  }, [snapshotForSeed, provider, model, controller, probeEpoch])
 
   // Open is a refresh point (fetch on menu open): every open refetches and
   // marks the current signal epoch consumed, so the watcher below does not
@@ -213,6 +257,15 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
   // writes through it.
   const openAdvisor = (): void => {
     setOpen(true)
+    // The open is the retry point (BUG-01): one re-probe per open — but
+    // ONLY when no lookup is in flight: a close/reopen during 'loading'
+    // would otherwise supersede the first (possibly successful) response,
+    // and the retry rides a reactive epoch so it does not depend on
+    // `refresh()` producing a new snapshot object.
+    if (state.reasoningStatus !== 'loading') {
+      lastReasoningKeyRef.current = ''
+      setProbeEpoch((n) => n + 1)
+    }
     controller.takeSignal(epoch)
     void controller.refresh()
     if (directoryState.status === 'idle') void directory.load()
@@ -238,6 +291,43 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
     const pair = snapshot.effectiveModel !== undefined
       ? `${snapshot.effectiveModel.provider}/${snapshot.effectiveModel.model}`
       : undefined
+    // ONE `Effort:` line from the recorded resolution, with the same source
+    // wording as `/advisor status` — rendered only when the snapshot carries
+    // both the record and the effective route it names; the surface never
+    // invents a value (issue #142, AC2/AC6).
+    let effortLine: string | null = null
+    if (snapshot.reasoningEffort !== undefined && snapshot.effectiveModel !== undefined) {
+      const route = `${snapshot.effectiveModel.provider}/${snapshot.effectiveModel.model}`
+      const record = snapshot.reasoningEffort
+      switch (record.source) {
+        case 'pending':
+          effortLine = t('sessionEffortPending')
+          break
+        case 'configured':
+          // The runtime records WHERE the configured effort came from
+          // (issue #142): name the origin when present, else stay neutral —
+          // same label set as the `/advisor status` surface.
+          effortLine = `${record.effective} ${
+            record.origin === 'session'
+              ? t('sessionEffortConfiguredSession')
+              : record.origin === 'global'
+                ? t('sessionEffortConfiguredGlobal')
+                : t('sessionEffortConfigured')
+          }`
+          break
+        case 'auto':
+          effortLine = `${record.effective} ${t('sessionEffortAuto', { route })}`
+          break
+        case 'fallback-undeclared':
+          effortLine = `${record.effective} ${t('sessionEffortFallback', { configured: record.configured ?? '', route })}`
+          break
+        case 'none':
+          effortLine = t('sessionEffortNone', { route })
+          break
+        default:
+          effortLine = null
+      }
+    }
     body = (
       <>
         {snapshot.enabled ? null : <p className={styles.notice}>{t('sessionAdvisorOff')}</p>}
@@ -254,6 +344,7 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
               )
             : null}
         </p>
+        {effortLine !== null ? <p className={styles.routeLine}>{t('sessionEffort')}: {effortLine}</p> : null}
         <p className={styles.mutedLine}>{t('sessionLifetime')}</p>
         {state.error !== null ? <p className={styles.error} role="status">{state.error}</p> : null}
         <div className={styles.controls}>
@@ -267,6 +358,8 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
                 const next = event.target.value
                 setProvider(next)
                 setModel('')
+                setEffort('')
+                effortEditedRef.current = false
                 if (next !== '') void directory.ensureModels(next)
               }}
             >
@@ -280,12 +373,52 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
               className={styles.select}
               value={model}
               disabled={busy || provider === '' || (directoryState.modelsByProvider[provider]?.length ?? 0) === 0}
-              onChange={(event) => { setModel(event.target.value) }}
+              onChange={(event) => {
+                const next = event.target.value
+                setModel(next)
+                // A new model re-inherits the effort; its declared ids reload
+                // through the shared capability endpoint (no lookup without
+                // a chosen model).
+                setEffort('')
+                effortEditedRef.current = false
+                if (next !== '') {
+                  lastReasoningKeyRef.current = `${provider}/${next}`
+                  void controller.loadReasoning(provider, next)
+                }
+              }}
             >
               <option value="">{t('modelPlaceholder')}</option>
               {(directoryState.modelsByProvider[provider] ?? []).map((option) => (
                 <option key={option.id} value={option.id}>{option.name}</option>
               ))}
+            </select>
+          </div>
+          <div className={styles.selectRow}>
+            {/* Inherit global + the declared ids of the currently selected
+                model. Disabled while a lookup is loading or no model is
+                chosen; a failed lookup keeps the select usable on the last
+                known options. */}
+            <select
+              aria-label={t('sessionEffort')}
+              className={styles.select}
+              value={effort}
+              disabled={busy || provider === '' || model === '' || state.reasoningStatus === 'loading'}
+              onChange={(event) => {
+                effortEditedRef.current = true
+                setEffort(event.target.value)
+              }}
+            >
+              <option value="">{t('sessionEffortInherit')}</option>
+              {state.reasoningEfforts.map((option) => (
+                <option key={option.id} value={option.id}>{option.name || option.id}</option>
+              ))}
+              {/* A seeded/staged effort the resolved list does not contain
+                  (lookup failed, or the model changed underneath): render it
+                  as its own labelled option so the select shows the pin
+                  instead of a blank (BUG-01). */}
+              {effort !== '' && !state.reasoningEfforts.some((option) => option.id === effort)
+                ? <option value={effort}>{t('sessionEffortStaged', { id: effort })}</option>
+                : null}
             </select>
           </div>
           {provider !== '' && (directoryState.modelsByProvider[provider]?.length ?? 0) === 0
@@ -306,7 +439,7 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
               type="button"
               className={styles.pin}
               disabled={busy || provider === '' || model === ''}
-              onClick={() => { void controller.setSessionModel(provider, model) }}
+              onClick={() => { void controller.setSessionModel(provider, model, effort === '' ? undefined : effort) }}
             >
               {busy ? t('sessionPending') : t('sessionPinAction')}
             </button>

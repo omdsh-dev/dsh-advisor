@@ -170,7 +170,10 @@ describe('provider children — completion tree (AC-1)', () => {
       expect(node.descriptions?.zh).toBeTruthy()
       expect(node.descriptions?.en).toBeTruthy()
     }
-    expect(nodes[0]!.description).toContain('separate args')
+    // The description advertises the ONE-token grammar the parser accepts
+    // (GitHub issue #142) — never the retired two-argument form.
+    expect(nodes[0]!.description).toContain('<provider>/<model>[:<effort>]')
+    expect(nodes[0]!.description).not.toContain('separate args')
   })
 
   it('children at depth 2 (a subcommand leaf) returns [] — no deeper completion', () => {

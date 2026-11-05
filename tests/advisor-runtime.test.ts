@@ -544,6 +544,108 @@ describe('AdvisorRuntime — reasoning effort selection (plan dsh-advisor-reason
 })
 
 // ---------------------------------------------------------------------------
+// Resolution visibility (GitHub issue #142, AC1/AC2): the runtime records the
+// DEFINITIVE effort outcome it sends so `/advisor status` and the session
+// snapshot can report it. A failed lookup is advisory — it never invents or
+// overwrites a record.
+// ---------------------------------------------------------------------------
+
+describe('AdvisorRuntime — reasoningEffortResolution (GitHub issue #142)', () => {
+  it('reports no resolution before the first review call', () => {
+    const { runtime } = makeRuntime(new FakeLlm([]), { reasoningEffort: 'high' })
+    expect(runtime.reasoningEffortResolution).toBeUndefined()
+  })
+
+  it('configured: records the id the model declares', async () => {
+    const llm = new FakeLlm([{ chunks: textReply('{"note":"x"}') }], { efforts: ['low', 'high'] })
+    const { runtime } = makeRuntime(llm, { reasoningEffort: 'high' })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(runtime.reasoningEffortResolution).toEqual({
+      source: 'configured',
+      effective: 'high',
+      configured: 'high',
+    })
+  })
+
+  it('auto: records the smallest declared effort, with no configured id', async () => {
+    const llm = new FakeLlm([{ chunks: textReply('{"note":"x"}') }], { efforts: ['low', 'high'] })
+    const { runtime } = makeRuntime(llm)
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    const resolution = runtime.reasoningEffortResolution!
+    expect(resolution).toEqual({ source: 'auto', effective: 'low' })
+    expect('configured' in resolution).toBe(false)
+  })
+
+  it('fallback-undeclared: records both the sent fallback and the configured id', async () => {
+    const llm = new FakeLlm([{ chunks: textReply('{"note":"x"}') }], { efforts: ['low', 'high'] })
+    const { runtime } = makeRuntime(llm, { reasoningEffort: 'off' })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(runtime.reasoningEffortResolution).toEqual({
+      source: 'fallback-undeclared',
+      effective: 'low',
+      configured: 'off',
+    })
+  })
+
+  it('none: records that nothing was sent, keeping the configured id when one existed', async () => {
+    const llm = new FakeLlm([{ chunks: textReply('{"note":"x"}') }], 'none')
+    const { runtime } = makeRuntime(llm, { reasoningEffort: 'high' })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    const resolution = runtime.reasoningEffortResolution!
+    expect(resolution).toEqual({ source: 'none', configured: 'high' })
+    expect('effective' in resolution).toBe(false)
+  })
+
+  it('none without a configured id: no configured key at all', async () => {
+    const llm = new FakeLlm([{ chunks: textReply('{"note":"x"}') }], 'none')
+    const { runtime } = makeRuntime(llm)
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(runtime.reasoningEffortResolution).toEqual({ source: 'none' })
+  })
+
+  it('a failed lookup records nothing (no invented verdict)', async () => {
+    const llm = new FakeLlm([{ chunks: textReply('{"note":"x"}') }], 'throw')
+    const { runtime } = makeRuntime(llm, { reasoningEffort: 'high' })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(runtime.reasoningEffortResolution).toBeUndefined()
+  })
+
+  it('a later definitive resolution fills the record the failure left empty', async () => {
+    const llm = new FakeLlm(
+      [{ chunks: textReply('{"note":"first"}') }, { chunks: textReply('{"note":"second"}') }],
+      'throw',
+    )
+    const { runtime } = makeRuntime(llm, { reasoningEffort: 'high' })
+    runtime.enqueue(delta('one'))
+    await runtime.waitForDrain()
+    expect(runtime.reasoningEffortResolution).toBeUndefined()
+
+    llm.capability = { efforts: ['low', 'high'] }
+    runtime.enqueue(delta('two'))
+    await runtime.waitForDrain()
+    expect(runtime.reasoningEffortResolution).toEqual({ source: 'configured', effective: 'high', configured: 'high' })
+  })
+})
+
+// ---------------------------------------------------------------------------
 // AC-1 closed whitelist — every advisor GenerateOptions is a minimal start:
 // exact key set, zero tools, single user delta (regression pin, T2)
 // KD-6 (§8.6) regression pin

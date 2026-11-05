@@ -113,7 +113,14 @@ describe('advisor session endpoints (unit, scripted face)', () => {
   })
 
   it('routes selection null to the reset arm and a valid pair (trimmed) to the set arm', async () => {
-    const setSessionModel = vi.fn(async (): Promise<AdvisorSessionRpcResult> => snapshot(undefined as never))
+    // Params are declared so `mock.calls` is typed: the inherit case must pin
+    // the forwarded FOURTH argument explicitly.
+    const setSessionModel = vi.fn(async (
+      _sessionId: string,
+      _provider: string,
+      _model: string,
+      _reasoningEffort?: string,
+    ): Promise<AdvisorSessionRpcResult> => snapshot(undefined as never))
     const resetSessionModel = vi.fn((): AdvisorSessionRpcResult => snapshot(undefined as never))
     const { gateway } = scripted({
       getSession: () => snapshot(undefined as never),
@@ -123,7 +130,20 @@ describe('advisor session endpoints (unit, scripted face)', () => {
     await gateway.setSessionModel('sess-1', null)
     expect(resetSessionModel).toHaveBeenCalledWith('sess-1')
     await gateway.setSessionModel('sess-1', { provider: '  deepseek  ', model: 'deepseek-chat' })
-    expect(setSessionModel).toHaveBeenCalledWith('sess-1', 'deepseek', 'deepseek-chat')
+    // No effort in the selection → the face receives the TRIMMED pair plus an
+    // ABSENT effort. Pin the WHOLE call: a lone `at(-1)` check would pass with
+    // zero calls and would drop the forwarding coverage the title claims.
+    expect(setSessionModel.mock.calls).toHaveLength(1)
+    expect(setSessionModel).toHaveBeenLastCalledWith('sess-1', 'deepseek', 'deepseek-chat', undefined)
+    // A present effort is forwarded (GitHub issue #142).
+    await gateway.setSessionModel('sess-1', { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' })
+    expect(setSessionModel).toHaveBeenCalledWith('sess-1', 'deepseek', 'deepseek-chat', 'high')
+    // A malformed (non-string / empty) effort is rejected before the face.
+    for (const reasoningEffort of ['', 42, null]) {
+      const result = await gateway.setSessionModel('sess-1', { provider: 'p', model: 'm', reasoningEffort })
+      expect(result).toEqual({ error: { tag: 'advisor/rejected', message: expect.any(String) } })
+    }
+    expect(setSessionModel).toHaveBeenCalledTimes(2)
     expect(resetSessionModel).toHaveBeenCalledTimes(1)
   })
 })
@@ -247,6 +267,9 @@ describe('composed session endpoints (apply wiring)', () => {
         modelOverride: { provider: 'deepseek', model: 'deepseek-chat' },
         modelSource: 'session',
         effectiveModel: { provider: 'deepseek', model: 'deepseek-chat' },
+        // GitHub issue #142: the pin carries no effort (inherit), and the fresh
+        // runtime has not resolved its capability yet.
+        reasoningEffort: { source: 'pending' },
       },
     })
     // The write rode the B1 controller: exactly one pre-commit validation.

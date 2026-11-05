@@ -388,6 +388,16 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // safe wrapper (qc2 W-1 — a throwing resolver must not break the
   // session/event handler or `/advisor status`).
   const effectiveConfig = (sessionId: string): ResolvedAdvisorConfig => safeEffective(sessionId)
+  /**
+   * The effort the session's runtime is constructed with (GitHub issue #142):
+   * the session pin's `reasoningEffort` when one is set, else the GLOBAL
+   * `reasoningEffort` (already normalized by the resolver — empty = automatic).
+   * Both the runtime signature and the runtime construction read THIS, so an
+   * effort-only pin changes the signature and rebuilds the runtime exactly
+   * once.
+   */
+  const effectiveReasoningEffort = (sessionId: string): string | undefined =>
+    overrides.model(sessionId)?.reasoningEffort ?? safeResolved().reasoningEffort
   // Spec §5.3 — model-validation teardown signal: fused into every in-flight
   // `/advisor model set` lookup, so owner teardown aborts them promptly; the
   // generation wipe (disposeAll, below) makes any completion that still
@@ -434,15 +444,17 @@ export function apply(ctx: Context, config: AdvisorConfig) {
    * Runtime-affecting signature per session — the values that pin one
    * {@link AdvisorRuntime}: the effective switch, the post-gate enable (S4),
    * the {provider, model, systemPrompt} triple, and the global
-   * proseFallback/reasoningEffort construction constants (KD-I4,
-   * issue #102 + plan dsh-advisor-reasoning-effort — global-only like
-   * systemPrompt, KD-I6). Recorded at runtime creation and compared on every
-   * settings change (qc3 W-1 / qc1 W-2): only a signature change tears the
-   * runtime down — an immuneTurns/maxDeltaMessages-only edit updates the
-   * latches in place and keeps every in-flight call and backlog. The triple
-   * reads the EFFECTIVE config (spec §5.3), so a session-pinned pair freezes
-   * the signature against later global pair edits — global edits reach
-   * inheritors, never pinned sessions.
+   * proseFallback / EFFECTIVE reasoningEffort construction constants (KD-I4,
+   * issue #102 + plan dsh-advisor-reasoning-effort + GitHub issue #142: the
+   * effort entry is the session pin when present, else the global value, so an
+   * effort-only pin changes the signature and rebuilds the runtime once).
+   * Recorded at runtime creation and compared on every settings change (qc3
+   * W-1 / qc1 W-2): only a signature change tears the runtime down — an
+   * immuneTurns/maxDeltaMessages-only edit updates the latches in place and
+   * keeps every in-flight call and backlog. The triple reads the EFFECTIVE
+   * config (spec §5.3), so a session-pinned pair freezes the signature against
+   * later global pair edits — global edits reach inheritors, never pinned
+   * sessions.
    */
   const runtimeSignatures = new Map<string, string>()
   const runtimeSignature = (sessionId: string): string => {
@@ -461,7 +473,8 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       effective.model ?? '',
       effective.systemPrompt,
       globalResolved.proseFallback ?? false,
-      globalResolved.reasoningEffort ?? '',
+      // GitHub issue #142: the session pin wins over the global value.
+      effectiveReasoningEffort(sessionId) ?? '',
       // `nextPrompt` is deliberately ABSENT (plan dsh-advisor-next-prompt-n12,
       // T1 — config-key checklist seam 6): a `nextPrompt`-only edit must not
       // rebuild review runtimes. The prediction gate reads it live on every
@@ -488,11 +501,13 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     // runtime is only constructed behind the gate.
     if (!effective.enabled) return undefined
     // The global runtime-construction constants — the same global resolved
-    // read as systemPrompt (KD-I4/KD-I6, issue #102: global-only, never the
-    // per-session route). Optional in the resolved contract (T1 review F-2):
-    // when absent, the runtime applies its own defaults (false / automatic),
-    // which runtimeSignature normalizes with to stay in sync. No maxTokens
-    // is threaded anymore (2026-10-18 ruling — no model-side budget).
+    // read as systemPrompt (KD-I4/KD-I6, issue #102). Optional in the resolved
+    // contract (T1 review F-2): when absent, the runtime applies its own
+    // defaults (false / automatic), which runtimeSignature normalizes with to
+    // stay in sync. No maxTokens is threaded anymore (2026-10-18 ruling — no
+    // model-side budget). The effort is the EXCEPTION (GitHub issue #142): the
+    // session pin wins, else the global value — the same source the signature
+    // reads, so an effort-only pin rebuilds exactly here.
     const globalResolved = safeResolved()
     runtime = new AdvisorRuntime({
       provider: effective.provider!,
@@ -505,7 +520,7 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       proseFallback: globalResolved.proseFallback,
       // Plan dsh-advisor-reasoning-effort (RD-1/RD-2): absent/empty = the
       // smallest effort the resolved model declares.
-      reasoningEffort: globalResolved.reasoningEffort,
+      reasoningEffort: effectiveReasoningEffort(sessionId),
       llm: appRootLlm(),
       onNote: (note: AdviceNote) => {
         // Accepted notes only — the runtime's emission guard (T5) already
@@ -537,11 +552,19 @@ export function apply(ctx: Context, config: AdvisorConfig) {
    * cursor to the current transcript length, and recreate the runtime — the
    * change takes effect at the next new reviewable delta (no replay of the
    * current window). A disabled session keeps its (new) pin for a later
-   * `/advisor on`; an unchanged effective route restarts nothing.
+   * `/advisor on`; an unchanged effective route restarts nothing. The
+   * effective EFFORT joins the comparison (GitHub issue #142): an
+   * effort-only pin changes the runtime, so it must rebuild exactly once.
    * @param before - the effective config captured BEFORE the override state
    *   changed (the caller mutates `overrides` between the capture and here).
+   * @param beforeEffort - the effective effort captured with `before`.
    */
-  const applyRouteChange = (sessionId: string, before: ResolvedAdvisorConfig, sessionLength?: number): void => {
+  const applyRouteChange = (
+    sessionId: string,
+    before: ResolvedAdvisorConfig,
+    beforeEffort: string | undefined,
+    sessionLength?: number,
+  ): void => {
     // A route change can CLOSE the pair gate (e.g. `/advisor model reset` on a
     // session pinned to a valid pair while the global pair is missing): the
     // old runtime must still be aborted and its backlog dropped — returning
@@ -552,7 +575,11 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       return
     }
     const after = effectiveConfig(sessionId)
-    if (after.provider === before.provider && after.model === before.model) return
+    if (
+      after.provider === before.provider
+      && after.model === before.model
+      && effectiveReasoningEffort(sessionId) === beforeEffort
+    ) return
     if (sessionLength !== undefined) observer.seedTo(sessionId, sessionLength)
     disposeRuntime(sessionId)
     ensureRuntime(sessionId)
@@ -779,12 +806,32 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       : pair !== undefined && pair.provider === effective.provider && pair.model === effective.model
         ? 'session'
         : 'global'
+    // GitHub issue #142: the live runtime's recorded effort outcome — absent
+    // when there is no runtime (the surface never invents a value), `pending`
+    // when it has not resolved yet.
+    //
+    // QC2 W-001: the ORIGIN is derived HERE, from the live override, never
+    // snapshotted at runtime construction — an equal-value pin/un-pin changes
+    // no rebuild input (the runtime is correctly reused), so only this label
+    // may move.
+    const recordedEffort = runtime?.reasoningEffortResolution
+    const reasoningEffort = runtime === undefined
+      ? undefined
+      : recordedEffort === undefined
+        ? { source: 'pending' as const }
+        : recordedEffort.configured === undefined
+          ? recordedEffort
+          : {
+              ...recordedEffort,
+              origin: pair?.reasoningEffort === undefined ? ('global' as const) : ('session' as const),
+            }
     return {
       enabled: effective.enabled,
       ...(effective.disabledReason === undefined ? {} : { disabledReason: effective.disabledReason }),
       provider: effective.provider,
       model: effective.model,
       ...(source === undefined ? {} : { modelSource: source }),
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       runtimeStatus: runtime?.status() ?? 'disabled',
       pendingCount: runtime?.pendingCount ?? 0,
       lastActivityAt: runtime?.lastActivity,
@@ -847,9 +894,18 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       const source = pair !== undefined && pair.provider === effective.provider && pair.model === effective.model
         ? 'session'
         : 'global'
-      return { provider: effective.provider, model: effective.model, source }
+      // GitHub issue #142: the pin's effort is a session fact — present only
+      // while this session is the one carrying the pin.
+      const reasoningEffort = source === 'session' ? pair?.reasoningEffort : undefined
+      return {
+        provider: effective.provider,
+        model: effective.model,
+        source,
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+      }
     },
-    // Spec §5.3 — validate, then commit, an atomic session pair. Fence FIRST
+    // Spec §5.3 — validate, then commit, an atomic session pair (+ the
+    // optional session reasoning effort, GitHub issue #142). Fence FIRST
     // (bump the generation), so a newer set/reset — or any state wipe — makes
     // this attempt stale. The lookup rides the app-root LLM service, bound to
     // the 60 s deadline fused with the invoking command's signal and the owner
@@ -861,11 +917,15 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       sessionId: string,
       provider: string,
       model: string,
+      reasoningEffort: string | undefined,
       agent: Agent,
       signal?: AbortSignal,
     ): Promise<AdvisorSetModelOutcome> {
       const generation = overrides.beginModelGeneration(sessionId)
       const fused = fuseSignals(signal, validationTeardown.signal)
+      // The resolved model's declared effort ids, captured inside the lookup
+      // scope for the post-fence validation below.
+      let declaredEfforts: readonly string[] = []
       try {
         using deadlineHandle = deadline(fused.signal, ADVISOR_MODEL_VALIDATION_TIMEOUT_MS, ADVISOR_MODEL_VALIDATION_TIMEOUT)
         // Race the lookup against the fused signal: a hung adapter lookup that
@@ -888,6 +948,7 @@ export function apply(ctx: Context, config: AdvisorConfig) {
           if (signal?.aborted === true) return { kind: 'cancelled' }
           return { kind: 'gone' }
         }
+        declaredEfforts = (resolvedInfo.reasoning?.efforts ?? []).map((entry) => String(entry.id))
       } catch (error) {
         // A rejecting lookup (unknown route, adapter throw) — classify the
         // same abort vocabulary, else report the failure verbatim.
@@ -905,27 +966,62 @@ export function apply(ctx: Context, config: AdvisorConfig) {
         return { kind: 'gone' }
       }
       if (overrides.modelGeneration(sessionId) !== generation) return { kind: 'superseded' }
-      // Commit: the route-change effect fires only when the effective pair
-      // actually changed (an equal-default pin is recorded, not restarted).
+      // GitHub issue #142 (AC4): an explicit effort must be DECLARED by the
+      // resolved model — the adapter rejects an undeclared id with
+      // UNSUPPORTED_REASONING_EFFORT and would kill the advisor for that model.
+      // Reject BEFORE commit; the previous selection stays untouched.
+      if (reasoningEffort !== undefined) {
+        if (declaredEfforts.length === 0) {
+          return {
+            kind: 'rejected',
+            reason: `${provider}/${model} declares no reasoning efforts — omit the effort to inherit the global value`,
+          }
+        }
+        if (!declaredEfforts.includes(reasoningEffort)) {
+          // The parser cannot tell a model id ending in ":" from an effort
+          // suffix, so this branch names the remedy — without inventing an
+          // example: the listed ids belong to the TRUNCATED model, which says
+          // nothing about the full id the operator may have meant (QC2 F-001).
+          return {
+            kind: 'rejected',
+            reason: `"${reasoningEffort}" is not declared by ${provider}/${model} (declared: ${declaredEfforts.join(', ')}) — if the ":" belongs to the model id, pin the full id with an explicit effort suffix; these are ${provider}/${model}'s ids, not the full id's`,
+          }
+        }
+      }
+      // Commit: the route-change effect fires only when the effective route
+      // (pair OR effort) actually changed — an equal-default pin is recorded,
+      // not restarted.
       const before = effectiveConfig(sessionId)
-      overrides.setModel(sessionId, { provider, model })
-      applyRouteChange(sessionId, before, agent.session.seq)
+      const beforeEffort = effectiveReasoningEffort(sessionId)
+      overrides.setModel(sessionId, {
+        provider,
+        model,
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+      })
+      applyRouteChange(sessionId, before, beforeEffort, agent.session.seq)
       const status = sessionStatus(sessionId)
-      return before.provider === status.provider && before.model === status.model
-        ? { kind: 'unchanged', status }
-        : { kind: 'committed', status }
+      const unchanged = before.provider === status.provider
+        && before.model === status.model
+        && beforeEffort === effectiveReasoningEffort(sessionId)
+      return {
+        kind: unchanged ? 'unchanged' : 'committed',
+        status,
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+      }
     },
-    // Spec §5.3 — drop the pin and re-inherit the CURRENT global defaults.
-    // Synchronous (no lookup needed). The generation bumps FIRST — a reset is
-    // a newer model command even when there is no pin to remove (noop), so it
-    // supersedes any in-flight validation. Reset never touches the enable
-    // override, and reset to a missing global pair "succeeds" while the
-    // post-reset status reports the gate-blocked/no-call state.
+    // Spec §5.3 — drop the pair AND its pinned effort, re-inheriting the
+    // CURRENT global defaults (AC5). Synchronous (no lookup needed). The
+    // generation bumps FIRST — a reset is a newer model command even when
+    // there is no pin to remove (noop), so it supersedes any in-flight
+    // validation. Reset never touches the enable override, and reset to a
+    // missing global pair "succeeds" while the post-reset status reports the
+    // gate-blocked/no-call state.
     resetModel(sessionId: string, sessionLength?: number): AdvisorResetModelOutcome {
       overrides.beginModelGeneration(sessionId)
       const before = effectiveConfig(sessionId)
+      const beforeEffort = effectiveReasoningEffort(sessionId)
       if (!overrides.clearModel(sessionId)) return { kind: 'noop' }
-      applyRouteChange(sessionId, before, sessionLength)
+      applyRouteChange(sessionId, before, beforeEffort, sessionLength)
       return { kind: 'reset', status: sessionStatus(sessionId) }
     },
     // T2 (plan dsh-advisor-tui-client-n8): the composed-config readback.
@@ -1019,6 +1115,9 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     // equal to the global default still reports `session` — the explicit pin
     // is protected from later default edits.
     const pinned = status.modelSource === 'session' ? effective : undefined
+    // GitHub issue #142: the pinned effort is a session fact read from the
+    // override record (the status carries the RESOLVED state, not the pin).
+    const pinnedEffort = pinned === undefined ? undefined : overrides.model(sessionId)?.reasoningEffort
     return {
       snapshot: {
         sessionId,
@@ -1027,6 +1126,10 @@ export function apply(ctx: Context, config: AdvisorConfig) {
         ...(pinned === undefined ? {} : { modelOverride: pinned }),
         ...(status.modelSource === undefined ? {} : { modelSource: status.modelSource }),
         ...(effective === undefined ? {} : { effectiveModel: effective }),
+        ...(pinnedEffort === undefined ? {} : { reasoningEffortOverride: pinnedEffort }),
+        // The recorded resolution (absent when there is no runtime). Absent
+        // keys are omitted — the typert result validation rejects undefined.
+        ...(status.reasoningEffort === undefined ? {} : { reasoningEffort: status.reasoningEffort }),
         ...(status.disabledReason === undefined ? {} : { disabledReason: status.disabledReason }),
       },
     }
@@ -1056,7 +1159,7 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       if (unknown !== undefined) return unknown
       return snapshotOfStatus(sessionId, sessionStatus(sessionId))
     },
-    async setSessionModel(sessionId, provider, model) {
+    async setSessionModel(sessionId, provider, model, reasoningEffort) {
       const unknown = sessionLiveError(sessionId)
       if (unknown !== undefined) return unknown
       const agent = ctx.agents.get(sessionId as SessionId)
@@ -1064,7 +1167,10 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       // No per-request signal: the web RPC has no cancellation wire — the
       // 60 s deadline and the owner-teardown signal (fused inside setModel)
       // bound every lookup exactly like the command face's no-signal path.
-      return mapSetOutcome(sessionId, await controller.setModel(sessionId, provider, model, agent))
+      return mapSetOutcome(
+        sessionId,
+        await controller.setModel(sessionId, provider, model, reasoningEffort, agent),
+      )
     },
     resetSessionModel(sessionId) {
       const unknown = sessionLiveError(sessionId)

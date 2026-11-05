@@ -11,8 +11,10 @@
  * - `/advisor status`    — report the per-session status surface;
  * - `/advisor config`    — show the composed advisor config (global defaults);
  * - `/advisor model`     — show the effective reviewer route + source;
- * - `/advisor model set <provider> <model>` — pin an atomic pair for the
- *   invoking session only (validated via `resolveModelInfo`, 60 s, no retry);
+ * - `/advisor model set <provider>/<model>[:<effort>]` — pin an atomic pair
+ *   (and optionally its reasoning effort; an absent effort inherits the global
+ *   value) for the invoking session only (validated via `resolveModelInfo`,
+ *   60 s, no retry);
  * - `/advisor model reset` — re-inherit the current global defaults;
  * - anything else        — usage text.
  *
@@ -54,7 +56,7 @@ export type AdvisorCommand =
 
 /**
  * The parsed form of the text following `/advisor model` (spec §5.3 B1
- * surface): bare → show, `set <provider> <model>` → set (parsed by
+ * surface): bare → show, `set <provider>/<model>[:<effort>]` → set (parsed by
  * {@link parseModelSetArgs}), `reset` → reset, anything else → model usage.
  */
 export type AdvisorModelCommand =
@@ -80,10 +82,10 @@ export function parseAdvisorModelCommand(rawInput: string): AdvisorModelCommand 
 
 /**
  * The result of parsing `/advisor model set` arguments into the atomic pair
- * (spec §5.3 pair validation).
+ * (spec §5.3) plus the optional session reasoning effort.
  */
 export type ModelSetArgs =
-  | { readonly ok: true; readonly provider: string; readonly model: string }
+  | { readonly ok: true; readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
   | { readonly ok: false; readonly reason: string }
 
 /**
@@ -95,8 +97,14 @@ export type ModelSetArgs =
  * whitespace is trimmed; case is retained; model ids containing `/` are fine
  * (`/` is not whitespace). Never throws — every rejection carries a
  * user-facing reason.
+ *
+ * The optional third argument is the session reasoning effort (GitHub issue
+ * #142): absent = inherit the global `reasoningEffort`; present it must be a
+ * non-empty string (an empty value is a usage rejection, never a silent
+ * inherit). Whether the resolved model DECLARES that id is the controller's
+ * pre-commit check — the shape validation stays here.
  */
-export function parseModelPair(provider: unknown, model: unknown): ModelSetArgs {
+export function parseModelPair(provider: unknown, model: unknown, reasoningEffort?: unknown): ModelSetArgs {
   if (typeof provider !== 'string' || typeof model !== 'string') {
     return { ok: false, reason: 'incomplete pair — provider and model are both required' }
   }
@@ -108,30 +116,59 @@ export function parseModelPair(provider: unknown, model: unknown): ModelSetArgs 
   if (/\s/.test(trimmedProvider) || /\s/.test(trimmedModel)) {
     return { ok: false, reason: 'invalid pair — provider and model must not contain whitespace' }
   }
-  return { ok: true, provider: trimmedProvider, model: trimmedModel }
+  if (reasoningEffort === undefined) {
+    return { ok: true, provider: trimmedProvider, model: trimmedModel }
+  }
+  if (typeof reasoningEffort !== 'string') {
+    return { ok: false, reason: 'invalid effort — the reasoning effort must be a string' }
+  }
+  const trimmedEffort = reasoningEffort.trim()
+  if (trimmedEffort === '') {
+    return {
+      ok: false,
+      reason: 'invalid effort — ":" must be followed by an effort id (omit ":" to inherit the global value)',
+    }
+  }
+  return { ok: true, provider: trimmedProvider, model: trimmedModel, reasoningEffort: trimmedEffort }
 }
 
 /**
- * Validate `/advisor model set <provider> <model>` arguments (spec §5.3):
- * exactly two arguments; outer whitespace trimmed; case retained; blank or
- * partial pairs, extra fields (a third argument), and whitespace-containing
- * identifiers rejected. Separate args are what allow model ids containing
- * `/`. Never throws — every rejection carries a user-facing reason.
+ * Validate `/advisor model set` arguments (spec §5.3; grammar decided for
+ * GitHub issue #142): ONE token `<provider>/<model>[:<effort>]`.
+ *
+ * - the FIRST `/` separates `provider` from `model`;
+ * - the LAST `:` that follows that `/` separates `model` from `effort`;
+ * - `model` may itself contain `/` and `:` (everything between the first `/`
+ *   and the last `:`); outer whitespace is trimmed and case is retained;
+ * - an empty effort (`p/m:`) is a usage rejection, never a silent inherit;
+ * - the retired two-argument `<provider> <model>` form is rejected with a
+ *   usage message naming the new form (one grammar, no dual-path drift).
+ *
+ * Never throws — every rejection carries a user-facing reason.
  */
 export function parseModelSetArgs(rawArgs: string): ModelSetArgs {
-  const args = rawArgs.trim().split(/\s+/).filter((arg) => arg.length > 0)
-  if (args.length === 0) {
-    return { ok: false, reason: 'usage: /advisor model set <provider> <model>' }
+  const token = rawArgs.trim()
+  if (token === '') return { ok: false, reason: 'usage: /advisor model set <provider>/<model>[:<effort>]' }
+  if (/\s/.test(token)) {
+    return {
+      ok: false,
+      reason: 'usage: /advisor model set <provider>/<model>[:<effort>] — the two-argument <provider> <model> form is retired',
+    }
   }
-  if (args.length === 1) {
-    return { ok: false, reason: `incomplete pair — provider and model are both required (got only "${args[0]}")` }
+  const slash = token.indexOf('/')
+  if (slash === -1) {
+    return { ok: false, reason: `incomplete pair — expected <provider>/<model> (got "${token}")` }
   }
-  if (args.length > 2) {
-    return { ok: false, reason: `too many arguments — the pair is exactly <provider> <model> (got ${args.length})` }
-  }
+  const provider = token.slice(0, slash)
+  if (provider === '') return { ok: false, reason: 'incomplete pair — the provider before "/" is empty' }
+  const rest = token.slice(slash + 1)
+  const colon = rest.lastIndexOf(':')
+  const model = colon === -1 ? rest : rest.slice(0, colon)
+  if (model === '') return { ok: false, reason: 'incomplete pair — the model after "/" is empty' }
+  const reasoningEffort = colon === -1 ? undefined : rest.slice(colon + 1)
   // The split cannot leave whitespace inside a token; the shared validator is
-  // still the single authority for the pair shape (B2 web face parity).
-  return parseModelPair(args[0]!, args[1]!)
+  // still the single authority for the pair shape + effort (B2 web parity).
+  return parseModelPair(provider, model, reasoningEffort)
 }
 
 /**
@@ -159,14 +196,17 @@ export function parseAdvisorCommand(rawInput: string): AdvisorCommand {
 
 /**
  * The runtime-only reviewer model override for one session (spec §5.3) — an
- * **atomic** `{ provider, model }` pair. It never merges with the global
- * pair (no half-pairs) and is never persisted: it lives in memory for the
- * live-session lifetime and is cleared by reset, dispose, owner teardown,
- * cold resume, or restart.
+ * **atomic** `{ provider, model, reasoningEffort? }` record. It never merges
+ * with the global pair (no half-pairs) and is never persisted: it lives in
+ * memory for the live-session lifetime and is cleared by reset, dispose,
+ * owner teardown, cold resume, or restart. An absent `reasoningEffort` means
+ * "inherit the global `reasoningEffort` value" (GitHub issue #142).
  */
 export interface AdvisorModelPair {
   readonly provider: string
   readonly model: string
+  /** Pinned reasoning effort; absent = inherit the global config value. */
+  readonly reasoningEffort?: string
 }
 
 /**
@@ -285,6 +325,43 @@ export class AdvisorSessionOverrides {
 // ---------------------------------------------------------------------------
 
 /**
+ * Where the effort an advisor call actually sends came from (GitHub issue
+ * #142):
+ *
+ * - `configured` — the configured/pinned id, declared by the model;
+ * - `fallback-undeclared` — the configured id is NOT declared; the smallest
+ *   declared effort was sent instead (the runtime warns once);
+ * - `auto` — no configured id: the smallest declared effort was sent;
+ * - `none` — the model declares no reasoning efforts, so the option was
+ *   omitted entirely;
+ * - `pending` — a live runtime that has not resolved the capability yet (the
+ *   first review call resolves it).
+ */
+export type ReasoningEffortSource =
+  | 'configured'
+  | 'fallback-undeclared'
+  | 'auto'
+  | 'none'
+  | 'pending'
+
+/**
+ * The recorded outcome of one effort resolution (GitHub issue #142) — a
+ * read-only projection: no new persisted key, no new state store.
+ */
+export interface AdvisorReasoningEffortState {
+  readonly source: ReasoningEffortSource
+  /** The id actually sent; absent = the option was omitted. */
+  readonly effective?: string
+  /** The configured/pinned id, when one existed. */
+  readonly configured?: string
+  /**
+   * Where a `configured` id came from (GitHub issue #142 review): the persisted
+   * global value or this session's pin. Present only alongside `configured`.
+   */
+  readonly origin?: 'global' | 'session'
+}
+
+/**
  * Per-session status snapshot consumed by `/advisor status`. Built by the
  * wiring (`index.ts`) from the resolved config, the session's runtime, and
  * the override state.
@@ -308,6 +385,12 @@ export interface AdvisorSessionStatus {
    * `global` = the composed global advisor pair.
    */
   readonly modelSource?: AdvisorModelSource
+  /**
+   * The effort outcome the live runtime recorded (GitHub issue #142) — absent
+   * when the session has no runtime, `pending` before the first review call.
+   * Rendered as ONE `Effort:` line by {@link advisorStatusText}.
+   */
+  readonly reasoningEffort?: AdvisorReasoningEffortState
   /** The session's runtime status; `disabled` when no runtime exists. */
   readonly runtimeStatus: AdvisorRuntimeStatus
   /** Deltas waiting to be drained (bounded backlog, spec §6). */
@@ -352,6 +435,39 @@ export function advisorStatusText(status: AdvisorSessionStatus): string {
     const source = status.modelSource === 'session' ? 'session override' : 'global default'
     lines.push(`Model: ${status.provider}/${status.model} (${source})`)
   }
+  // GitHub issue #142 (AC1/AC2): ONE line for the effort the live runtime
+  // actually sends and where it came from. Absent state (no runtime) prints
+  // nothing — the surface never invents a value; a live runtime that has not
+  // resolved yet says so.
+  if (status.reasoningEffort !== undefined && status.provider && status.model) {
+    const route = `${status.provider}/${status.model}`
+    const effort = status.reasoningEffort
+    switch (effort.source) {
+      case 'pending':
+        lines.push('Effort: pending — resolved on the first review call')
+        break
+      case 'configured': {
+        // GitHub issue #142 asks for the SOURCE: name the origin when the
+        // runtime recorded one, else keep the neutral label.
+        const label = effort.origin === 'session'
+          ? 'session override'
+          : effort.origin === 'global'
+            ? 'global default'
+            : 'configured'
+        lines.push(`Effort: ${effort.effective} (${label})`)
+        break
+      }
+      case 'auto':
+        lines.push(`Effort: ${effort.effective} (auto — smallest declared by ${route})`)
+        break
+      case 'fallback-undeclared':
+        lines.push(`Effort: ${effort.effective} (fallback — "${effort.configured}" is not declared by ${route})`)
+        break
+      case 'none':
+        lines.push(`Effort: not sent — ${route} declares no reasoning efforts`)
+        break
+    }
+  }
   const pending = status.pendingCount > 0 ? ` (${status.pendingCount} pending)` : ''
   lines.push(`Runtime: ${status.runtimeStatus}${pending}`)
   lines.push(`Last activity: ${status.lastActivityAt === undefined ? 'never' : new Date(status.lastActivityAt).toISOString()}`)
@@ -390,12 +506,14 @@ export interface AdvisorModelRoute {
   readonly model?: string
   /** `session` when the effective pair is the session's pin, else `global`. */
   readonly source: AdvisorModelSource
+  /** The session-pinned reasoning effort, when one is pinned (issue #142). */
+  readonly reasoningEffort?: string
 }
 
 /** Outcome of one `/advisor model set` attempt (spec §5.3 validation + fencing). */
 export type AdvisorSetModelOutcome =
-  | { readonly kind: 'committed'; readonly status: AdvisorSessionStatus }
-  | { readonly kind: 'unchanged'; readonly status: AdvisorSessionStatus }
+  | { readonly kind: 'committed'; readonly status: AdvisorSessionStatus; readonly reasoningEffort?: string }
+  | { readonly kind: 'unchanged'; readonly status: AdvisorSessionStatus; readonly reasoningEffort?: string }
   | { readonly kind: 'rejected'; readonly reason: string }
   | { readonly kind: 'failed'; readonly reason: string }
   | { readonly kind: 'cancelled' }
@@ -415,15 +533,21 @@ export function advisorModelText(route: AdvisorModelRoute): string {
   const lines: string[] = []
   if (route.provider && route.model) {
     lines.push(`Model: ${route.provider}/${route.model}`)
+    // GitHub issue #142: the show surface names a pinned effort; a session
+    // that inherits prints no Effort line (the runtime resolution is the
+    // `/advisor status` surface's job).
+    if (route.reasoningEffort !== undefined) {
+      lines.push(`Effort: ${route.reasoningEffort} (session pin — cleared by /advisor model reset)`)
+    }
     lines.push(
       route.source === 'session'
         ? 'Source: session override — lives for this session; cleared by /advisor model reset, dispose, or restart'
-        : 'Source: global default — pin a different route with /advisor model set <provider> <model>',
+        : 'Source: global default — pin a different route with /advisor model set <provider>/<model>[:<effort>]',
     )
   } else {
     lines.push('Model: none — the global default has no provider/model')
     lines.push('Set both globally (the /advisor config edit paths) or pin a session pair:')
-    lines.push('  /advisor model set <provider> <model>')
+    lines.push('  /advisor model set <provider>/<model>[:<effort>]')
   }
   lines.push('Lifetime: this session only — never persisted; a new/forked session inherits the global defaults.')
   return lines.join('\n')
@@ -433,9 +557,9 @@ export function advisorModelText(route: AdvisorModelRoute): string {
 export function modelSetText(outcome: AdvisorSetModelOutcome): string {
   switch (outcome.kind) {
     case 'committed':
-      return `Session model pinned: ${outcome.status.provider}/${outcome.status.model} (session override).\n${advisorStatusText(outcome.status)}`
+      return `Session model pinned: ${outcome.status.provider}/${outcome.status.model}${effortSuffix(outcome.reasoningEffort)} (session override).\n${advisorStatusText(outcome.status)}`
     case 'unchanged':
-      return `Session model pinned: ${outcome.status.provider}/${outcome.status.model} — same effective route, runtime untouched.`
+      return `Session model pinned: ${outcome.status.provider}/${outcome.status.model}${effortSuffix(outcome.reasoningEffort)} — same effective route, runtime untouched.`
     case 'rejected':
       return `Not set: ${outcome.reason}`
     case 'failed':
@@ -447,6 +571,11 @@ export function modelSetText(outcome: AdvisorSetModelOutcome): string {
     case 'gone':
       return 'Model not set — this session is no longer live.'
   }
+}
+
+/** `:<effort>` for a pinned effort, empty when the pin inherits. */
+function effortSuffix(reasoningEffort: string | undefined): string {
+  return reasoningEffort === undefined ? '' : `:${reasoningEffort}`
 }
 
 /** Render one `/advisor model reset` outcome. */
@@ -621,16 +750,21 @@ export interface AdvisorCommandController {
   /** The session's effective reviewer route (pair + source — spec §5.3). */
   getModelRoute(sessionId: string): AdvisorModelRoute
   /**
-   * Validate and commit an atomic pair for the INVOKING session (spec §5.3):
-   * resolve through the LLM service before commit (60 s deadline, fused with
-   * `signal`, cancellable, NO automatic retry — failure leaves the previous
-   * selection untouched), fenced by the per-session generation. Never toggles
-   * the enable override; never starts a generation call.
+   * Validate and commit an atomic pair (+ optional session reasoning effort)
+   * for the INVOKING session (spec §5.3): resolve through the LLM service
+   * before commit (60 s deadline, fused with `signal`, cancellable, NO
+   * automatic retry — failure leaves the previous selection untouched), then
+   * reject an explicit effort the resolved model does not declare (GitHub
+   * issue #142), fenced by the per-session generation. Never toggles the
+   * enable override; never starts a generation call.
+   * @param reasoningEffort - the pinned effort; `undefined` = inherit the
+   *   global config value.
    */
   setModel(
     sessionId: string,
     provider: string,
     model: string,
+    reasoningEffort: string | undefined,
     agent: Agent,
     signal?: AbortSignal,
   ): Promise<AdvisorSetModelOutcome>
@@ -657,17 +791,18 @@ export const USAGE = [
   '  /advisor status   show per-session advisor status (state, model, runtime, pending, last activity)',
   '  /advisor config   show the composed advisor config (global defaults readback)',
   '  /advisor model    show the effective model, its source (session override or global default), and the live-session lifetime',
-  '  /advisor model set <provider> <model>',
-  '                    pin the reviewer model for this session only (separate args; ids may contain /)',
+  '  /advisor model set <provider>/<model>[:<effort>]',
+  '                    pin the reviewer model (and optionally its reasoning effort) for this session only',
   '  /advisor model reset',
   '                    drop the session pin and re-inherit the current global defaults',
 ].join('\n')
 
 /** Usage text for an unknown `/advisor model` subcommand. */
 export const MODEL_USAGE = [
-  'Usage: /advisor model [set <provider> <model>|reset]',
+  'Usage: /advisor model [set <provider>/<model>[:<effort>]|reset]',
   '  /advisor model                  show the effective model and its source',
-  '  /advisor model set <p> <m>      pin the reviewer model for this session only',
+  '  /advisor model set <provider>/<model>[:<effort>]',
+  '                                  pin the reviewer model (and optionally its reasoning effort) for this session only',
   '  /advisor model reset            re-inherit the current global defaults',
 ].join('\n')
 
@@ -765,7 +900,7 @@ function handleModelCommand(
       const args = parseModelSetArgs(command.sub.args)
       if (!args.ok) return { kind: 'success', text: modelSetText({ kind: 'rejected', reason: args.reason }) }
       return controller
-        .setModel(sessionId, args.provider, args.model, invocation.agent, invocation.signal)
+        .setModel(sessionId, args.provider, args.model, args.reasoningEffort, invocation.agent, invocation.signal)
         .then((outcome) => ({ kind: 'success' as const, text: modelSetText(outcome) }))
     }
     case 'usage':

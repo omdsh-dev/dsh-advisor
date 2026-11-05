@@ -52,7 +52,7 @@ import { deadline } from '@deepseek-ai/dsh-timeout'
 import { ADVISOR_SETTINGS_NAMESPACE } from './settings.js'
 import type { AdvisorSettingsBridge } from './settings.js'
 import { parseModelPair } from './commands.js'
-import type { AdvisorModelSource } from './commands.js'
+import type { AdvisorModelSource, AdvisorReasoningEffortState } from './commands.js'
 import { resolveAdvisorConfig } from './config.js'
 import type { AdvisorConfig, ResolvedAdvisorConfig } from './config.js'
 
@@ -82,6 +82,11 @@ export interface AdvisorPairWire {
  *   exists at all;
  * - `effectiveModel` — the effective route; omitted when neither level has a
  *   complete pair;
+ * - `reasoningEffortOverride` — the session-pinned effort (GitHub issue #142);
+ *   omitted while the session inherits the global value;
+ * - `reasoningEffort` — the effort outcome the live runtime recorded (sent id,
+ *   source, and — for a configured id — its `origin`: the persisted global
+ *   value vs the session pin); omitted when the session has no runtime;
  * - `disabledReason` — the S4 explicit-gate reason when it blocks.
  */
 export interface AdvisorSessionSnapshotWire {
@@ -92,6 +97,8 @@ export interface AdvisorSessionSnapshotWire {
   readonly modelOverride?: AdvisorPairWire
   readonly modelSource?: AdvisorModelSource
   readonly effectiveModel?: AdvisorPairWire
+  readonly reasoningEffortOverride?: string
+  readonly reasoningEffort?: AdvisorReasoningEffortState
   readonly disabledReason?: string
 }
 
@@ -247,8 +254,16 @@ function raceSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | 'a
 export interface AdvisorSessionGatewayFace {
   /** Authoritative snapshot for one live session (unknown → tagged error). */
   getSession(sessionId: string): AdvisorSessionRpcResult
-  /** Validate + commit a pair through the command controller (same fencing). */
-  setSessionModel(sessionId: string, provider: string, model: string): Promise<AdvisorSessionRpcResult>
+  /**
+   * Validate + commit a pair (and an optional session reasoning effort)
+   * through the command controller (same fencing; GitHub issue #142).
+   */
+  setSessionModel(
+    sessionId: string,
+    provider: string,
+    model: string,
+    reasoningEffort?: string,
+  ): Promise<AdvisorSessionRpcResult>
   /** Drop the pin and re-inherit (selection: null); never touches the enable override. */
   resetSessionModel(sessionId: string): AdvisorSessionRpcResult
 }
@@ -422,14 +437,16 @@ export class AdvisorConfigGateway extends TypertRemoteService {
    * (`/api/advisor/setSessionModel`, args `{ sessionId, selection }`).
    * `selection: null` = reset (re-inherit the CURRENT global defaults; never
    * touches the enable override). A non-null selection must be the atomic
-   * `{ provider, model }` pair and passes the SAME validation as the command
-   * face (`parseModelPair` — spec §5.3); the write itself routes through the
-   * elected owner's `AdvisorCommandController` (`setModel`/`resetModel`), so
-   * pre-commit `resolveModelInfo` validation (60 s, cancellable, no retry),
-   * per-session generation fencing, and the route-change semantics are
-   * INHERITED, not reimplemented. Unknown/disposed targets are rejected
-   * BEFORE the controller runs — no generation is allocated for a dead
-   * session. Returns the post-commit snapshot on success.
+   * `{ provider, model, reasoningEffort? }` record (GitHub issue #142: an
+   * absent effort inherits the global value) and passes the SAME validation as
+   * the command face (`parseModelPair` — spec §5.3); the write itself routes
+   * through the elected owner's `AdvisorCommandController`
+   * (`setModel`/`resetModel`), so pre-commit `resolveModelInfo` validation
+   * (60 s, cancellable, no retry), the declared-effort check, per-session
+   * generation fencing, and the route-change semantics are INHERITED, not
+   * reimplemented. Unknown/disposed targets are rejected BEFORE the controller
+   * runs — no generation is allocated for a dead session. Returns the
+   * post-commit snapshot on success.
    */
   async setSessionModel(sessionId: string, selection: unknown): Promise<AdvisorSessionRpcResult> {
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
@@ -441,16 +458,17 @@ export class AdvisorConfigGateway extends TypertRemoteService {
     }
     // Reset arm: the wire selection is null (JSON has no undefined).
     if (selection === null) return face.resetSessionModel(sessionId)
-    // Set arm: validate the atomic pair shape BEFORE touching the controller
-    // (a malformed selection must not allocate a generation). Non-object and
-    // extra-field shapes read as absent keys → the same incomplete-pair
-    // rejection the command face reports.
+    // Set arm: validate the atomic pair (+ optional effort) shape BEFORE
+    // touching the controller (a malformed selection must not allocate a
+    // generation). Non-object and extra-field shapes read as absent keys → the
+    // same incomplete-pair rejection the command face reports; `reasoningEffort`
+    // must be a non-empty string when present (GitHub issue #142).
     const pair = typeof selection === 'object' && selection !== null
-      ? (selection as { provider?: unknown; model?: unknown })
+      ? (selection as { provider?: unknown; model?: unknown; reasoningEffort?: unknown })
       : {}
-    const validated = parseModelPair(pair.provider, pair.model)
+    const validated = parseModelPair(pair.provider, pair.model, pair.reasoningEffort)
     if (!validated.ok) return advisorSessionError('advisor/rejected', `advisor: ${validated.reason}`)
-    return face.setSessionModel(sessionId, validated.provider, validated.model)
+    return face.setSessionModel(sessionId, validated.provider, validated.model, validated.reasoningEffort)
   }
 
   /**

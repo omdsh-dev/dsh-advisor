@@ -43,8 +43,8 @@ import type { AdvisorConfig, ResolvedAdvisorConfig } from 'dsh-advisor'
 | 端点 | 作用域 | 说明 |
 |---|---|---|
 | `/api/advisor/get` / `/api/advisor/set` | **全局** | entry config 的读取/写入（经硬门禁的 resolved 值）。 |
-| `/api/advisor/getSession`（B2） | **会话** | 返回权威会话快照 `{ sessionId, enabled, modelOverride?, modelSource?, effectiveModel?, disabledReason?, lifetime: 'live-session' }`（缺省键在 wire 上省略）。只读，不分配状态。 |
-| `/api/advisor/setSessionModel`（B2） | **会话** | `{ sessionId, selection: { provider, model } \| null }`：钉住/更新原子对；`selection: null` = reset（重新继承当前全局默认，从不触碰启用开关）。返回提交后的同一快照。写入经**同一** `AdvisorCommandController`（`resolveModelInfo` 60 秒校验、按会话 generation 栅栏、路由变更语义继承自指令面）。 |
+| `/api/advisor/getSession`（B2） | **会话** | 返回权威会话快照 `{ sessionId, enabled, modelOverride?, modelSource?, effectiveModel?, reasoningEffortOverride?, reasoningEffort?, disabledReason?, lifetime: 'live-session' }`（缺省键在 wire 上省略）：`modelOverride` **只**是 `{ provider, model }` 原子 pair，会话钉住的 effort 走独立顶层字段 `reasoningEffortOverride`，`reasoningEffort` 是运行时记录的解析结果 `{ source, effective?, configured? }`。只读，不分配状态。 |
+| `/api/advisor/setSessionModel`（B2） | **会话** | `{ sessionId, selection: { provider, model, reasoningEffort? } \| null }`：钉住/更新原子记录——`reasoningEffort` 可选，缺省 = 继承全局值，未声明的 id 在提交前被拒绝，未知的额外字段按缺省键读取并忽略；`selection: null` = reset（重新继承当前全局默认，从不触碰启用开关）。返回提交后的同一快照。写入经**同一** `AdvisorCommandController`（`resolveModelInfo` 60 秒校验、按会话 generation 栅栏、路由变更语义继承自指令面）。 |
 
 业务结果（未知/已销毁会话、无 elected owner、校验拒绝/失败、被更新/取消）以**插件域错误标签**在返回数据中表达（`{ error: { tag, message } }`，`advisor/session-unknown` / `advisor/unavailable` / `advisor/rejected` / `advisor/failed` / `advisor/superseded` / `advisor/cancelled`）—— 不抛新的 coded 失败、不扩展 dsh 的失败词汇。未知/已销毁的会话目标在校验开始**之前**拒绝（不为死目标分配状态）；SessionId 不是授权——请求仍先经过 Connection 的 Host/Origin + 浏览器认证边界；无裸 HTTP 端点、无自创会话 ACL。两个会话端点由**获得 reviewer 角色的 fiber**的控制器提供（懒解析的 session face）；持有 `advisor` 服务键但无 elected owner 的 fiber 对其回答 `advisor/unavailable` 并保持惰性（无自动晋升）。
 
@@ -82,15 +82,15 @@ import type { AdvisorSessionActionProps, AdvisorSessionModelController, AdvisorS
 /advisor off        disable the advisor for this session
 /advisor status     show state, effective model + source, runtime status, pending count, last activity
 /advisor model      show the effective reviewer model, its source (session|global), and the live-session lifetime
-/advisor model set <provider> <model>   pin a reviewer model for the invoking session only
-/advisor model reset    drop the session pin and re-inherit the current global defaults
+/advisor model set <provider>/<model>[:<effort>]   pin a reviewer model (and optionally its reasoning effort) for the invoking session only
+/advisor model reset    drop the session pin — model and reasoning effort — and re-inherit the current global defaults
 （其它输入）        → usage 文本
 ```
 
 - **会话级且临时**：`on` / `off` / `toggle` 翻转的是按会话的启用 override（`AdvisorSessionOverrides`，`override ?? true`——运行中的插件行即启用），**从不修改持久化配置**；`/advisor on` 开启一个 config 缺少 `provider`/`model` 的会话不会发起模型调用 —— 回复与 `/advisor status` 都会显示 S4 门禁原因；
-- **会话级模型覆盖**：`model set` / `model reset` 读写同一会话级机制内的运行时 `modelOverride: { provider, model }` 原子对（生存期、解析顺序、校验细节 → [配置指南 · 会话级评审模型覆盖](configuration.md#会话级评审模型覆盖运行时临时)）——同样**从不写入持久化配置**；`set` 只作用于发起调用的会话（无 session-id 参数，模型 id 可含 `/`），提交前经 `resolveModelInfo` 校验（60 秒、可取消、无自动重试）；`reset` 重新继承当前全局默认且从不触碰启用开关；
+- **会话级模型覆盖**：`model set` / `model reset` 读写同一会话级机制内的运行时 `modelOverride: { provider, model, reasoningEffort? }` 原子记录（`reasoningEffort` 缺省 = 继承全局值；生存期、解析顺序、校验细节 → [配置指南 · 会话级评审模型覆盖](configuration.md#会话级评审模型覆盖运行时临时)）——同样**从不写入持久化配置**；`set` 只作用于发起调用的会话（无 session-id 参数）；参数是**单个 token** `<provider>/<model>[:<effort>]`：第一个 `/` 分隔 provider 与 model；**最后一个** `:` 一律是 effort 分隔符（因此含 `:` 的 model id 需要带显式 `:<effort>` 后缀才能表达），旧的两参数形式已退役；提交前经 `resolveModelInfo` 校验（60 秒、可取消、无自动重试），显式 effort 未由解析出的模型声明即被拒绝（`Not set: …`）；`reset` 重新继承当前全局默认（模型与 effort 一并清除）且从不触碰启用开关；
 - **`/advisor on` 是手动恢复路径**：恢复 `quota_exhausted`（KD-5 无自动恢复定时器）并**全新重建** `halted`（永久性模型错误）的会话 runtime；开启时把 observer 游标 seed 到当前 transcript 长度（KD-5 seed-on-enable，不做全史重放）；
-- **`/advisor status`** 状态面（`src/commands.ts` `AdvisorSessionStatus` + `advisorStatusText`）：`enabled`（有效开关）、`disabledReason`（S4 门禁阻挡时）、`provider` / `model`（**有效**路由——会话覆盖优先于全局默认——即使禁用也显示）、`modelSource`（`session` | `global`）、`runtimeStatus`（`running` | `paused` | `quota_exhausted` | `halted` | `disabled`）、`pendingCount`（待 drain 的 delta 数）、`lastActivityAt`（最后一次 accepted-note 的 ISO 时间，之前为 `never`）。`/advisor config` 保持**全局默认值**回读（会话级覆盖不改变它的输出）。
+- **`/advisor status`** 状态面（`src/commands.ts` `AdvisorSessionStatus` + `advisorStatusText`）：`enabled`（有效开关）、`disabledReason`（S4 门禁阻挡时）、`provider` / `model`（**有效**路由——会话覆盖优先于全局默认——即使禁用也显示）、`modelSource`（`session` | `global`）、`reasoningEffort`（运行时记录的解析结果：`source` = `configured` | `auto` | `fallback-undeclared` | `none` | `pending`，可选 `effective` / `configured`；无运行时的会话不携带该字段，渲染为一行 `Effort:`——活跃但未解析时为 `Effort: pending — resolved on the first review call`）、`runtimeStatus`（`running` | `paused` | `quota_exhausted` | `halted` | `disabled`）、`pendingCount`（待 drain 的 delta 数）、`lastActivityAt`（最后一次 accepted-note 的 ISO 时间，之前为 `never`）。`/advisor config` 保持**全局默认值**回读（会话级覆盖不改变它的输出）。
 
 ## 安装 / 发布指针
 

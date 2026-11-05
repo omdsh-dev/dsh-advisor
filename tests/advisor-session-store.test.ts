@@ -231,3 +231,118 @@ describe('advisor session model controller (B2)', () => {
     expect(controller.takeSignal(1)).toBe(false)
   })
 })
+
+describe('advisor session reasoning effort (issue #142)', () => {
+  it('loadReasoning fetches modelReasoning and commits the declared efforts', async () => {
+    const rpc = new ScriptedRpc()
+    const controller = new AdvisorSessionModelController('sess-A', rpc as unknown as ClientConnectionRpc)
+    const pending = controller.loadReasoning('deepseek', 'deepseek-chat')
+    expect(rpc.calls).toEqual([
+      { channel: '/api', method: 'advisor/modelReasoning', args: { provider: 'deepseek', model: 'deepseek-chat' } },
+    ])
+    expect(controller.store.getSnapshot().reasoningStatus).toBe('loading')
+    rpc.settle(ok({ efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] }))
+    await pending
+    const state = controller.store.getSnapshot()
+    expect(state.reasoningStatus).toBe('ready')
+    expect(state.reasoningEfforts).toEqual([{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }])
+  })
+
+  it('a stale loadReasoning settle is discarded (the newer lookup wins the reasoning fence)', async () => {
+    const rpc = new ScriptedRpc()
+    const controller = new AdvisorSessionModelController('sess-A', rpc as unknown as ClientConnectionRpc)
+    const stale = controller.loadReasoning('p', 'old-model') // parked first
+    const fresh = controller.loadReasoning('p', 'new-model') // parked second (newer op)
+    // The NEWER lookup settles first (LIFO); the stale one settles LAST.
+    rpc.settleLast(ok({ efforts: [{ id: 'high', name: 'High' }] }))
+    await fresh
+    rpc.settle(ok({ efforts: [{ id: 'low', name: 'Low' }] }))
+    await stale
+    const state = controller.store.getSnapshot()
+    expect(state.reasoningStatus).toBe('ready')
+    expect(state.reasoningEfforts).toEqual([{ id: 'high', name: 'High' }])
+  })
+
+  it('the reasoning fence is independent: a newer lookup neither supersedes an in-flight refresh settle nor is superseded by it', async () => {
+    const rpc = new ScriptedRpc()
+    const controller = new AdvisorSessionModelController('sess-A', rpc as unknown as ClientConnectionRpc)
+
+    // The exact production interleave: the open-menu refresh is unresolved
+    // when the user picks a model and the capability lookup fires.
+    const refresh = controller.refresh() // parked first
+    const lookup = controller.loadReasoning('deepseek', 'deepseek-chat') // parked second
+
+    // The lookup settles FIRST: it commits on its own fence...
+    rpc.settleLast(ok({ efforts: [{ id: 'low', name: 'Low' }] }))
+    await lookup
+    expect(controller.store.getSnapshot().reasoningStatus).toBe('ready')
+
+    // ...and the older refresh settle STILL commits — the lookup never
+    // superseded it (the panel must not strand at Loading…).
+    rpc.settle(ok(snapshotOf({ modelSource: 'session' })))
+    await refresh
+    const state = controller.store.getSnapshot()
+    expect(state.phase).toBe('ready')
+    expect(state.snapshot?.modelSource).toBe('session')
+  })
+
+  it('a failed lookup for a NEW pair clears the previous pair\'s options (they must not render under the new model)', async () => {
+    const rpc = new ScriptedRpc()
+    const controller = new AdvisorSessionModelController('sess-A', rpc as unknown as ClientConnectionRpc)
+    const first = controller.loadReasoning('p', 'model-a')
+    rpc.settle(ok({ efforts: [{ id: 'low', name: 'Low' }] }))
+    await first
+    expect(controller.store.getSnapshot().reasoningEfforts).toEqual([{ id: 'low', name: 'Low' }])
+
+    // Switch to a different pair whose lookup FAILS: the new lookup starts
+    // for a different model, so model-a's ids must already be gone — a
+    // failure can never leave them selectable under model-b (AC6: only the
+    // currently selected model's declared ids).
+    const second = controller.loadReasoning('p', 'model-b')
+    expect(controller.store.getSnapshot().reasoningEfforts).toEqual([])
+    rpc.settle(ok({ error: { tag: 'advisor/model-reasoning-failed', message: 'adapter down' } }))
+    await second
+    const state = controller.store.getSnapshot()
+    expect(state.reasoningStatus).toBe('unavailable')
+    expect(state.reasoningEfforts).toEqual([])
+  })
+
+  it('a same-pair re-probe failure keeps that pair\'s own options (truthful — nothing invented)', async () => {
+    const rpc = new ScriptedRpc()
+    const controller = new AdvisorSessionModelController('sess-A', rpc as unknown as ClientConnectionRpc)
+    const first = controller.loadReasoning('p', 'model-a')
+    rpc.settle(ok({ efforts: [{ id: 'low', name: 'Low' }] }))
+    await first
+
+    // The same pair re-probes and fails: the retained options still describe
+    // THIS pair, so they stay (no invented replacement, no unrelated ids).
+    const retry = controller.loadReasoning('p', 'model-a')
+    rpc.settle(ok({ error: { tag: 'advisor/model-reasoning-failed', message: 'adapter down' } }))
+    await retry
+    const state = controller.store.getSnapshot()
+    expect(state.reasoningStatus).toBe('unavailable')
+    expect(state.reasoningEfforts).toEqual([{ id: 'low', name: 'Low' }])
+  })
+
+  it('setSessionModel carries the effort; inherit omits the reasoningEffort key entirely', async () => {
+    const rpc = new ScriptedRpc()
+    const controller = new AdvisorSessionModelController('sess-A', rpc as unknown as ClientConnectionRpc)
+
+    const pinned = controller.setSessionModel('deepseek', 'deepseek-chat', 'high')
+    rpc.settle(ok(snapshotOf({})))
+    await pinned
+    expect(rpc.callAt(rpc.calls.length - 1).args).toEqual({
+      sessionId: 'sess-A',
+      selection: { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' },
+    })
+
+    // Absent effort = inherit: the key must NOT be sent present-as-undefined
+    // (the gateway result validation rejects undefined values).
+    const inherited = controller.setSessionModel('deepseek', 'deepseek-chat')
+    rpc.settle(ok(snapshotOf({})))
+    await inherited
+    const args = rpc.callAt(rpc.calls.length - 1).args as { selection: Record<string, unknown> }
+    expect(args.selection).toEqual({ provider: 'deepseek', model: 'deepseek-chat' })
+    expect(Object.hasOwn(args.selection, 'reasoningEffort')).toBe(false)
+  })
+})
