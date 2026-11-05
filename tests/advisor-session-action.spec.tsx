@@ -520,6 +520,19 @@ describe('advisor session reasoning effort (issue #142)', () => {
 
   const EFFORTS = { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] }
 
+  /** A session pinned to deepseek/deepseek-chat with the effort 'high'. */
+  const PINNED_HIGH = {
+    snapshot: {
+      sessionId: 'sess-1',
+      enabled: true,
+      lifetime: 'live-session' as const,
+      modelOverride: { provider: 'deepseek', model: 'deepseek-chat' },
+      modelSource: 'session' as const,
+      effectiveModel: { provider: 'deepseek', model: 'deepseek-chat' },
+      reasoningEffortOverride: 'high',
+    },
+  }
+
   it('the effort select offers Inherit global plus the declared ids of the chosen model', async () => {
     const h = harness(ok(SESSION_SNAPSHOT))
     const view = render(<AdvisorSessionAction {...h.props} />)
@@ -671,6 +684,83 @@ describe('advisor session reasoning effort (issue #142)', () => {
     expect(Object.hasOwn(args.selection, 'reasoningEffort')).toBe(false)
     h.rpc.settle(ok(SESSION_SNAPSHOT))
     await settled({ controller: h.controller })
+  })
+
+  it('a pinned effort pre-selects on the staged pair; re-pinning untouched re-sends it', async () => {
+    const h = harness(ok(PINNED_HIGH))
+    const view = render(<AdvisorSessionAction {...h.props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
+    h.rpc.settle(ok(PINNED_HIGH))
+    await settled({ controller: h.controller })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    // Open on a pinned session resolves the pinned model's declared efforts
+    // (the pinned id must be a selectable option).
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
+    expect(h.rpc.last().method).toBe('advisor/modelReasoning')
+    h.rpc.settle(ok(EFFORTS))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+
+    // Re-select the same pair: the pinned effort pre-selects (the select
+    // must NOT sit on Inherit global — that would silently drop the pin).
+    fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'deepseek-chat' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(3))
+    h.rpc.settle(ok(EFFORTS))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    expect((screen.getByLabelText(en.sessionEffort) as HTMLSelectElement).value).toBe('high')
+
+    // Pin WITHOUT touching the select → the selection carries the effort.
+    fireEvent.click(screen.getByRole('button', { name: en.sessionPinAction }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(4))
+    expect(h.rpc.last().args).toEqual({
+      sessionId: 'sess-1',
+      selection: { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' },
+    })
+    h.rpc.settle(ok(PINNED_HIGH))
+    await settled({ controller: h.controller })
+  })
+
+  it('a user-edited effort is not overwritten when a refresh settles', async () => {
+    const h = harness(ok(PINNED_HIGH))
+    const view = render(<AdvisorSessionAction {...h.props} />)
+    fireEvent.click(screen.getByRole('button', { name: en.sessionExpand }))
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
+    h.rpc.settle(ok(PINNED_HIGH))
+    await settled({ controller: h.controller })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
+    h.rpc.settle(ok(EFFORTS))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    fireEvent.change(screen.getByLabelText(en.provider), { target: { value: 'deepseek' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    fireEvent.change(screen.getByLabelText(en.model), { target: { value: 'deepseek-chat' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(3))
+    h.rpc.settle(ok(EFFORTS))
+    await waitFor(() => expect(h.controller.store.getSnapshot().reasoningStatus).toBe('ready'))
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+
+    // The seed pre-selected 'high'; the user overrides it with 'low'.
+    expect((screen.getByLabelText(en.sessionEffort) as HTMLSelectElement).value).toBe('high')
+    fireEvent.change(screen.getByLabelText(en.sessionEffort), { target: { value: 'low' } })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    expect((screen.getByLabelText(en.sessionEffort) as HTMLSelectElement).value).toBe('low')
+
+    // A refresh settles a snapshot that still pins 'high' — the user's
+    // choice must survive (seeding never clobbers a user edit).
+    const refresh = h.controller.refresh()
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(4))
+    h.rpc.settle(ok(PINNED_HIGH))
+    await refresh
+    await settled({ controller: h.controller })
+    view.rerender(<AdvisorSessionAction {...h.props} />)
+    expect((screen.getByLabelText(en.sessionEffort) as HTMLSelectElement).value).toBe('low')
   })
 
   it.each([

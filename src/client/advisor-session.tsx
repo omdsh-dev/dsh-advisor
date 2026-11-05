@@ -30,7 +30,7 @@
  * falsely claiming continuous synchronization.
  */
 
-import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
@@ -200,15 +200,45 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
   useLayoutEffect(() => {
     if (!open) focusHandedOffRef.current = false
   }, [open])
-  // The staged pin selection is LOCAL user input (never seeded from the
-  // snapshot — the effective pair is displayed as text above; a stale host
-  // pair must not look like staged edits).
+  // The staged pin selection is LOCAL user input — the provider/model are
+  // never seeded from the snapshot (the effective pair is displayed as text
+  // above; a stale host pair must not look like staged edits). The staged
+  // EFFORT is the one exception (issue #142, PR #144 review): a session
+  // pinned to the effective pair pre-selects its pinned effort so
+  // re-pinning without touching the select never drops the pin. A user
+  // edit always wins over the seed.
   const [provider, setProvider] = useState('')
   const [model, setModel] = useState('')
   // The staged effort rides the staged pair: '' = inherit the global value
   // (the select's first option); reset on every provider/model transition
   // and reloaded through loadReasoning (issue #142).
   const [effort, setEffort] = useState('')
+  /** True once the user touches the effort select — seeding must stand down. */
+  const effortEditedRef = useRef(false)
+  /** The pair whose options were last resolved (dedupes the open-time load). */
+  const lastReasoningKeyRef = useRef('')
+
+  // Seed the staged effort from the pinned override and resolve the pinned
+  // model's declared efforts (the pinned id must be a selectable option).
+  // Runs whenever the snapshot or the staged pair changes; a user edit
+  // (effortEditedRef) suppresses the seed until the next pair transition.
+  const snapshotForSeed = state.snapshot
+  useEffect(() => {
+    if (effortEditedRef.current) return
+    const effective = snapshotForSeed?.effectiveModel
+    const pinnedEffort = snapshotForSeed?.reasoningEffortOverride
+    const stagedMatchesEffective = effective !== undefined
+      && provider === effective.provider
+      && model === effective.model
+    setEffort(stagedMatchesEffective && pinnedEffort !== undefined ? pinnedEffort : '')
+    if (pinnedEffort !== undefined && effective !== undefined) {
+      const key = `${effective.provider}/${effective.model}`
+      if (key !== lastReasoningKeyRef.current) {
+        lastReasoningKeyRef.current = key
+        void controller.loadReasoning(effective.provider, effective.model)
+      }
+    }
+  }, [snapshotForSeed, provider, model, controller])
 
   // Open is a refresh point (fetch on menu open): every open refetches and
   // marks the current signal epoch consumed, so the watcher below does not
@@ -310,6 +340,7 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
                 setProvider(next)
                 setModel('')
                 setEffort('')
+                effortEditedRef.current = false
                 if (next !== '') void directory.ensureModels(next)
               }}
             >
@@ -330,7 +361,11 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
                 // through the shared capability endpoint (no lookup without
                 // a chosen model).
                 setEffort('')
-                if (next !== '') void controller.loadReasoning(provider, next)
+                effortEditedRef.current = false
+                if (next !== '') {
+                  lastReasoningKeyRef.current = `${provider}/${next}`
+                  void controller.loadReasoning(provider, next)
+                }
               }}
             >
               <option value="">{t('modelPlaceholder')}</option>
@@ -349,7 +384,10 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
               className={styles.select}
               value={effort}
               disabled={busy || provider === '' || model === '' || state.reasoningStatus === 'loading'}
-              onChange={(event) => { setEffort(event.target.value) }}
+              onChange={(event) => {
+                effortEditedRef.current = true
+                setEffort(event.target.value)
+              }}
             >
               <option value="">{t('sessionEffortInherit')}</option>
               {state.reasoningEfforts.map((option) => (
