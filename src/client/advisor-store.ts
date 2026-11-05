@@ -1076,10 +1076,16 @@ export interface AdvisorSessionSnapshotView {
   /** The session-pinned effort (GitHub issue #142); absent = inherit. */
   reasoningEffortOverride?: string
   /**
-   * The effort outcome the live runtime recorded (sent id + source); absent
-   * when the session has no runtime — the client never invents a value.
+   * The effort outcome the live runtime recorded (sent id + source, and
+   * where a configured effort came from); absent when the session has no
+   * runtime — the client never invents a value.
    */
-  reasoningEffort?: { readonly source: string; readonly effective?: string; readonly configured?: string }
+  reasoningEffort?: {
+    readonly source: string
+    readonly effective?: string
+    readonly configured?: string
+    readonly origin?: 'global' | 'session'
+  }
   /** Present iff the S4 explicit gate blocks model calls. */
   disabledReason?: string
 }

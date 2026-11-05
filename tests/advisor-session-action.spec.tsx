@@ -646,9 +646,19 @@ describe('advisor session reasoning effort (issue #142)', () => {
       method: 'advisor/setSessionModel',
       args: { sessionId: 'sess-1', selection: { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' } },
     })
-    h.rpc.settle(ok(SESSION_SNAPSHOT))
+    // The committed pin reports the pinned effort with its origin.
+    h.rpc.settle(ok({
+      snapshot: {
+        ...SESSION_SNAPSHOT.snapshot,
+        modelOverride: { provider: 'deepseek', model: 'deepseek-chat' },
+        modelSource: 'session' as const,
+        reasoningEffortOverride: 'high',
+        reasoningEffort: { source: 'configured', effective: 'high', origin: 'session' },
+      },
+    }))
     await settled({ controller: h.controller })
     view.rerender(<AdvisorSessionAction {...h.props} />)
+    expect(screen.getByRole('dialog').textContent).toContain('Effort: high (session override)')
 
     // Back to inherit → the selection carries NO reasoningEffort key at all
     // (the wire rejects present-as-undefined).
@@ -665,6 +675,8 @@ describe('advisor session reasoning effort (issue #142)', () => {
 
   it.each([
     [{ source: 'configured', effective: 'low' }, 'Effort: low (configured)'],
+    [{ source: 'configured', effective: 'low', origin: 'global' }, 'Effort: low (global default)'],
+    [{ source: 'configured', effective: 'low', origin: 'session' }, 'Effort: low (session override)'],
     [{ source: 'auto', effective: 'low' }, 'Effort: low (auto — smallest declared by deepseek/deepseek-chat)'],
     [{ source: 'fallback-undeclared', effective: 'low', configured: 'medium' }, 'Effort: low (fallback — "medium" is not declared by deepseek/deepseek-chat)'],
     [{ source: 'none' }, 'Effort: not sent — deepseek/deepseek-chat declares no reasoning efforts'],

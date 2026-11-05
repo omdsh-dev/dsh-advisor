@@ -255,7 +255,16 @@ export function AdvisorSessionAction(props: AdvisorSessionActionProps): ReactNod
           effortLine = t('sessionEffortPending')
           break
         case 'configured':
-          effortLine = `${record.effective} ${t('sessionEffortConfigured')}`
+          // The runtime records WHERE the configured effort came from
+          // (issue #142): name the origin when present, else stay neutral —
+          // same label set as the `/advisor status` surface.
+          effortLine = `${record.effective} ${
+            record.origin === 'session'
+              ? t('sessionEffortConfiguredSession')
+              : record.origin === 'global'
+                ? t('sessionEffortConfiguredGlobal')
+                : t('sessionEffortConfigured')
+          }`
           break
         case 'auto':
           effortLine = `${record.effective} ${t('sessionEffortAuto', { route })}`
