@@ -308,6 +308,37 @@ export interface AdvisorSuggestionFace {
   getSuggestion(sessionId: string): AdvisorSuggestionRpcResult
 }
 
+// ---------------------------------------------------------------------------
+// Delivered-advice tip surface
+// ---------------------------------------------------------------------------
+
+/** One delivered advice note rendered by the web tip. */
+export interface AdvisorAdviceView {
+  readonly severity: 'nit' | 'concern' | 'blocker'
+  readonly note: string
+}
+
+/**
+ * One `advisor/advice` result: the LAST note delivered for the session
+ * (`advice: null` = none, or the session is off), or a tagged data error.
+ * Read-only and side-effect-free — the durable injected message remains the
+ * source of truth; this face only lets the web client surface the same event.
+ */
+export type AdvisorAdviceRpcResult =
+  | { readonly advice: AdvisorAdviceView | null }
+  | { readonly error: { readonly tag: AdvisorSuggestionErrorTag; readonly message: string } }
+
+/**
+ * The elected owner's advice face — implemented by the wiring against the
+ * SAME `AdvisorDelivery` the runtime routes notes through. Consulted lazily
+ * per request, like the suggestion face; a non-owner fiber answers
+ * `advisor/unavailable` in data.
+ */
+export interface AdvisorAdviceFace {
+  /** The last delivered note for one session (`{ advice: null }` when none). */
+  getAdvice(sessionId: string): AdvisorAdviceRpcResult
+}
+
 /**
  * The host-side `advisor` config gateway (`/api/advisor/get` +
  * `/api/advisor/set`). Registered as the cordis service key `'advisor'`
@@ -356,6 +387,8 @@ export class AdvisorConfigGateway extends TypertRemoteService {
    * and stays inert.
    */
   private readonly suggestionFace: () => AdvisorSuggestionFace | undefined
+  /** The elected owner's advice face for the visible advice tip; lazy like the rest. */
+  private readonly adviceFace: () => AdvisorAdviceFace | undefined
 
   /**
    * @param ctx - owning context (the plugin fiber's ctx inside `apply`).
@@ -381,6 +414,7 @@ export class AdvisorConfigGateway extends TypertRemoteService {
     resolveModelInfo?: AdvisorModelInfoResolver,
     logger?: AdvisorGatewayLogger,
     suggestionFace: () => AdvisorSuggestionFace | undefined = () => undefined,
+    adviceFace: () => AdvisorAdviceFace | undefined = () => undefined,
   ) {
     super(ctx, 'advisor')
     this.bridge = bridge
@@ -388,6 +422,7 @@ export class AdvisorConfigGateway extends TypertRemoteService {
     this.resolveModelInfo = resolveModelInfo
     this.logger = logger
     this.suggestionFace = suggestionFace
+    this.adviceFace = adviceFace
     // The settings service is optional (no settings → entry fallback). The
     // inject child activates only when a settings service is composed, mirroring
     // installAdvisorSettings' conditional child; the returned disposer mirrors
@@ -498,6 +533,32 @@ export class AdvisorConfigGateway extends TypertRemoteService {
       }
     }
     return face.getSuggestion(sessionId)
+  }
+
+  /**
+   * READ-ONLY delivered-advice query (`/api/advisor/advice`, args
+   * `{ sessionId }`): the last note the delivery router accepted, so the web
+   * composer can show ONE visible advice tip (the injected message itself is
+   * context-only in the transcript). Malformed requests answer
+   * `advisor/rejected`; a gateway without an elected owner answers
+   * `advisor/unavailable`; tagged outcomes ride in returned data.
+   */
+  getAdvice(sessionId: string): AdvisorAdviceRpcResult {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
+      return {
+        error: { tag: 'advisor/rejected', message: 'advisor: getAdvice requires a non-empty sessionId' },
+      }
+    }
+    const face = this.adviceFace()
+    if (face === undefined) {
+      return {
+        error: {
+          tag: 'advisor/unavailable',
+          message: 'advisor: the advice surface is not owned by this gateway — no elected owner on this fiber',
+        },
+      }
+    }
+    return face.getAdvice(sessionId)
   }
 
   /**
@@ -803,6 +864,21 @@ export function advisorTypertContribution(): TypertContribution {
       // `getSuggestion` (InvocationDescriptor.implementation), keeping the
       // endpoint noun-shaped on `/api/advisor/suggestion` while the class
       // member keeps its accessor-style name. Synchronous, tag-in-data.
+      // The visible advice tip's read endpoint. Same explicit registration
+      // and tag-in-data contract as the suggestion read; the wire noun is
+      // `advice`, the implementation member `getAdvice`.
+      {
+        id: 'dsh-advisor#advisor/advice',
+        service: 'advisor',
+        namespace: 'advisor',
+        method: 'advice',
+        implementation: 'getAdvice',
+        invocation: { kind: 'direct' },
+        parameters: [
+          { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },
+        ],
+        result: { mode: 'src-json' },
+      },
       {
         id: 'dsh-advisor#advisor/suggestion',
         service: 'advisor',
