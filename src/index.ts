@@ -61,12 +61,12 @@ import { resolveAdvisorConfig } from './config.js'
 import type { AdvisorConfig, ResolvedAdvisorConfig } from './config.js'
 import { installAdvisorSettings } from './settings.js'
 import { AdvisorConfigGateway, advisorSessionError, advisorTypertContribution } from './gateway.js'
-import type { AdvisorSessionGatewayFace, AdvisorSessionRpcResult, AdvisorSuggestionFace } from './gateway.js'
+import type { AdvisorAdviceFace, AdvisorSessionGatewayFace, AdvisorSessionRpcResult, AdvisorSuggestionFace } from './gateway.js'
 import { SessionTranscriptObserver } from './transcript.js'
 import type { Delta } from './transcript.js'
 import { AdvisorRuntime } from './advisor-runtime.js'
 import type { AdviceNote } from './advisor-runtime.js'
-import { AdvisorDelivery } from './delivery.js'
+import { AdvisorDelivery, advisorAdviceFace } from './delivery.js'
 import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts.js'
 import { advisorSuggestionFace, NextPromptManager } from './next-prompt.js'
 import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
@@ -223,9 +223,11 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     ((ctx as unknown as { root?: { get?: (k: string) => unknown } }).root?.get?.('llm') as typeof ctx.llm) ?? ctx.llm
   let sessionControl: AdvisorSessionGatewayFace | undefined
   let suggestionControl: AdvisorSuggestionFace | undefined
+  let adviceControl: AdvisorAdviceFace | undefined
   try {
     new AdvisorConfigGateway(ctx, bridge, () => sessionControl, (provider, model, signal) =>
-      appRootLlm().resolveModelInfo(provider, model, signal), ctx.logger('advisor'), () => suggestionControl)
+      appRootLlm().resolveModelInfo(provider, model, signal), ctx.logger('advisor'), () => suggestionControl,
+      () => adviceControl)
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes('has been registered')) throw error
     ctx.logger('advisor').debug('advisor gateway already registered — no gateway on this fiber (multi-fiber dedupe)')
@@ -637,8 +639,11 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     onUserTurnStart: (sessionId: string) => {
       // The user started typing — the fence supersedes any in-flight
       // prediction and clears the stored suggestion immediately (plan
-      // dsh-advisor-next-prompt-n12, T1).
+      // dsh-advisor-next-prompt-n12, T1). The delivered-advice tip is the
+      // same kind of idle notification: it belongs to the turn that just
+      // ended, so a new human turn clears it too.
       suggestions.onUserTurnStart(sessionId)
+      delivery.clearLastNote(sessionId)
     },
     onDelta: (sessionId: string, delta: Delta) => {
       // Lazy creation fallback covers agents that existed before this plugin
@@ -1197,6 +1202,7 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // unit-tested in tests/gateway-suggestion.test.ts; read-only: the face
   // never mutates manager state.
   suggestionControl = advisorSuggestionFace(effectiveConfig, suggestions)
+  adviceControl = advisorAdviceFace(effectiveConfig, delivery)
 
   // T7: the command child activates ONLY when a command registry is composed
   // (conditional child activation — `commands` must NOT join the top-level

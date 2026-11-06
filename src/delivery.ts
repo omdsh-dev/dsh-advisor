@@ -41,6 +41,22 @@ import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { AdvisorSource } from './kinds.js'
 import type { AdviceNote, AdviceSeverity } from './advisor-runtime.js'
+import type { ResolvedAdvisorConfig } from './config.js'
+import type { AdvisorAdviceFace } from './gateway.js'
+
+/**
+ * Process-wide delivery identity allocator, seeded from wall-clock
+ * milliseconds at module load. The seed keeps ids ABOVE a restart-zero counter
+ * (so a client dismissal from a previous run does not collide in the common
+ * case), and the single module-level counter keeps ids unique across every
+ * {@link AdvisorDelivery} instance in the process — not just one instance's own
+ * counter. Deliberately not an absolute guarantee: the wall clock is not
+ * monotonic (NTP steps, VM/snapshot restore) and ids advance faster than
+ * milliseconds under a delivery burst, so a restart can still seed at or below
+ * a previous run's last id. A strict cross-restart guarantee needs a persisted
+ * high-water mark; this seed only narrows the window.
+ */
+let nextDeliveryId = Date.now()
 
 /** The channel one accepted note is delivered on (spec §6). */
 export type DeliveryChannel = 'inject' | 'steer'
@@ -107,6 +123,19 @@ export function buildAdvisorMessage(note: AdviceNote): UserMessage {
   })
 }
 
+/** One delivered advice note, retained for the web advice tip. */
+export interface DeliveredAdvice {
+  readonly severity: AdviceSeverity
+  readonly note: string
+  /**
+   * Monotonic per-delivery identity. The web tip keys its local dismissal on
+   * this, NOT on severity+text: a re-delivered identical note (same review
+   * outcome on a later turn) must render again even when the client poll never
+   * observed the inter-turn `null` window.
+   */
+  readonly deliveryId: number
+}
+
 /** True when a note interrupts the primary (concern/blocker — spec §6). */
 function isInterrupting(severity: AdviceSeverity): boolean {
   return severity === 'concern' || severity === 'blocker'
@@ -122,6 +151,12 @@ export class AdvisorDelivery {
   private readonly logger: AdvisorDeliveryLogger
   /** KD-4 per-session agent map, keyed by `agent.id` (=== session.id). */
   private readonly agents = new Map<string, AdvisorDeliveryAgent>()
+  /**
+   * The last delivered note per session, so the web client can surface ONE
+   * visible advice tip (the durable injected message stays context-only in
+   * the chat). Cleared on the next human turn and on agent disposal.
+   */
+  private readonly lastNotes = new Map<string, DeliveredAdvice>()
   /**
    * immuneTurns latch: remaining stepped primary turns before an interrupting
    * note may steer again (spec §6). A present entry > 0 means armed; the entry
@@ -144,6 +179,20 @@ export class AdvisorDelivery {
   unregisterAgent(sessionId: string): void {
     this.agents.delete(sessionId)
     this.cooldown.delete(sessionId)
+    this.lastNotes.delete(sessionId)
+  }
+
+  /** The last note delivered for one session, or `undefined`. */
+  getLastNote(sessionId: string): DeliveredAdvice | undefined {
+    return this.lastNotes.get(sessionId)
+  }
+
+  /**
+   * Drop the retained note (the observer's `onUserTurnStart`): the tip is an
+   * idle notification for the turn that just ended, not a permanent badge.
+   */
+  clearLastNote(sessionId: string): void {
+    this.lastNotes.delete(sessionId)
   }
 
   /**
@@ -205,9 +254,37 @@ export class AdvisorDelivery {
       // note never reaches this branch, so the fence never arms on one.
       if (this.immuneTurns > 0) this.cooldown.set(sessionId, this.immuneTurns)
       agent.steer(message)
+      this.lastNotes.set(sessionId, { severity: note.severity, note: note.note, deliveryId: ++nextDeliveryId })
       return 'steer'
     }
     agent.inject(message)
+    this.lastNotes.set(sessionId, { severity: note.severity, note: note.note, deliveryId: ++nextDeliveryId })
     return 'inject'
+  }
+}
+
+/**
+ * The elected owner's read-only advice face for the web tip (`/api/advisor/
+ * advice`). Mirrors {@link advisorSuggestionFace}: the SESSION-SCOPED
+ * effective config is re-read per request, and a disabled session answers
+ * `{ advice: null }` so a stored note can never leak past a `/advisor off`.
+ * The durable injected message is unchanged; this is a presentation-only
+ * read of the same delivery event.
+ */
+export function advisorAdviceFace(
+  resolve: (sessionId: string) => ResolvedAdvisorConfig,
+  delivery: AdvisorDelivery,
+): AdvisorAdviceFace {
+  return {
+    getAdvice(sessionId) {
+      const config = resolve(sessionId)
+      if (!config.enabled) return { advice: null }
+      const last = delivery.getLastNote(sessionId)
+      return {
+        advice: last === undefined
+          ? null
+          : { severity: last.severity, note: last.note, deliveryId: last.deliveryId },
+      }
+    },
   }
 }

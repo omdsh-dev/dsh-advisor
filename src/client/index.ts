@@ -57,12 +57,15 @@ import { AdvisorSessionAction } from './advisor-session.tsx'
 import { AdvisorSessionModelController, AdvisorSettingsStore, refreshIfLoaded } from './advisor-store.ts'
 import { NextPromptOverlay } from './next-prompt-overlay.tsx'
 import { AdvisorSuggestionController } from './next-prompt-store.ts'
+import { AdvisorAdviceTip } from './advice-tip.tsx'
+import { AdvisorAdviceController } from './advice-store.ts'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { en, zh, type AdvisorKey } from './locales.ts'
 
 export type { AdvisorCardInjected, AdvisorCardProps } from './advisor-card.tsx'
 export type { AdvisorSessionActionInjected, AdvisorSessionActionProps } from './advisor-session.tsx'
 export type { NextPromptOverlayInjected, NextPromptOverlayProps } from './next-prompt-overlay.tsx'
+export type { AdvisorAdviceTipInjected, AdvisorAdviceTipProps } from './advice-tip.tsx'
 export type { AdvisorKey } from './locales.ts'
 export type {
   AdvisorDraft, AdvisorSessionMenuState, AdvisorSessionModelController, AdvisorSessionRpcPayload,
@@ -72,6 +75,7 @@ export type {
 export type {
   AdvisorSuggestionController, AdvisorSuggestionState,
 } from './next-prompt-store.ts'
+export type { AdvisorAdvice, AdvisorAdviceController, AdvisorAdviceState } from './advice-store.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -302,5 +306,32 @@ export function apply(ctx: ClientContext): void {
         }
       },
     }, NextPromptOverlay)
+  })
+
+  // Visible advice tip (this change): the delivered note had no visible
+  // surface — it is injected into the model context, not rendered as a chat
+  // message — so a delivered nit/concern/blocker looked like the advisor was
+  // silent. This second occupant of the SAME dock reads the last accepted
+  // note (`/api/advisor/advice`) and shows it under the composer with its
+  // severity until the user dismisses it or the next human turn clears it.
+  // One controller per session binding, same refresh-signal plane.
+  ctx.slots.inject('conversation.composer.dock', function* () {
+    yield ctx.slots.register({
+      name: 'conversation.composer.dock',
+      id: `${BUNDLE_NAME}-advice`,
+      order: 2,
+      locale: NS,
+      inject: (sessionId: string) => {
+        const adviceController = new AdvisorAdviceController(sessionId, connection.rpc)
+        return {
+          sessionId,
+          controller: adviceController,
+          hooks: {
+            snapshot: adviceController.store,
+            refreshSignal,
+          },
+        }
+      },
+    }, AdvisorAdviceTip)
   })
 }

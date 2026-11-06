@@ -29,6 +29,12 @@
   "files": [
     "lib",
     "locale",
+    "docs/DETAIL.md",
+    "docs/DETAIL.zh.md",
+    "docs/preview.svg",
+    "docs/preview.zh.svg",
+    "docs/suggestion.svg",
+    "docs/suggestion.zh.svg",
     "icon.svg",
     "cordis.patch.yml",
     "scripts"

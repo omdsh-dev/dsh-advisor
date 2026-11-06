@@ -1,6 +1,7 @@
 {
   "meta": {
     "title": "Advisor (dsh-advisor)",
-    "description": "Configure the advisor reviewer model that observes the primary transcript and injects severity-ranked advice."
+    "description": "Configure the advisor reviewer model that observes the primary transcript and injects severity-ranked advice.",
+    "detail": "docs/DETAIL.md"
   }
 }
