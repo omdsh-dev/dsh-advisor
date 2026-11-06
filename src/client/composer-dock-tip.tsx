@@ -41,28 +41,37 @@
  * retry storm — the next signal or scheduled poll is the next attempt).
  */
 
-import { useCallback, useEffect, useRef, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime, SessionStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { NEXT_PROMPT_IDLE_POLL_MS } from './next-prompt-store.ts'
 import type { AdvisorSuggestionController, AdvisorSuggestionState } from './next-prompt-store.ts'
+import { ADVICE_IDLE_POLL_MS } from './advice-store.ts'
+import type { AdvisorAdviceController, AdvisorAdviceState } from './advice-store.ts'
 import styles from './next-prompt.module.css'
 
+/** How long a freshly delivered advisor note occupies the single dock row. */
+export const ADVICE_TIP_MS = 2_000
+
 /**
- * Injected dependencies of {@link NextPromptOverlay} (slot `inject`, built
+ * Injected dependencies of {@link ComposerDockTip} (slot `inject`, built
  * per session binding by the registration's inject factory). The `hooks`
  * compartment carries the bare snapshot sources; the renderer binds each as
  * a `use<Name>` selector hook the component consumes.
  */
-export interface NextPromptOverlayInjected {
+export interface ComposerDockTipInjected {
   /** The session this occurrence is bound to (framework-resolved). */
   readonly sessionId: string
   /** The per-session suggestion controller (one per binding). */
-  readonly controller: AdvisorSuggestionController
+  readonly suggestionController: AdvisorSuggestionController
+  /** The per-session delivered-advice controller (one per binding). */
+  readonly adviceController: AdvisorAdviceController
   /** Bare snapshot sources the renderer binds as selector hooks. */
   readonly hooks: {
     /** The per-session suggestion snapshot. */
     readonly snapshot: SnapshotStore<AdvisorSuggestionState>
+    /** The per-session delivered-advice snapshot. */
+    readonly adviceSnapshot: SnapshotStore<AdvisorAdviceState>
     /** Refresh-signal epoch (bumped on connection reset / window focus). */
     readonly refreshSignal: SnapshotStore<{ epoch: number }>
   }
@@ -75,10 +84,10 @@ export interface NextPromptOverlayInjected {
  * framework-synthesized `t` seat for the declared `settings.advisor`
  * namespace, and the registrant's per-binding business face.
  */
-export type NextPromptOverlayProps =
+export type ComposerDockTipProps =
   PropsRuntime<'conversation.composer.dock'>
   & PropsLocale<'settings.advisor'>
-  & InjectFace<NextPromptOverlayInjected>
+  & InjectFace<ComposerDockTipInjected>
   & SessionStandardProps
 
 /**
@@ -110,33 +119,66 @@ function isFillTrigger(event: KeyboardEvent): boolean {
 }
 
 /**
- * Render the suggestion as a one-line ambient tip under the composer card:
- * a sparkle glyph, the localized prefix ("Suggestion" / "建议"), the
- * single-line ellipsized suggestion text, and a right-aligned subtle accept
- * control ("→ Accept" / "→ 采纳") — or nothing when the render gate does
- * not hold. The whole row is one click target running the shared gated
- * fill path.
+ * Render the composer dock tip. The dock holds exactly ONE row, and the
+ * component owns the arbitration: a freshly delivered advisor note takes the
+ * row for {@link ADVICE_TIP_MS} and then yields to the per-turn suggestion
+ * (the resting state). The two rows can never render together.
  * @param props - slot-delivered injected dependencies and the synthesized seats.
- * @returns the dock-tip occupant.
+ * @returns the dock-tip occupant, or nothing.
  */
-export function NextPromptOverlay(props: NextPromptOverlayProps): ReactNode {
-  const { controller, useSnapshot, useRefreshSignal, useInput, inputActions, t } = props
+export function ComposerDockTip(props: ComposerDockTipProps): ReactNode {
+  const {
+    suggestionController, adviceController, useSnapshot, useAdviceSnapshot,
+    useRefreshSignal, useInput, inputActions, t,
+  } = props
   const state = useSnapshot((s) => s)
+  const adviceState = useAdviceSnapshot((s) => s)
   const epoch = useRefreshSignal((s) => s.epoch)
   const input = useInput((s) => s)
   const suggestion = state.suggestion
+  const advice = adviceState.advice
   const draft = input.draft
   const phase = input.phase
-  // The render gate: a suggestion waits on an empty draft in the plain phase.
-  const showTip = suggestion !== null && draft === '' && phase === 'plain'
+  // The flash state: the delivery id currently occupying the single row.
+  const [flashId, setFlashId] = useState<number | null>(null)
+  const [dismissedId, setDismissedId] = useState<number | null>(null)
+  const lastFlashed = useRef<number | null>(null)
+  // A newly observed delivery takes the row for 2 s; the same id never
+  // re-flashes on a later poll. Depend on the ID (not the fresh store object a
+  // poll produces) so a same-id refresh cannot clear the pending hide timer.
+  const deliveryId = advice?.deliveryId ?? null
+  useEffect(() => {
+    if (deliveryId === null) {
+      lastFlashed.current = null
+      setFlashId(null)
+      return
+    }
+    if (deliveryId === dismissedId) {
+      setFlashId(null)
+      return
+    }
+    if (deliveryId === lastFlashed.current) return
+    lastFlashed.current = deliveryId
+    setFlashId(deliveryId)
+    const timer = window.setTimeout(() => {
+      setFlashId((current) => (current === deliveryId ? null : current))
+    }, ADVICE_TIP_MS)
+    return () => { window.clearTimeout(timer) }
+  }, [deliveryId, dismissedId])
+  const adviceVisible = flashId !== null && advice !== null
+    && advice.deliveryId === flashId && advice.deliveryId !== dismissedId
+  // The render gate: a suggestion waits on an empty draft in the plain phase,
+  // and the transient advice note wins the row while its 2 s flash runs.
+  const suggestionVisible = !adviceVisible && suggestion !== null && draft === '' && phase === 'plain'
 
   // Fetch on mount and on every consumed refresh-signal epoch bump
   // (connection/reset + window focus ride the plugin's shared debounced
   // plane). takeSignal is idempotent per epoch, so a re-render never
   // double-fetches; the mount run IS the first fetch (no epoch consumed yet).
   useEffect(() => {
-    if (controller.takeSignal(epoch)) void controller.fetch()
-  }, [controller, epoch])
+    if (suggestionController.takeSignal(epoch)) void suggestionController.fetch()
+    if (adviceController.takeSignal(epoch)) void adviceController.fetch()
+  }, [suggestionController, adviceController, epoch])
 
   // Idle poll: armed ONLY while idle (no suggestion, empty draft, plain
   // phase); any other state clears the timer (contract ⑤ — the fake-timer
@@ -144,9 +186,16 @@ export function NextPromptOverlay(props: NextPromptOverlayProps): ReactNode {
   const idle = suggestion === null && draft === '' && phase === 'plain'
   useEffect(() => {
     if (!idle) return
-    const timer = window.setInterval(() => { void controller.fetch() }, NEXT_PROMPT_IDLE_POLL_MS)
+    const timer = window.setInterval(() => { void suggestionController.fetch() }, NEXT_PROMPT_IDLE_POLL_MS)
     return () => { window.clearInterval(timer) }
-  }, [controller, idle])
+  }, [suggestionController, idle])
+
+  // Advice poll: unconditional, so a new delivery and the turn-boundary clear
+  // are both observed in-page.
+  useEffect(() => {
+    const timer = window.setInterval(() => { void adviceController.fetch() }, ADVICE_IDLE_POLL_MS)
+    return () => { window.clearInterval(timer) }
+  }, [adviceController])
 
   // The input snapshot as the latest render read it, re-written on every
   // render (the render itself just consumed the store through useInput).
@@ -170,9 +219,9 @@ export function NextPromptOverlay(props: NextPromptOverlayProps): ReactNode {
     const current = inputRef.current
     if (current.draft !== '' || current.phase !== 'plain') return false
     inputActions.setDraft(suggestion)
-    controller.consume()
+    suggestionController.consume()
     return true
-  }, [controller, inputActions, suggestion])
+  }, [suggestionController, inputActions, suggestion])
 
   // Document-level capture-phase fill listener. Mounted while a suggestion
   // waits; the RENDER gate (empty draft, plain phase) is re-validated inside
@@ -190,7 +239,36 @@ export function NextPromptOverlay(props: NextPromptOverlayProps): ReactNode {
     return () => { document.removeEventListener('keydown', onKeyDown, true) }
   }, [fillFromSuggestion])
 
-  if (!showTip || suggestion === null) return null
+  if (adviceVisible) {
+    return (
+      <div
+        className={styles.tip}
+        data-advisor-tip=""
+        data-advisor-advice=""
+        data-severity={advice.severity}
+        role="status"
+        aria-live="polite"
+      >
+        <span className={styles.tipGlyph} data-advice-glyph="" aria-hidden="true">◆</span>
+        <span className={styles.tipPrefix}>{t('advicePrefix')}:</span>
+        <span className={styles.adviceSeverity}>{advice.severity}</span>
+        <span className={styles.tipText}>{advice.note}</span>
+        <button
+          type="button"
+          className={styles.adviceDismiss}
+          aria-label={t('adviceDismiss')}
+          title={t('adviceDismiss')}
+          onClick={() => {
+            setDismissedId(advice.deliveryId)
+            setFlashId(null)
+          }}
+        >
+          ×
+        </button>
+      </div>
+    )
+  }
+  if (!suggestionVisible || suggestion === null) return null
   return (
     // role="status" + aria-live="polite" make the suggestion ANNOUNCED:
     // assistive tech hears what the suggestion is when it arrives, without
