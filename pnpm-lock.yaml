@@ -7,7 +7,7 @@ settings:
 overrides:
   zod: ^4.6.6
 
-packageExtensionsChecksum: sha256-qcecD8HYsPxyC0rkbWcoWVBvFeeViYHvj79Jhuqulok=
+packageExtensionsChecksum: sha256-JFZdF2QgT0C/WT2bP0s+RFBC1KjM9D9uQZql+AYLL7o=
 
 importers:
 

@@ -117,7 +117,7 @@ minimumReleaseAgeExclude:
 packageExtensions:
   '@deepseek-ai/dsh-client-ui-primitives':
     dependencies:
-      '@deepseek-ai/dsh-util-code-language': '^0.2.1-rc.5'
+      '@deepseek-ai/dsh-util-code-language': '^0.2.2-rc.1'
       clsx: '^2.0.0'
       diff: '^9.0.0'
       anser: '^2.3.5'
