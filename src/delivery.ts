@@ -46,10 +46,15 @@ import type { AdvisorAdviceFace } from './gateway.js'
 
 /**
  * Process-wide delivery identity allocator, seeded from wall-clock
- * milliseconds at module load. Seeding (not 0) keeps ids increasing across a
- * process restart; the single module-level counter keeps them unique across
- * every {@link AdvisorDelivery} instance in the process (tests, multiple
- * plugin fibers), not just one instance's own counter.
+ * milliseconds at module load. The seed keeps ids ABOVE a restart-zero counter
+ * (so a client dismissal from a previous run does not collide in the common
+ * case), and the single module-level counter keeps ids unique across every
+ * {@link AdvisorDelivery} instance in the process — not just one instance's own
+ * counter. Deliberately not an absolute guarantee: the wall clock is not
+ * monotonic (NTP steps, VM/snapshot restore) and ids advance faster than
+ * milliseconds under a delivery burst, so a restart can still seed at or below
+ * a previous run's last id. A strict cross-restart guarantee needs a persisted
+ * high-water mark; this seed only narrows the window.
  */
 let nextDeliveryId = Date.now()
 

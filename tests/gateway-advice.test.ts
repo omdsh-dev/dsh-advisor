@@ -83,9 +83,15 @@ describe('advisor advice endpoint (unit, scripted face)', () => {
 })
 
 describe('advisorAdviceFace (session-scoped gate + retention)', () => {
-  /** Narrow one result to its advice payload (the error arm is not expected here). */
+  /**
+   * Narrow one result to its advice payload. The error arm is part of the
+   * contract, so it throws with its tag/message instead of collapsing to
+   * `null` (a regression toward the error path then fails with a named diff,
+   * not an opaque TypeError on `advice!`).
+   */
   function adviceOf(result: AdvisorAdviceRpcResult): { severity: string; note: string; deliveryId: number } | null {
-    return 'advice' in result ? result.advice : null
+    if ('error' in result) throw new Error(`unexpected ${result.error.tag}: ${result.error.message}`)
+    return result.advice
   }
 
   function deliver(severity: 'nit' | 'concern' | 'blocker', note: string): AdvisorDelivery {
@@ -100,9 +106,9 @@ describe('advisorAdviceFace (session-scoped gate + retention)', () => {
     const face = advisorAdviceFace(() => effective(), delivery)
     const advice = adviceOf(face.getAdvice('sess-1'))
     expect(advice).toMatchObject({ severity: 'concern', note: 'cap the retries' })
-    // Clock-seeded, not a counter that restarts at 0 on every process boot.
-    expect(Number.isInteger(advice!.deliveryId)).toBe(true)
-    expect(advice!.deliveryId).toBeGreaterThan(1)
+    // The face copies the retained note's id verbatim (the wire identity the
+    // tip's dismissal compares).
+    expect(advice!.deliveryId).toBe(delivery.getLastNote('sess-1')!.deliveryId)
     delivery.clearLastNote('sess-1')
     expect(face.getAdvice('sess-1')).toEqual({ advice: null })
   })
@@ -122,6 +128,7 @@ describe('advisorAdviceFace (session-scoped gate + retention)', () => {
     delivery.route('sess-1', { severity: 'blocker', note: 'second note' })
     const second = adviceOf(face.getAdvice('sess-1'))
     expect(second).toMatchObject({ severity: 'blocker', note: 'second note' })
+    expect(second!.deliveryId).toBe(delivery.getLastNote('sess-1')!.deliveryId)
     expect(second!.deliveryId).toBeGreaterThan(first!.deliveryId)
   })
 
@@ -145,7 +152,7 @@ describe('advisorAdviceFace (session-scoped gate + retention)', () => {
     expect(secondId).toBeGreaterThan(firstId)
   })
 
-  it('keeps delivery ids increasing across a process restart (module seeded from wall clock)', async () => {
+  it('seeds a new process above a restart-zero counter (module load time)', async () => {
     vi.useFakeTimers()
     try {
       vi.setSystemTime(1_000)
@@ -164,6 +171,9 @@ describe('advisorAdviceFace (session-scoped gate + retention)', () => {
       b.route('sess-1', { severity: 'nit', note: 'after restart' })
       const afterId = b.getLastNote('sess-1')!.deliveryId
 
+      // Scope: the module seed is wall-clock milliseconds, so a later process
+      // starts above 1 and above an earlier process under a monotonic clock.
+      // A rewound clock is NOT covered — see the allocator's doc comment.
       expect(beforeId).toBeGreaterThan(1)
       expect(afterId).toBeGreaterThan(beforeId)
     } finally {
