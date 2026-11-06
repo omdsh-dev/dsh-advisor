@@ -44,6 +44,15 @@ import type { AdviceNote, AdviceSeverity } from './advisor-runtime.js'
 import type { ResolvedAdvisorConfig } from './config.js'
 import type { AdvisorAdviceFace } from './gateway.js'
 
+/**
+ * Process-wide delivery identity allocator, seeded from wall-clock
+ * milliseconds at module load. Seeding (not 0) keeps ids increasing across a
+ * process restart; the single module-level counter keeps them unique across
+ * every {@link AdvisorDelivery} instance in the process (tests, multiple
+ * plugin fibers), not just one instance's own counter.
+ */
+let nextDeliveryId = Date.now()
+
 /** The channel one accepted note is delivered on (spec §6). */
 export type DeliveryChannel = 'inject' | 'steer'
 
@@ -144,14 +153,6 @@ export class AdvisorDelivery {
    */
   private readonly lastNotes = new Map<string, DeliveredAdvice>()
   /**
-   * Delivery identity allocator, seeded from wall-clock milliseconds. Seeding
-   * (not 0) keeps ids increasing across a process restart, so a client holding
-   * a dismissal for an id from a previous run can never swallow a fresh note
-   * whose counter happened to restart at the same number. Within the process
-   * the counter only increments, so ids are unique.
-   */
-  private nextDeliveryId = Date.now()
-  /**
    * immuneTurns latch: remaining stepped primary turns before an interrupting
    * note may steer again (spec §6). A present entry > 0 means armed; the entry
    * is removed when the countdown exhausts.
@@ -248,11 +249,11 @@ export class AdvisorDelivery {
       // note never reaches this branch, so the fence never arms on one.
       if (this.immuneTurns > 0) this.cooldown.set(sessionId, this.immuneTurns)
       agent.steer(message)
-      this.lastNotes.set(sessionId, { severity: note.severity, note: note.note, deliveryId: ++this.nextDeliveryId })
+      this.lastNotes.set(sessionId, { severity: note.severity, note: note.note, deliveryId: ++nextDeliveryId })
       return 'steer'
     }
     agent.inject(message)
-    this.lastNotes.set(sessionId, { severity: note.severity, note: note.note, deliveryId: ++this.nextDeliveryId })
+    this.lastNotes.set(sessionId, { severity: note.severity, note: note.note, deliveryId: ++nextDeliveryId })
     return 'inject'
   }
 }

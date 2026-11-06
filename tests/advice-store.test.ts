@@ -41,9 +41,11 @@ describe('AdvisorAdviceController', () => {
       { advice: { severity: 'nit', note: 42, deliveryId: 1 } },
       { advice: { severity: 'nit', note: 'x' } },
       { advice: { severity: 'nit', note: 'x', deliveryId: 0 } },
+      { advice: { severity: 'nit', note: 'x', deliveryId: -1 } },
       { advice: { severity: 'nit', note: 'x', deliveryId: 1.5 } },
       { advice: { severity: 'nit', note: 'x', deliveryId: '1' } },
       { advice: null },
+      { advice: 'x' },
     ]
     for (const value of bad) {
       const { controller } = controllerWith(async () => ok(value))
@@ -52,10 +54,12 @@ describe('AdvisorAdviceController', () => {
     }
   })
 
-  it('treats a contract-violating primitive payload as unavailable', async () => {
-    const { controller } = controllerWith(async () => ok('not-an-object'))
-    await controller.fetch()
-    expect(controller.store.getSnapshot()).toEqual({ status: 'unavailable', advice: null })
+  it('treats a payload without an advice key as unavailable', async () => {
+    for (const value of [{}, 'not-an-object']) {
+      const { controller } = controllerWith(async () => ok(value))
+      await controller.fetch()
+      expect(controller.store.getSnapshot(), JSON.stringify(value)).toEqual({ status: 'unavailable', advice: null })
+    }
   })
 
   it('treats ok:false and tagged { error } payloads as unavailable', async () => {

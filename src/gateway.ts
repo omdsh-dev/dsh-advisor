@@ -513,6 +513,36 @@ export class AdvisorConfigGateway extends TypertRemoteService {
   }
 
   /**
+   * Shared guard for the session-scoped READ endpoints: reject a malformed
+   * sessionId, resolve the elected owner's face lazily, and answer a tagged
+   * `advisor/unavailable` when this fiber is not the owner. The method and
+   * surface nouns keep the wire messages per endpoint distinct; the guard
+   * itself lives here once (the second read endpoint is what triggered the
+   * extraction — the third should reuse it, not fork it).
+   */
+  private readSessionSurface<Face, Result>(
+    sessionId: string,
+    method: string,
+    surface: string,
+    faceOf: () => Face | undefined,
+    read: (face: Face, sessionId: string) => Result,
+  ): Result | { readonly error: { readonly tag: AdvisorSuggestionErrorTag; readonly message: string } } {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
+      return { error: { tag: 'advisor/rejected', message: `advisor: ${method} requires a non-empty sessionId` } }
+    }
+    const face = faceOf()
+    if (face === undefined) {
+      return {
+        error: {
+          tag: 'advisor/unavailable',
+          message: `advisor: the ${surface} surface is not owned by this gateway — no elected owner on this fiber`,
+        },
+      }
+    }
+    return read(face, sessionId)
+  }
+
+  /**
    * T2 (plan dsh-advisor-next-prompt-n12) — the READ-ONLY next-prompt
    * suggestion query (`/api/advisor/suggestion`, args `{ sessionId }`): the
    * single-line suggestion the manager stored for the session's next turn.
@@ -524,21 +554,13 @@ export class AdvisorConfigGateway extends TypertRemoteService {
    * (plugin-domain tags) — nothing here throws coded failures.
    */
   getSuggestion(sessionId: string): AdvisorSuggestionRpcResult {
-    if (typeof sessionId !== 'string' || sessionId.length === 0) {
-      return {
-        error: { tag: 'advisor/rejected', message: 'advisor: getSuggestion requires a non-empty sessionId' },
-      }
-    }
-    const face = this.suggestionFace()
-    if (face === undefined) {
-      return {
-        error: {
-          tag: 'advisor/unavailable',
-          message: 'advisor: the suggestion surface is not owned by this gateway — no elected owner on this fiber',
-        },
-      }
-    }
-    return face.getSuggestion(sessionId)
+    return this.readSessionSurface(
+      sessionId,
+      'getSuggestion',
+      'suggestion',
+      () => this.suggestionFace(),
+      (face, id) => face.getSuggestion(id),
+    )
   }
 
   /**
@@ -550,21 +572,13 @@ export class AdvisorConfigGateway extends TypertRemoteService {
    * `advisor/unavailable`; tagged outcomes ride in returned data.
    */
   getAdvice(sessionId: string): AdvisorAdviceRpcResult {
-    if (typeof sessionId !== 'string' || sessionId.length === 0) {
-      return {
-        error: { tag: 'advisor/rejected', message: 'advisor: getAdvice requires a non-empty sessionId' },
-      }
-    }
-    const face = this.adviceFace()
-    if (face === undefined) {
-      return {
-        error: {
-          tag: 'advisor/unavailable',
-          message: 'advisor: the advice surface is not owned by this gateway — no elected owner on this fiber',
-        },
-      }
-    }
-    return face.getAdvice(sessionId)
+    return this.readSessionSurface(
+      sessionId,
+      'getAdvice',
+      'advice',
+      () => this.adviceFace(),
+      (face, id) => face.getAdvice(id),
+    )
   }
 
   /**
@@ -870,8 +884,20 @@ export function advisorTypertContribution(): TypertContribution {
       // `getSuggestion` (InvocationDescriptor.implementation), keeping the
       // endpoint noun-shaped on `/api/advisor/suggestion` while the class
       // member keeps its accessor-style name. Synchronous, tag-in-data.
-      // The visible advice tip's read endpoint. Same explicit registration
-      // and tag-in-data contract as the suggestion read; the wire noun is
+      {
+        id: 'dsh-advisor#advisor/suggestion',
+        service: 'advisor',
+        namespace: 'advisor',
+        method: 'suggestion',
+        implementation: 'getSuggestion',
+        invocation: { kind: 'direct' },
+        parameters: [
+          { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },
+        ],
+        result: { mode: 'src-json' },
+      },
+      // The visible advice tip's read endpoint. Same explicit registration and
+      // tag-in-data contract as the suggestion read above; the wire noun is
       // `advice`, the implementation member `getAdvice`.
       {
         id: 'dsh-advisor#advisor/advice',
@@ -879,18 +905,6 @@ export function advisorTypertContribution(): TypertContribution {
         namespace: 'advisor',
         method: 'advice',
         implementation: 'getAdvice',
-        invocation: { kind: 'direct' },
-        parameters: [
-          { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },
-        ],
-        result: { mode: 'src-json' },
-      },
-      {
-        id: 'dsh-advisor#advisor/suggestion',
-        service: 'advisor',
-        namespace: 'advisor',
-        method: 'suggestion',
-        implementation: 'getSuggestion',
         invocation: { kind: 'direct' },
         parameters: [
           { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },

@@ -137,19 +137,38 @@ describe('advisorAdviceFace (session-scoped gate + retention)', () => {
     expect(face.getAdvice('sess-1')).toEqual({ advice: initial })
   })
 
-  it('keeps delivery ids increasing across a restart (clock-seeded, never reused)', () => {
+  it('allocates unique ids across every instance in the process', () => {
+    const first = deliver('nit', 'first instance')
+    const second = deliver('concern', 'second instance')
+    const firstId = first.getLastNote('sess-1')!.deliveryId
+    const secondId = second.getLastNote('sess-1')!.deliveryId
+    expect(secondId).toBeGreaterThan(firstId)
+  })
+
+  it('keeps delivery ids increasing across a process restart (module seeded from wall clock)', async () => {
     vi.useFakeTimers()
     try {
       vi.setSystemTime(1_000)
-      const before = deliver('nit', 'before restart')
-      const beforeId = before.getLastNote('sess-1')!.deliveryId
+      vi.resetModules()
+      const before = await import('../src/delivery')
+      const a = new before.AdvisorDelivery({ immuneTurns: 0 })
+      a.registerAgent({ id: 'sess-1', inject: vi.fn(), steer: vi.fn() })
+      a.route('sess-1', { severity: 'nit', note: 'before restart' })
+      const beforeId = a.getLastNote('sess-1')!.deliveryId
+
       vi.setSystemTime(2_000)
-      const after = deliver('nit', 'after restart')
-      const afterId = after.getLastNote('sess-1')!.deliveryId
+      vi.resetModules()
+      const after = await import('../src/delivery')
+      const b = new after.AdvisorDelivery({ immuneTurns: 0 })
+      b.registerAgent({ id: 'sess-1', inject: vi.fn(), steer: vi.fn() })
+      b.route('sess-1', { severity: 'nit', note: 'after restart' })
+      const afterId = b.getLastNote('sess-1')!.deliveryId
+
       expect(beforeId).toBeGreaterThan(1)
       expect(afterId).toBeGreaterThan(beforeId)
     } finally {
       vi.useRealTimers()
+      vi.resetModules()
     }
   })
 })

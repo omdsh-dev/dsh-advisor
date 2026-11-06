@@ -9,7 +9,7 @@
  * test pins (the review's per-delivery-epoch alternative).
  */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
@@ -30,19 +30,21 @@ const NOTE = { severity: 'concern' as const, note: 'cap the retries', deliveryId
 
 function harness(): {
   store: ReturnType<typeof createSnapshotStore<AdvisorAdviceState>>
+  epoch: ReturnType<typeof createSnapshotStore<{ epoch: number }>>
+  controller: { takeSignal: ReturnType<typeof vi.fn>; fetch: ReturnType<typeof vi.fn> }
   props: AdvisorAdviceTipProps
 } {
   const store = createSnapshotStore<AdvisorAdviceState>({ status: 'ready', advice: { ...NOTE } })
   const epoch = createSnapshotStore<{ epoch: number }>({ epoch: 0 })
-  const controller = { takeSignal: () => false, fetch: vi.fn(async () => {}) } as unknown as AdvisorAdviceController
+  const controller = { takeSignal: vi.fn((): boolean => true), fetch: vi.fn(async () => {}) }
   const props = {
     sessionId: 'sess-1',
-    controller,
+    controller: controller as unknown as AdvisorAdviceController,
     useSnapshot: bindSnapshotSelector(store),
     useRefreshSignal: bindSnapshotSelector(epoch),
     t,
   } as AdvisorAdviceTipProps
-  return { store, props }
+  return { store, epoch, controller, props }
 }
 
 describe('AdvisorAdviceTip', () => {
@@ -54,6 +56,15 @@ describe('AdvisorAdviceTip', () => {
     expect(screen.getByText(NOTE.note)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: en.adviceDismiss }))
     expect(screen.queryByText(NOTE.note)).toBeNull()
+  })
+
+  it('fetches on mount and again on a refresh-signal epoch bump', async () => {
+    const { props, epoch, controller } = harness()
+    const view = render(<AdvisorAdviceTip {...props} />)
+    await waitFor(() => expect(controller.fetch).toHaveBeenCalledTimes(1))
+    epoch.update((s) => { s.epoch += 1 })
+    view.rerender(<AdvisorAdviceTip {...props} />)
+    await waitFor(() => expect(controller.fetch).toHaveBeenCalledTimes(2))
   })
 
   it('renders an identical note again on a NEW delivery id, even without observing the null window', () => {

@@ -4,14 +4,17 @@
  * (`/api/advisor/advice`) so the composer dock can surface one visible tip —
  * the durable injected message itself stays context-only in the transcript.
  *
- * Wire contract (src/gateway.ts, `getAdvice`): `{ advice: { severity, note }
- * | null }` on success; plugin-domain tagged errors ride in RETURNED data —
- * `advisor/rejected` (empty/invalid sessionId) and `advisor/unavailable` (no
- * elected owner on the serving fiber) — never a thrown coded failure.
+ * Wire contract (src/gateway.ts, `getAdvice`): `{ advice: { severity, note,
+ * deliveryId } | null }` on success; plugin-domain tagged errors ride in
+ * RETURNED data — `advisor/rejected` (empty/invalid sessionId) and
+ * `advisor/unavailable` (no elected owner on the serving fiber) — never a
+ * thrown coded failure.
  *
  * Polling mirrors the next-prompt controller: fetch on mount, on every
- * consumed refresh-signal epoch, and through an idle poll only while no advice
- * waits. A newer fetch fences an older settle (`requestSeq`).
+ * consumed refresh-signal epoch, and through an unconditional idle poll (a
+ * note being shown does not stop it: the server clears at the turn boundary
+ * and later delivers new ids, both of which only a refetch can observe). A
+ * newer fetch fences an older settle (`requestSeq`).
  */
 
 import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
