@@ -1,1 +1,2 @@
-![一个主回合结束后，一条 concern 级顾问建议被注入同一会话](preview.zh.svg)
+![一个回合结束后，advisor 分级建议被注入模型上下文](preview.zh.svg)
+![输入框下方显示的下一条提示建议与采纳按钮](suggestion.zh.svg)
