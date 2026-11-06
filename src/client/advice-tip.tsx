@@ -9,6 +9,13 @@
  * Seat: the shell-declared `conversation.composer.dock` list slot — the same
  * sanctioned ambient row the next-prompt tip uses (a sibling of the composer
  * card, so it never overlaps the placeholder or attachments).
+ *
+ * Dismissal is per delivery, not per text: the server clears its retained note
+ * on the next human turn (`delivery.clearLastNote`), and the tip must drop the
+ * local dismissal at that same boundary — otherwise an identical note
+ * re-delivered next turn would stay hidden. The poll runs unconditionally (not
+ * only while `advice === null`) so the clear is observed in-page, without
+ * waiting for a focus/reconnect signal.
  */
 
 import { useEffect, useState, type ReactNode } from 'react'
@@ -60,12 +67,19 @@ export function AdvisorAdviceTip(props: AdvisorAdviceTipProps): ReactNode {
     if (controller.takeSignal(epoch)) void controller.fetch()
   }, [controller, epoch])
 
-  // Idle poll while nothing waits; a stored note stops the timer.
+  // Poll on the shared cadence whether or not a note is shown: the server
+  // clears the note on the next human turn, and only a refetch can observe it.
   useEffect(() => {
-    if (advice !== null) return
     const timer = window.setInterval(() => { void controller.fetch() }, ADVICE_IDLE_POLL_MS)
     return () => { window.clearInterval(timer) }
-  }, [advice, controller])
+  }, [controller])
+
+  // Turn boundary: the host cleared its retained note, so the local dismissal
+  // no longer applies. Without this reset, dismissing a note once would hide
+  // every identical note re-delivered after a later turn.
+  useEffect(() => {
+    if (advice === null) setDismissed(null)
+  }, [advice])
 
   if (advice === null || key === dismissed) return null
   return (

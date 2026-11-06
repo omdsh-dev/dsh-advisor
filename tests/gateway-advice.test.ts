@@ -103,4 +103,24 @@ describe('advisorAdviceFace (session-scoped gate + retention)', () => {
     const face = advisorAdviceFace(() => effective({ enabled: false }), delivery)
     expect(face.getAdvice('sess-1')).toEqual({ advice: null })
   })
+
+  it('serves the NEWEST routed note (last write wins, never an accumulating list)', () => {
+    const delivery = new AdvisorDelivery({ immuneTurns: 0 })
+    delivery.registerAgent({ id: 'sess-1', inject: vi.fn(), steer: vi.fn() })
+    delivery.route('sess-1', { severity: 'nit', note: 'first note' })
+    delivery.route('sess-1', { severity: 'blocker', note: 'second note' })
+    const face = advisorAdviceFace(() => effective(), delivery)
+    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'blocker', note: 'second note' } })
+  })
+
+  it('re-reads the session config per request (no memoization at face construction)', () => {
+    const delivery = withNote('concern', 'cap the retries')
+    let enabled = true
+    const face = advisorAdviceFace(() => effective({ enabled }), delivery)
+    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'concern', note: 'cap the retries' } })
+    enabled = false
+    expect(face.getAdvice('sess-1')).toEqual({ advice: null })
+    enabled = true
+    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'concern', note: 'cap the retries' } })
+  })
 })
