@@ -316,6 +316,12 @@ export interface AdvisorSuggestionFace {
 export interface AdvisorAdviceView {
   readonly severity: 'nit' | 'concern' | 'blocker'
   readonly note: string
+  /**
+   * Per-delivery identity (monotonic). The tip keys its dismissal on this so
+   * the same note re-delivered later renders again even if the client never
+   * observed the turn-boundary `null`.
+   */
+  readonly deliveryId: number
 }
 
 /**

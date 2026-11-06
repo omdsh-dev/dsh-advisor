@@ -113,6 +113,13 @@ export function buildAdvisorMessage(note: AdviceNote): UserMessage {
 export interface DeliveredAdvice {
   readonly severity: AdviceSeverity
   readonly note: string
+  /**
+   * Monotonic per-delivery identity. The web tip keys its local dismissal on
+   * this, NOT on severity+text: a re-delivered identical note (same review
+   * outcome on a later turn) must render again even when the client poll never
+   * observed the inter-turn `null` window.
+   */
+  readonly deliveryId: number
 }
 
 /** True when a note interrupts the primary (concern/blocker — spec §6). */
@@ -136,6 +143,8 @@ export class AdvisorDelivery {
    * the chat). Cleared on the next human turn and on agent disposal.
    */
   private readonly lastNotes = new Map<string, DeliveredAdvice>()
+  /** Monotonic delivery identity across sessions (never reused). */
+  private nextDeliveryId = 0
   /**
    * immuneTurns latch: remaining stepped primary turns before an interrupting
    * note may steer again (spec §6). A present entry > 0 means armed; the entry
@@ -233,11 +242,11 @@ export class AdvisorDelivery {
       // note never reaches this branch, so the fence never arms on one.
       if (this.immuneTurns > 0) this.cooldown.set(sessionId, this.immuneTurns)
       agent.steer(message)
-      this.lastNotes.set(sessionId, { severity: note.severity, note: note.note })
+      this.lastNotes.set(sessionId, { severity: note.severity, note: note.note, deliveryId: ++this.nextDeliveryId })
       return 'steer'
     }
     agent.inject(message)
-    this.lastNotes.set(sessionId, { severity: note.severity, note: note.note })
+    this.lastNotes.set(sessionId, { severity: note.severity, note: note.note, deliveryId: ++this.nextDeliveryId })
     return 'inject'
   }
 }
@@ -259,7 +268,11 @@ export function advisorAdviceFace(
       const config = resolve(sessionId)
       if (!config.enabled) return { advice: null }
       const last = delivery.getLastNote(sessionId)
-      return { advice: last === undefined ? null : { severity: last.severity, note: last.note } }
+      return {
+        advice: last === undefined
+          ? null
+          : { severity: last.severity, note: last.note, deliveryId: last.deliveryId },
+      }
     },
   }
 }

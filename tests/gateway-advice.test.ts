@@ -56,9 +56,9 @@ describe('advisor advice endpoint (unit, scripted face)', () => {
   }
 
   it('relays the last delivered note to the elected owner face', () => {
-    const getAdvice = vi.fn((): AdvisorAdviceRpcResult => ({ advice: { severity: 'concern', note: 'cap the retries' } }))
+    const getAdvice = vi.fn((): AdvisorAdviceRpcResult => ({ advice: { severity: 'concern', note: 'cap the retries', deliveryId: 3 } }))
     const gateway = scripted({ getAdvice })
-    expect(gateway.getAdvice('sess-1')).toEqual({ advice: { severity: 'concern', note: 'cap the retries' } })
+    expect(gateway.getAdvice('sess-1')).toEqual({ advice: { severity: 'concern', note: 'cap the retries', deliveryId: 3 } })
     expect(getAdvice).toHaveBeenCalledWith('sess-1')
   })
 
@@ -93,7 +93,7 @@ describe('advisorAdviceFace (session-scoped gate + retention)', () => {
   it('serves the last routed note and stops serving it once cleared', () => {
     const delivery = withNote('concern', 'cap the retries')
     const face = advisorAdviceFace(() => effective(), delivery)
-    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'concern', note: 'cap the retries' } })
+    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'concern', note: 'cap the retries', deliveryId: 1 } })
     delivery.clearLastNote('sess-1')
     expect(face.getAdvice('sess-1')).toEqual({ advice: null })
   })
@@ -110,17 +110,17 @@ describe('advisorAdviceFace (session-scoped gate + retention)', () => {
     delivery.route('sess-1', { severity: 'nit', note: 'first note' })
     delivery.route('sess-1', { severity: 'blocker', note: 'second note' })
     const face = advisorAdviceFace(() => effective(), delivery)
-    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'blocker', note: 'second note' } })
+    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'blocker', note: 'second note', deliveryId: 2 } })
   })
 
   it('re-reads the session config per request (no memoization at face construction)', () => {
     const delivery = withNote('concern', 'cap the retries')
     let enabled = true
     const face = advisorAdviceFace(() => effective({ enabled }), delivery)
-    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'concern', note: 'cap the retries' } })
+    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'concern', note: 'cap the retries', deliveryId: 1 } })
     enabled = false
     expect(face.getAdvice('sess-1')).toEqual({ advice: null })
     enabled = true
-    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'concern', note: 'cap the retries' } })
+    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'concern', note: 'cap the retries', deliveryId: 1 } })
   })
 })

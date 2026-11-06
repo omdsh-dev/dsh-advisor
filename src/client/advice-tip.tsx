@@ -10,12 +10,12 @@
  * sanctioned ambient row the next-prompt tip uses (a sibling of the composer
  * card, so it never overlaps the placeholder or attachments).
  *
- * Dismissal is per delivery, not per text: the server clears its retained note
- * on the next human turn (`delivery.clearLastNote`), and the tip must drop the
- * local dismissal at that same boundary — otherwise an identical note
- * re-delivered next turn would stay hidden. The poll runs unconditionally (not
- * only while `advice === null`) so the clear is observed in-page, without
- * waiting for a focus/reconnect signal.
+ * Dismissal is keyed on the server's per-delivery id, not on severity+text:
+ * the same review outcome re-delivered on a later turn must render again even
+ * when the client poll never observed the inter-turn `null` window. The poll
+ * runs unconditionally (not only while `advice === null`) so newer deliveries
+ * and turn-boundary clears are observed in-page, without waiting for a
+ * focus/reconnect signal.
  */
 
 import { useEffect, useState, type ReactNode } from 'react'
@@ -44,11 +44,6 @@ export type AdvisorAdviceTipProps =
   & InjectFace<AdvisorAdviceTipInjected>
   & SessionStandardProps
 
-/** Identity of one note, so a dismissed note does not return on the next poll. */
-function adviceKey(advice: { severity: string; note: string } | null): string | null {
-  return advice === null ? null : `${advice.severity}\u0000${advice.note}`
-}
-
 /**
  * Render the last delivered advice as one ambient row under the composer.
  * @param props - slot-delivered injected dependencies and the synthesized seats.
@@ -59,8 +54,7 @@ export function AdvisorAdviceTip(props: AdvisorAdviceTipProps): ReactNode {
   const state = useSnapshot((s) => s)
   const epoch = useRefreshSignal((s) => s.epoch)
   const advice = state.advice
-  const key = adviceKey(advice)
-  const [dismissed, setDismissed] = useState<string | null>(null)
+  const [dismissed, setDismissed] = useState<number | null>(null)
 
   // Mount/focus/reconnect fetch, idempotent per epoch.
   useEffect(() => {
@@ -74,14 +68,7 @@ export function AdvisorAdviceTip(props: AdvisorAdviceTipProps): ReactNode {
     return () => { window.clearInterval(timer) }
   }, [controller])
 
-  // Turn boundary: the host cleared its retained note, so the local dismissal
-  // no longer applies. Without this reset, dismissing a note once would hide
-  // every identical note re-delivered after a later turn.
-  useEffect(() => {
-    if (advice === null) setDismissed(null)
-  }, [advice])
-
-  if (advice === null || key === dismissed) return null
+  if (advice === null || advice.deliveryId === dismissed) return null
   return (
     <div className={styles.tip} data-advisor-advice="" data-severity={advice.severity} role="status" aria-live="polite">
       <span className={styles.glyph} aria-hidden="true">◆</span>
@@ -93,7 +80,7 @@ export function AdvisorAdviceTip(props: AdvisorAdviceTipProps): ReactNode {
         className={styles.dismiss}
         aria-label={t('adviceDismiss')}
         title={t('adviceDismiss')}
-        onClick={() => { setDismissed(key) }}
+        onClick={() => { setDismissed(advice.deliveryId) }}
       >
         ×
       </button>

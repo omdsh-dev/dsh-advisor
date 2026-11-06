@@ -25,17 +25,24 @@ const fail: RpcResult<unknown> = { ok: false, error: { code: 'transport', messag
 
 describe('AdvisorAdviceController', () => {
   it('serves a valid delivered note and reads the per-session endpoint', async () => {
-    const { controller, rpc } = controllerWith(async () => ok({ advice: { severity: 'concern', note: 'cap the retries' } }))
+    const { controller, rpc } = controllerWith(async () => ok({ advice: { severity: 'concern', note: 'cap the retries', deliveryId: 7 } }))
     await controller.fetch()
-    expect(controller.store.getSnapshot()).toEqual({ status: 'ready', advice: { severity: 'concern', note: 'cap the retries' } })
+    expect(controller.store.getSnapshot()).toEqual({
+      status: 'ready',
+      advice: { severity: 'concern', note: 'cap the retries', deliveryId: 7 },
+    })
     expect(rpc.call).toHaveBeenCalledWith('/api', 'advisor/advice', { args: { sessionId: 'sess-1' } })
   })
 
   it('normalizes every malformed advice shape to nothing to show', async () => {
     const bad = [
-      { advice: { severity: 'info', note: 'x' } },
-      { advice: { severity: 'nit', note: '' } },
-      { advice: { severity: 'nit', note: 42 } },
+      { advice: { severity: 'info', note: 'x', deliveryId: 1 } },
+      { advice: { severity: 'nit', note: '', deliveryId: 1 } },
+      { advice: { severity: 'nit', note: 42, deliveryId: 1 } },
+      { advice: { severity: 'nit', note: 'x' } },
+      { advice: { severity: 'nit', note: 'x', deliveryId: 0 } },
+      { advice: { severity: 'nit', note: 'x', deliveryId: 1.5 } },
+      { advice: { severity: 'nit', note: 'x', deliveryId: '1' } },
       { advice: null },
     ]
     for (const value of bad) {
@@ -64,11 +71,11 @@ describe('AdvisorAdviceController', () => {
     const { controller } = controllerWith(() => new Promise<RpcResult<unknown>>((resolve) => { resolvers.push(resolve) }))
     const first = controller.fetch()
     const second = controller.fetch()
-    resolvers[1]!(ok({ advice: { severity: 'nit', note: 'newer' } }))
+    resolvers[1]!(ok({ advice: { severity: 'nit', note: 'newer', deliveryId: 2 } }))
     await second
-    expect(controller.store.getSnapshot()).toEqual({ status: 'ready', advice: { severity: 'nit', note: 'newer' } })
-    resolvers[0]!(ok({ advice: { severity: 'blocker', note: 'stale' } }))
+    expect(controller.store.getSnapshot()).toEqual({ status: 'ready', advice: { severity: 'nit', note: 'newer', deliveryId: 2 } })
+    resolvers[0]!(ok({ advice: { severity: 'blocker', note: 'stale', deliveryId: 1 } }))
     await first
-    expect(controller.store.getSnapshot()).toEqual({ status: 'ready', advice: { severity: 'nit', note: 'newer' } })
+    expect(controller.store.getSnapshot()).toEqual({ status: 'ready', advice: { severity: 'nit', note: 'newer', deliveryId: 2 } })
   })
 })

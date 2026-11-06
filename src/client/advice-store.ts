@@ -28,6 +28,8 @@ export type AdviceSeverity = 'nit' | 'concern' | 'blocker'
 export interface AdvisorAdvice {
   readonly severity: AdviceSeverity
   readonly note: string
+  /** Per-delivery identity; the tip keys its dismissal on this. */
+  readonly deliveryId: number
 }
 
 /** The advice tip's snapshot. */
@@ -40,7 +42,7 @@ export interface AdvisorAdviceState {
 
 /** The wire payload of `/api/advisor/advice` (client mirror of the gateway face). */
 type AdvisorAdviceRpcPayload =
-  | { advice: { severity: AdviceSeverity; note: string } | null }
+  | { advice: { severity: AdviceSeverity; note: string; deliveryId: number } | null }
   | { error: { tag: string; message: string } }
 
 /** Per-session advice controller (one per slot binding). */
@@ -88,9 +90,13 @@ export class AdvisorAdviceController {
         && (advice.severity === 'nit' || advice.severity === 'concern' || advice.severity === 'blocker')
         && typeof advice.note === 'string'
         && advice.note.length > 0
+        && Number.isInteger(advice.deliveryId)
+        && advice.deliveryId >= 1
       this.store.update((s) => {
         s.status = 'ready'
-        s.advice = valid ? { severity: advice.severity, note: advice.note } : null
+        s.advice = valid
+          ? { severity: advice.severity, note: advice.note, deliveryId: advice.deliveryId }
+          : null
       })
       return
     }
