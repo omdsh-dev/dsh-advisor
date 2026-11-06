@@ -2,6 +2,11 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.7.0] - 2026-11-06
+
+- 0536cbc Merge pull request #147 from omdsh-dev/chore/dsh-0.2.2-rc.1
+- 31e7a35 fix(advisor): drop the legacy maxTokens key from the write payload (#146)
+
 ## [0.6.6] - 2026-11-05
 
 - 265f16c feat: pin and surface the advisor reasoning effort per session (#142) (#144)
