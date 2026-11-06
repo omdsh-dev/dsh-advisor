@@ -403,6 +403,44 @@ describe('hard gate regression (resolveAdvisorConfig stays the SSOT)', () => {
     expect(config.provider).toBe('deepseek')
   })
 
+  it('tolerates the legacy `maxTokens` key in a patch but never persists it (2026-10-18 ruling)', async () => {
+    const ctx = new Context()
+    const entry = new MemoryEntryConfig(entryConfig())
+    const bridge = installAdvisorSettings(ctx, entry.config)
+    const gateway = new AdvisorConfigGateway(ctx, bridge)
+    const settings = await provideSettingsDouble(ctx, entry)
+    await waitCaptured(ctx, gateway)
+
+    // Stored-profile parity with the legacy `enabled` key: the removed key
+    // passes validation (a stored profile carrying `maxTokens:` loads
+    // cleanly) but is STRIPPED from the write payload. The real
+    // `SettingsForms.write` validates every posted field against the
+    // schema's volatile paths, so the dead key would otherwise abort the
+    // WHOLE save with `Config field "maxTokens" is not volatile` instead of
+    // being silently ignored. The valid key in the same patch lands normally.
+    await gateway.set({ maxTokens: 4096, maxDeltaMessages: 10 } as never)
+    expect(settings.update).toHaveBeenCalledWith('advisor', { maxDeltaMessages: 10 })
+    expect(gateway.get().config.maxDeltaMessages).toBe(10)
+  })
+
+  it('a maxTokens-only patch is a no-op: nothing written, current config returned', async () => {
+    const ctx = new Context()
+    const entry = new MemoryEntryConfig(entryConfig({ provider: 'deepseek', model: 'deepseek-chat' }))
+    const bridge = installAdvisorSettings(ctx, entry.config)
+    const gateway = new AdvisorConfigGateway(ctx, bridge)
+    const settings = await provideSettingsDouble(ctx, entry)
+    await waitCaptured(ctx, gateway)
+
+    // Same semantics as an `enabled`-only or all-null patch: the legacy key
+    // is accepted (never a validation error) and the empty normalized payload
+    // short-circuits before the settings round-trip.
+    const before = gateway.get()
+    const result = await gateway.set({ maxTokens: 4096 } as never)
+    expect(settings.update).not.toHaveBeenCalled()
+    expect(result).toEqual(before)
+    expect(result.config.enabled).toBe(true)
+  })
+
   it('a pairless entry resolves to disabled-with-reason through get', async () => {
     const ctx = new Context()
     const entry = new MemoryEntryConfig(entryConfig())
@@ -482,7 +520,7 @@ describe('typertGateway endpoint claims + payload contract', () => {
   async function composeGatewayHarness(
     seedEntry?: Record<string, unknown>,
     resolveModelInfo?: AdvisorModelInfoResolver,
-  ): Promise<{ ctx: Context; connection: FakeConnectionService; entry: MemoryEntryConfig }> {
+  ): Promise<{ ctx: Context; connection: FakeConnectionService; entry: MemoryEntryConfig; settings: MemorySettingsDouble }> {
     const ctx = new Context()
     await ctx.plugin(TypertRegistry)
     await ctx.plugin(FakeConnectionService)
@@ -498,11 +536,11 @@ describe('typertGateway endpoint claims + payload contract', () => {
     }))
     const bridge = installAdvisorSettings(ctx, entry.config)
     new AdvisorConfigGateway(ctx, bridge, () => undefined, resolveModelInfo)
-    await provideSettingsDouble(ctx, entry)
+    const settings = await provideSettingsDouble(ctx, entry)
     ctx.typert.register(advisorTypertContribution())
     const connection = ctx.get('connection') as unknown as FakeConnectionService
     await vi.waitFor(() => expect(connection.channel).toBe('/api'))
-    return { ctx, connection, entry }
+    return { ctx, connection, entry, settings }
   }
 
   it('claims /api/advisor/get + /api/advisor/set through the explicit typert registration (ctx.typert.local)', async () => {
@@ -630,7 +668,7 @@ describe('typertGateway endpoint claims + payload contract', () => {
     // carry the persisted values, not silently strip them. A maxTokens key
     // in the patch is the 2026-10-18-removed legacy: the resolver tolerates
     // and drops it on stored profiles, and it never appears on the wire.
-    const { connection } = await composeGatewayHarness()
+    const { connection, settings } = await composeGatewayHarness()
     const signal = new AbortController().signal
 
     const setResult = await connection.handler!(
@@ -639,6 +677,14 @@ describe('typertGateway endpoint claims + payload contract', () => {
       signal,
       connection.peer,
     )
+    // The write payload is the seam the old test could not see: the host
+    // settings writer rejects a non-volatile field and aborts the whole
+    // save, so the legacy key must be dropped BEFORE settings.update.
+    expect(settings.update).toHaveBeenCalledWith('advisor', {
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      proseFallback: true,
+    })
     expect(setResult.ok).toBe(true)
     if (setResult.ok) {
       expect(setResult.value).toMatchObject({
