@@ -1,2 +1,1 @@
-![The advisor's graded note injected into the model context after a completed turn](preview.svg)
-![The next-prompt suggestion shown below the composer, with an accept control](suggestion.svg)
+![The advisor note injected into the model context, and the composer dock showing it beside the next-prompt suggestion](preview.svg)
