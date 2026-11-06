@@ -143,8 +143,14 @@ export class AdvisorDelivery {
    * the chat). Cleared on the next human turn and on agent disposal.
    */
   private readonly lastNotes = new Map<string, DeliveredAdvice>()
-  /** Monotonic delivery identity across sessions (never reused). */
-  private nextDeliveryId = 0
+  /**
+   * Delivery identity allocator, seeded from wall-clock milliseconds. Seeding
+   * (not 0) keeps ids increasing across a process restart, so a client holding
+   * a dismissal for an id from a previous run can never swallow a fresh note
+   * whose counter happened to restart at the same number. Within the process
+   * the counter only increments, so ids are unique.
+   */
+  private nextDeliveryId = Date.now()
   /**
    * immuneTurns latch: remaining stepped primary turns before an interrupting
    * note may steer again (spec §6). A present entry > 0 means armed; the entry

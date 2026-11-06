@@ -83,23 +83,32 @@ describe('advisor advice endpoint (unit, scripted face)', () => {
 })
 
 describe('advisorAdviceFace (session-scoped gate + retention)', () => {
-  function withNote(severity: 'nit' | 'concern' | 'blocker', note: string): AdvisorDelivery {
+  /** Narrow one result to its advice payload (the error arm is not expected here). */
+  function adviceOf(result: AdvisorAdviceRpcResult): { severity: string; note: string; deliveryId: number } | null {
+    return 'advice' in result ? result.advice : null
+  }
+
+  function deliver(severity: 'nit' | 'concern' | 'blocker', note: string): AdvisorDelivery {
     const delivery = new AdvisorDelivery({ immuneTurns: 0 })
     delivery.registerAgent({ id: 'sess-1', inject: vi.fn(), steer: vi.fn() })
     delivery.route('sess-1', { severity, note })
     return delivery
   }
 
-  it('serves the last routed note and stops serving it once cleared', () => {
-    const delivery = withNote('concern', 'cap the retries')
+  it('serves the last routed note with a clock-seeded delivery id, then clears', () => {
+    const delivery = deliver('concern', 'cap the retries')
     const face = advisorAdviceFace(() => effective(), delivery)
-    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'concern', note: 'cap the retries', deliveryId: 1 } })
+    const advice = adviceOf(face.getAdvice('sess-1'))
+    expect(advice).toMatchObject({ severity: 'concern', note: 'cap the retries' })
+    // Clock-seeded, not a counter that restarts at 0 on every process boot.
+    expect(Number.isInteger(advice!.deliveryId)).toBe(true)
+    expect(advice!.deliveryId).toBeGreaterThan(1)
     delivery.clearLastNote('sess-1')
     expect(face.getAdvice('sess-1')).toEqual({ advice: null })
   })
 
   it('answers null for a disabled session even with a retained note', () => {
-    const delivery = withNote('nit', 'name the helper')
+    const delivery = deliver('nit', 'name the helper')
     const face = advisorAdviceFace(() => effective({ enabled: false }), delivery)
     expect(face.getAdvice('sess-1')).toEqual({ advice: null })
   })
@@ -107,20 +116,40 @@ describe('advisorAdviceFace (session-scoped gate + retention)', () => {
   it('serves the NEWEST routed note (last write wins, never an accumulating list)', () => {
     const delivery = new AdvisorDelivery({ immuneTurns: 0 })
     delivery.registerAgent({ id: 'sess-1', inject: vi.fn(), steer: vi.fn() })
-    delivery.route('sess-1', { severity: 'nit', note: 'first note' })
-    delivery.route('sess-1', { severity: 'blocker', note: 'second note' })
     const face = advisorAdviceFace(() => effective(), delivery)
-    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'blocker', note: 'second note', deliveryId: 2 } })
+    delivery.route('sess-1', { severity: 'nit', note: 'first note' })
+    const first = adviceOf(face.getAdvice('sess-1'))
+    delivery.route('sess-1', { severity: 'blocker', note: 'second note' })
+    const second = adviceOf(face.getAdvice('sess-1'))
+    expect(second).toMatchObject({ severity: 'blocker', note: 'second note' })
+    expect(second!.deliveryId).toBeGreaterThan(first!.deliveryId)
   })
 
   it('re-reads the session config per request (no memoization at face construction)', () => {
-    const delivery = withNote('concern', 'cap the retries')
+    const delivery = deliver('concern', 'cap the retries')
     let enabled = true
     const face = advisorAdviceFace(() => effective({ enabled }), delivery)
-    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'concern', note: 'cap the retries', deliveryId: 1 } })
+    const initial = adviceOf(face.getAdvice('sess-1'))
+    expect(initial).toMatchObject({ severity: 'concern', note: 'cap the retries' })
     enabled = false
     expect(face.getAdvice('sess-1')).toEqual({ advice: null })
     enabled = true
-    expect(face.getAdvice('sess-1')).toEqual({ advice: { severity: 'concern', note: 'cap the retries', deliveryId: 1 } })
+    expect(face.getAdvice('sess-1')).toEqual({ advice: initial })
+  })
+
+  it('keeps delivery ids increasing across a restart (clock-seeded, never reused)', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1_000)
+      const before = deliver('nit', 'before restart')
+      const beforeId = before.getLastNote('sess-1')!.deliveryId
+      vi.setSystemTime(2_000)
+      const after = deliver('nit', 'after restart')
+      const afterId = after.getLastNote('sess-1')!.deliveryId
+      expect(beforeId).toBeGreaterThan(1)
+      expect(afterId).toBeGreaterThan(beforeId)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
