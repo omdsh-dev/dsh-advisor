@@ -1,4 +1,4 @@
-![preview](docs/preview.png)
+![preview](https://raw.githubusercontent.com/omdsh-dev/dsh-advisor/main/docs/preview.png)
 
 # dsh-advisor
 
