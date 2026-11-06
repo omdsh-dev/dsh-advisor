@@ -1,3 +1,5 @@
+![preview](https://raw.githubusercontent.com/omdsh-dev/dsh-advisor/main/docs/preview.zh.png)
+
 # dsh-advisor
 
 [English](README.md) | [中文](README.zh.md)

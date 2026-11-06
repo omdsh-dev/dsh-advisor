@@ -47,15 +47,16 @@
  *    (no fill, nothing consumed).
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClientConnectionRpc, RpcResult } from '@deepseek-ai/dsh-client-connection/client'
 import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
-import { NextPromptOverlay } from '../src/client/next-prompt-overlay'
-import type { NextPromptOverlayProps } from '../src/client/next-prompt-overlay'
+import { ADVICE_TIP_MS, ComposerDockTip } from '../src/client/composer-dock-tip'
+import type { ComposerDockTipProps } from '../src/client/composer-dock-tip'
 import styles from '../src/client/next-prompt.module.css'
 import { AdvisorSuggestionController, NEXT_PROMPT_IDLE_POLL_MS } from '../src/client/next-prompt-store'
+import { AdvisorAdviceController } from '../src/client/advice-store'
 import { en } from '../src/client/locales'
 
 afterEach(() => {
@@ -78,7 +79,7 @@ const t = ((key: string, params?: Record<string, unknown>): string => {
     text = text.replaceAll(`{${name}}`, String(value))
   }
   return text
-}) as NextPromptOverlayProps['t']
+}) as ComposerDockTipProps['t']
 
 function ok(value: unknown): RpcResult<unknown> {
   return { ok: true, value }
@@ -119,23 +120,31 @@ interface TestInputState {
 
 interface Harness {
   rpc: SuggestionRpc
+  adviceRpc: SuggestionRpc
   epoch: ReturnType<typeof createSnapshotStore<{ epoch: number }>>
   input: ReturnType<typeof createSnapshotStore<TestInputState>>
   controller: AdvisorSuggestionController
+  adviceController: AdvisorAdviceController
   setDraft: ReturnType<typeof vi.fn>
-  props: NextPromptOverlayProps
+  props: ComposerDockTipProps
 }
 
 function harness(): Harness {
   const rpc = new SuggestionRpc()
+  const adviceRpc = new SuggestionRpc()
+  adviceRpc.auto = true
+  adviceRpc.reply = ok({ advice: null })
   const controller = new AdvisorSuggestionController('sess-1', rpc as unknown as ClientConnectionRpc)
+  const adviceController = new AdvisorAdviceController('sess-1', adviceRpc as unknown as ClientConnectionRpc)
   const epoch = createSnapshotStore<{ epoch: number }>({ epoch: 0 })
   const input = createSnapshotStore<TestInputState>({ draft: '', phase: 'plain' })
   const setDraft = vi.fn()
   const props = {
     sessionId: 'sess-1',
-    controller,
+    suggestionController: controller,
+    adviceController,
     useSnapshot: bindSnapshotSelector(controller.store),
+    useAdviceSnapshot: bindSnapshotSelector(adviceController.store),
     useRefreshSignal: bindSnapshotSelector(epoch),
     useInput: bindSnapshotSelector(input),
     // The composer's public input actions; only setDraft is read.
@@ -145,8 +154,8 @@ function harness(): Harness {
     useConversation: (() => undefined) as never,
     useWorkspaces: (() => undefined) as never,
     t,
-  } as NextPromptOverlayProps
-  return { rpc, epoch, input, controller, setDraft, props }
+  } as ComposerDockTipProps
+  return { rpc, adviceRpc, epoch, input, controller, adviceController, setDraft, props }
 }
 
 /**
@@ -170,7 +179,7 @@ const SUGGESTION = 'Try the /advisor command'
 async function mountWithSuggestion(h: Harness): Promise<ReturnType<typeof render>> {
   const view = render(
     <ComposerStack>
-      <NextPromptOverlay {...h.props} />
+      <ComposerDockTip {...h.props} />
     </ComposerStack>,
   )
   await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
@@ -178,24 +187,30 @@ async function mountWithSuggestion(h: Harness): Promise<ReturnType<typeof render
   await waitFor(() => expect(h.controller.store.getSnapshot().status).toBe('ready'))
   view.rerender(
     <ComposerStack>
-      <NextPromptOverlay {...h.props} />
+      <ComposerDockTip {...h.props} />
     </ComposerStack>,
   )
   return view
 }
 
 describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-tip rework e2e-n13)', () => {
-  it('fetches the suggestion on mount through /api/advisor/suggestion', async () => {
+  it('fetches the suggestion and the advice on mount', async () => {
     const h = harness()
     render(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
     expect(h.rpc.last()).toEqual({
       channel: '/api',
       method: 'advisor/suggestion',
+      args: { sessionId: 'sess-1' },
+    })
+    await waitFor(() => expect(h.adviceRpc.calls).toHaveLength(1))
+    expect(h.adviceRpc.last()).toEqual({
+      channel: '/api',
+      method: 'advisor/advice',
       args: { sessionId: 'sess-1' },
     })
   })
@@ -233,7 +248,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     h.input.update((s) => { s.draft = 'typed' })
     view.rerender(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     expect(screen.queryByRole('status')).toBeNull()
@@ -248,7 +263,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     h.input.update((s) => { s.draft = 'partial' })
     view.rerender(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     expect(screen.queryByText(SUGGESTION)).toBeNull()
@@ -259,7 +274,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     h.input.update((s) => { s.draft = ''; s.phase = 'claimed' })
     view.rerender(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     expect(screen.queryByText(SUGGESTION)).toBeNull()
@@ -281,7 +296,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     await waitFor(() => expect(h.controller.store.getSnapshot().suggestion).toBeNull())
     view.rerender(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     expect(screen.queryByText(SUGGESTION)).toBeNull()
@@ -301,7 +316,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     await waitFor(() => expect(h.controller.store.getSnapshot().suggestion).toBeNull())
     view.rerender(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     expect(screen.queryByText(SUGGESTION)).toBeNull()
@@ -319,7 +334,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     h.input.update((s) => { s.draft = 'user-typed' })
     view.rerender(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     expect(screen.queryByRole('status')).toBeNull()
@@ -355,7 +370,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     const h = harness()
     const view = render(
       <ComposerStack card={<button data-testid="card-button" />}>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
@@ -363,7 +378,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     await waitFor(() => expect(h.controller.store.getSnapshot().status).toBe('ready'))
     view.rerender(
       <ComposerStack card={<button data-testid="card-button" />}>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
 
@@ -397,7 +412,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     h.input.update((s) => { s.draft = 'user-typed' })
     view.rerender(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     expect(screen.queryByText(SUGGESTION)).toBeNull()
@@ -412,7 +427,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     h.input.update((s) => { s.draft = '' })
     view.rerender(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     const fill = new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })
@@ -427,7 +442,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     // in the dock BELOW it — exactly where the host mounts them.
     const view = render(
       <ComposerStack card={<div contentEditable data-testid="editor" />}>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
@@ -435,7 +450,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     await waitFor(() => expect(h.controller.store.getSnapshot().status).toBe('ready'))
     view.rerender(
       <ComposerStack card={<div contentEditable data-testid="editor" />}>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     expect(fireEvent.keyDown(screen.getByTestId('editor'), { key: 'ArrowRight' })).toBe(false)
@@ -447,7 +462,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     const h = harness()
     const view = render(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
@@ -457,7 +472,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     // Rerenders without a bump never refetch (the epoch is consumed once).
     view.rerender(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     expect(h.rpc.calls).toHaveLength(1)
@@ -467,7 +482,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     h.epoch.update((s) => { s.epoch += 1 })
     view.rerender(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
@@ -480,7 +495,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     h.rpc.auto = true
     const view = render(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     // Mount fetch flushed (advanceTimersByTimeAsync awaits the settled
@@ -502,7 +517,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     expect(h.controller.store.getSnapshot().suggestion).toBe(SUGGESTION)
     view.rerender(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     expect(h.rpc.calls).toHaveLength(4)
@@ -514,7 +529,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     const h = harness()
     const view = render(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
@@ -522,7 +537,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     await waitFor(() => expect(h.controller.store.getSnapshot().status).toBe('unavailable'))
     view.rerender(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     // Nothing renders for an unavailable surface.
@@ -535,14 +550,14 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     // trigger a new fetch — only the next consumed signal does.
     view.rerender(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     expect(h.rpc.calls).toHaveLength(1)
     h.epoch.update((s) => { s.epoch += 1 })
     view.rerender(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     await waitFor(() => expect(h.rpc.calls).toHaveLength(2))
@@ -555,12 +570,135 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     const h = harness()
     render(
       <ComposerStack>
-        <NextPromptOverlay {...h.props} />
+        <ComposerDockTip {...h.props} />
       </ComposerStack>,
     )
     await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
     h.rpc.settle(ok(42 as unknown))
     await waitFor(() => expect(h.controller.store.getSnapshot().status).toBe('unavailable'))
     expect(h.controller.store.getSnapshot().suggestion).toBeNull()
+  })
+})
+
+
+describe('composer dock tip: one-row advice/suggestion arbitration', () => {
+  const NOTE = 'cap the retries'
+
+  /** Put one delivered note into the advice store (as the poll/face would). */
+  function deliver(h: Harness, deliveryId: number, note = NOTE): void {
+    h.adviceController.store.update((s) => {
+      s.status = 'ready'
+      s.advice = { severity: 'concern', note, deliveryId }
+    })
+  }
+
+  async function mount(h: Harness): Promise<ReturnType<typeof render>> {
+    const view = render(
+      <ComposerStack>
+        <ComposerDockTip {...h.props} />
+      </ComposerStack>,
+    )
+    await waitFor(() => expect(h.adviceController.store.getSnapshot().status).toBe('ready'))
+    return view
+  }
+
+  it('shows a fresh advice note for 2 s and then drops the row', async () => {
+    const h = harness()
+    const view = await mount(h)
+    vi.useFakeTimers()
+    deliver(h, 1)
+    view.rerender(
+      <ComposerStack>
+        <ComposerDockTip {...h.props} />
+      </ComposerStack>,
+    )
+    expect(screen.getByText(NOTE)).toBeTruthy()
+    act(() => { vi.advanceTimersByTime(ADVICE_TIP_MS - 1) })
+    expect(screen.getByText(NOTE)).toBeTruthy()
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(screen.queryByText(NOTE)).toBeNull()
+  })
+
+  it('never renders both rows: the advice flash takes the row, then the suggestion returns', async () => {
+    const h = harness()
+    const view = await mountWithSuggestion(h)
+    await waitFor(() => expect(h.adviceController.store.getSnapshot().status).toBe('ready'))
+    vi.useFakeTimers()
+    deliver(h, 1)
+    view.rerender(
+      <ComposerStack>
+        <ComposerDockTip {...h.props} />
+      </ComposerStack>,
+    )
+    expect(screen.getByText(NOTE)).toBeTruthy()
+    expect(screen.queryByText(SUGGESTION)).toBeNull()
+    act(() => { vi.advanceTimersByTime(ADVICE_TIP_MS) })
+    expect(screen.getByText(SUGGESTION)).toBeTruthy()
+    expect(screen.queryByText(NOTE)).toBeNull()
+  })
+
+  it('does not fill from an invisible suggestion while the advice note occupies the row', async () => {
+    const h = harness()
+    const view = await mountWithSuggestion(h)
+    await waitFor(() => expect(h.adviceController.store.getSnapshot().status).toBe('ready'))
+    vi.useFakeTimers()
+    deliver(h, 1)
+    view.rerender(
+      <ComposerStack>
+        <ComposerDockTip {...h.props} />
+      </ComposerStack>,
+    )
+    expect(screen.getByText(NOTE)).toBeTruthy()
+    fireEvent.keyDown(document.body, { key: 'ArrowRight' })
+    expect(h.setDraft).not.toHaveBeenCalled()
+
+    // Once the flash yields the row back, the suggestion is visible again and
+    // the same gesture fills normally.
+    act(() => { vi.advanceTimersByTime(ADVICE_TIP_MS) })
+    fireEvent.keyDown(document.body, { key: 'ArrowRight' })
+    expect(h.setDraft).toHaveBeenCalledWith(SUGGESTION)
+  })
+
+  it('re-flashes a NEW delivery id, and the same id stays dismissed', async () => {
+    const h = harness()
+    const view = await mount(h)
+    const rerender = (): void => {
+      view.rerender(
+        <ComposerStack>
+          <ComposerDockTip {...h.props} />
+        </ComposerStack>,
+      )
+    }
+    vi.useFakeTimers()
+    deliver(h, 1)
+    rerender()
+    expect(screen.getByText(NOTE)).toBeTruthy()
+    act(() => { vi.advanceTimersByTime(ADVICE_TIP_MS) })
+    expect(screen.queryByText(NOTE)).toBeNull()
+
+    // Same id on a later render (a new store object from the poll) stays hidden.
+    rerender()
+    expect(screen.queryByText(NOTE)).toBeNull()
+
+    // A new delivery id flashes again.
+    deliver(h, 2)
+    rerender()
+    expect(screen.getByText(NOTE)).toBeTruthy()
+  })
+
+  it('dismiss hides the advice flash immediately and lets the suggestion take the row', async () => {
+    const h = harness()
+    const view = await mountWithSuggestion(h)
+    await waitFor(() => expect(h.adviceController.store.getSnapshot().status).toBe('ready'))
+    deliver(h, 1)
+    view.rerender(
+      <ComposerStack>
+        <ComposerDockTip {...h.props} />
+      </ComposerStack>,
+    )
+    expect(screen.getByText(NOTE)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: en.adviceDismiss }))
+    expect(screen.queryByText(NOTE)).toBeNull()
+    expect(screen.getByText(SUGGESTION)).toBeTruthy()
   })
 })

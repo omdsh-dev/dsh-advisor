@@ -55,17 +55,15 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { AdvisorCard } from './advisor-card.tsx'
 import { AdvisorSessionAction } from './advisor-session.tsx'
 import { AdvisorSessionModelController, AdvisorSettingsStore, refreshIfLoaded } from './advisor-store.ts'
-import { NextPromptOverlay } from './next-prompt-overlay.tsx'
+import { ComposerDockTip } from './composer-dock-tip.tsx'
 import { AdvisorSuggestionController } from './next-prompt-store.ts'
-import { AdvisorAdviceTip } from './advice-tip.tsx'
 import { AdvisorAdviceController } from './advice-store.ts'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { en, zh, type AdvisorKey } from './locales.ts'
 
 export type { AdvisorCardInjected, AdvisorCardProps } from './advisor-card.tsx'
 export type { AdvisorSessionActionInjected, AdvisorSessionActionProps } from './advisor-session.tsx'
-export type { NextPromptOverlayInjected, NextPromptOverlayProps } from './next-prompt-overlay.tsx'
-export type { AdvisorAdviceTipInjected, AdvisorAdviceTipProps } from './advice-tip.tsx'
+export type { ComposerDockTipInjected, ComposerDockTipProps } from './composer-dock-tip.tsx'
 export type { AdvisorKey } from './locales.ts'
 export type {
   AdvisorDraft, AdvisorSessionMenuState, AdvisorSessionModelController, AdvisorSessionRpcPayload,
@@ -271,67 +269,40 @@ export function apply(ctx: ClientContext): void {
     }, AdvisorSessionAction)
   })
 
-  // T3 + e2e-n13 rework: the next-prompt suggestion tip — the session-scoped
-  // occupant of the shell-declared `conversation.composer.dock` list slot
-  // ("ambient entries below the composer card": the host renders the dock
-  // container — `div[data-composer-dock]` — as a SIBLING of the composer
-  // card, so the tip sits under the card with zero overlap with the
-  // placeholder, the attachments row, or the card geometry; the previous
-  // `conversation.input.overlay` seat rendered INSIDE the card and its
-  // in-composer overlay form fought the host composer — three rounds of
-  // fusion patches proved it). Same generator + `yield` shape as the B2
-  // session action; the inject factory builds ONE AdvisorSuggestionController
-  // per session scope binding (the renderer memoizes the face per entry ×
-  // binding, so every fetch carries its own sessionId), and the refresh
+  // T3 + e2e-n13 rework: the composer dock tip — ONE occupant of the
+  // shell-declared `conversation.composer.dock` list slot, owning the row
+  // arbitration between the two advisor surfaces (the dock's space carries a
+  // single row): a freshly delivered advisor note flashes for 2 s, then yields
+  // to the per-turn next-prompt suggestion. The host renders the dock as a
+  // SIBLING of the composer card, so the tip never overlaps the placeholder,
+  // attachments, or the card geometry (the retired `conversation.input.
+  // overlay` seat rendered INSIDE the card and fought it). The inject factory
+  // builds ONE controller pair per session scope binding, and the refresh
   // signals ride the SAME epoch plane registered above (connection/reset +
   // window focus) — no new push-event contract. The component reads the
   // composer's input machine through SessionStandardProps (draft/phase gate +
-  // inputActions.setDraft).
+  // inputActions.setDraft for the suggestion's accept gestures).
   ctx.slots.inject('conversation.composer.dock', function* () {
     yield ctx.slots.register({
       name: 'conversation.composer.dock',
-      // List slot: one cell per `id` — this bundle contributes exactly one
-      // ambient entry; default order keeps registration sequencing.
+      // List slot: one cell per `id`; the component renders either the
+      // suggestion row or the transient advice row, never both.
       id: BUNDLE_NAME,
       locale: NS,
       inject: (sessionId: string) => {
-        const tipController = new AdvisorSuggestionController(sessionId, connection.rpc)
-        return {
-          sessionId,
-          controller: tipController,
-          hooks: {
-            snapshot: tipController.store,
-            refreshSignal,
-          },
-        }
-      },
-    }, NextPromptOverlay)
-  })
-
-  // Visible advice tip (this change): the delivered note had no visible
-  // surface — it is injected into the model context, not rendered as a chat
-  // message — so a delivered nit/concern/blocker looked like the advisor was
-  // silent. This second occupant of the SAME dock reads the last accepted
-  // note (`/api/advisor/advice`) and shows it under the composer with its
-  // severity until the user dismisses it or the next human turn clears it.
-  // One controller per session binding, same refresh-signal plane.
-  ctx.slots.inject('conversation.composer.dock', function* () {
-    yield ctx.slots.register({
-      name: 'conversation.composer.dock',
-      id: `${BUNDLE_NAME}-advice`,
-      order: 2,
-      locale: NS,
-      inject: (sessionId: string) => {
+        const suggestionController = new AdvisorSuggestionController(sessionId, connection.rpc)
         const adviceController = new AdvisorAdviceController(sessionId, connection.rpc)
         return {
           sessionId,
-          controller: adviceController,
+          suggestionController,
+          adviceController,
           hooks: {
-            snapshot: adviceController.store,
+            snapshot: suggestionController.store,
+            adviceSnapshot: adviceController.store,
             refreshSignal,
           },
         }
       },
-    }, AdvisorAdviceTip)
+    }, ComposerDockTip)
   })
 }

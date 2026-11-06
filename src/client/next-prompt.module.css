@@ -105,3 +105,46 @@
   padding: 2px 8px;
   border-radius: 999px;
 }
+
+/* The transient advisor-note row shares the dock geometry; only the glyph,
+   severity tag, and dismiss differ. */
+.tip[data-advisor-advice] .tipGlyph {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.tip[data-advisor-advice][data-severity='nit'] .tipGlyph {
+  color: var(--dsw-alias-label-caption);
+}
+
+.tip[data-advisor-advice][data-severity='blocker'] .tipGlyph {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.adviceSeverity {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.adviceDismiss {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-caption);
+  font-size: 14px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.adviceDismiss:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
