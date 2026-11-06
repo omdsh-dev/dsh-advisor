@@ -11,6 +11,8 @@
 
 一个移植 omp「advisor」子系统的独立 dsh（DeepSeek Harness）插件组合包：一个按会话运行的独立评审模型，观察主会话 transcript，用显式配置的模型（provider 与 model 均为必填）评审每个已完成的 stepped turn，并把按严重度排序的建议（nit / concern / blocker）注入回会话。每个已完成的 turn 之后，它还可以预测你的下一提示，并以一键采纳的建议提示条显示在 web composer 下方（仅 web GUI）。两个能力面都不会污染主循环，也不会递归地评审自己。
 
+![advisor 建议注入模型上下文，以及输入框下方展示短暂建议与下一条提示的位置](docs/preview.zh.svg)
+
 **仅作建议。** advisor 从不批准或否决主 agent 的动作，也绝不会像主 agent 那样发出命令。每条送达的消息都是自我描述的 advisory 内容；一个行为异常的评审者会被端到端约束（emission guard、immuneTurns 冷却、failure policy），因此它永远不会卡住或污染主循环。
 
 两个 dsh 前端均可用：**web** profile（侧边栏 → 插件 → dsh-advisor → Advisor 卡片）与 **dsh-tui** 终端 profile（`/advisor` + `/advisor config`）。
