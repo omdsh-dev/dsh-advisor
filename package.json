@@ -33,6 +33,8 @@
     "docs/DETAIL.zh.md",
     "docs/preview.svg",
     "docs/preview.zh.svg",
+    "docs/preview.zh.png",
+    "docs/preview.png",
     "icon.svg",
     "cordis.patch.yml",
     "scripts"
