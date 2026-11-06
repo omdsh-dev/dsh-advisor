@@ -205,6 +205,11 @@ export function ComposerDockTip(props: ComposerDockTipProps): ReactNode {
   // handler's closure can be a render behind — this ref is not (qc2 F-002).
   const inputRef = useRef(input)
   inputRef.current = input
+  // The same event-time read for the arbitration flag: while the advice flash
+  // owns the row the suggestion is NOT rendered, so a fill must not run from
+  // it (a bare ArrowRight must not inject text the user cannot see).
+  const adviceVisibleRef = useRef(adviceVisible)
+  adviceVisibleRef.current = adviceVisible
 
   // The shared gated fill path behind BOTH accept gestures (ArrowRight, and
   // a click anywhere on the tip row). The render gate is re-validated
@@ -216,6 +221,7 @@ export function ComposerDockTip(props: ComposerDockTipProps): ReactNode {
   // native semantics.
   const fillFromSuggestion = useCallback((): boolean => {
     if (suggestion === null) return false
+    if (adviceVisibleRef.current) return false
     const current = inputRef.current
     if (current.draft !== '' || current.phase !== 'plain') return false
     inputActions.setDraft(suggestion)

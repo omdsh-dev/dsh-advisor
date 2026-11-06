@@ -637,6 +637,28 @@ describe('composer dock tip: one-row advice/suggestion arbitration', () => {
     expect(screen.queryByText(NOTE)).toBeNull()
   })
 
+  it('does not fill from an invisible suggestion while the advice note occupies the row', async () => {
+    const h = harness()
+    const view = await mountWithSuggestion(h)
+    await waitFor(() => expect(h.adviceController.store.getSnapshot().status).toBe('ready'))
+    vi.useFakeTimers()
+    deliver(h, 1)
+    view.rerender(
+      <ComposerStack>
+        <ComposerDockTip {...h.props} />
+      </ComposerStack>,
+    )
+    expect(screen.getByText(NOTE)).toBeTruthy()
+    fireEvent.keyDown(document.body, { key: 'ArrowRight' })
+    expect(h.setDraft).not.toHaveBeenCalled()
+
+    // Once the flash yields the row back, the suggestion is visible again and
+    // the same gesture fills normally.
+    act(() => { vi.advanceTimersByTime(ADVICE_TIP_MS) })
+    fireEvent.keyDown(document.body, { key: 'ArrowRight' })
+    expect(h.setDraft).toHaveBeenCalledWith(SUGGESTION)
+  })
+
   it('re-flashes a NEW delivery id, and the same id stays dismissed', async () => {
     const h = harness()
     const view = await mount(h)
