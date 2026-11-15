@@ -7,16 +7,12 @@ nodeLinker: hoisted
 allowBuilds:
   esbuild: true
 
-# Dependabot alerts 10-14: the 0.2.2-rc.1 @deepseek-ai peers still pin the
-# vulnerable zod 4.4.3 exactly (checked against the published manifests of
-# dsh-llm / dsh-agent). The override stays workspace-only metadata (never
-# shipped) and drops out once a peer release bumps the pin.
-# fast-uri needs no override any more: ajv 8.20.0 declares ^3.0.1, which
-# resolves 3.1.9 (the fixed 3.x line) on a fresh resolution.
-# shortcut: peers ship an untested zod pin here — recheck on the next dsh peer
-# bump.
-overrides:
-  zod: ^4.6.6
+# No overrides: the 0.2.2-rc.3 @deepseek-ai peers moved the zod pin from the
+# vulnerable 4.4.3 (the reason for the old `zod: ^4.6.6` override, Dependabot
+# alerts 10-14) to 4.6.6 exactly (published manifests of dsh-llm / dsh-agent),
+# so a range override no longer excludes anything and was dropped; `pnpm audit`
+# is clean on the resolved graph. fast-uri likewise needs none: ajv 8.20.0
+# declares ^3.0.1, which resolves the fixed 3.1.9 line.
 
 # Standing exemption for first-party @deepseek-ai packages so the
 # minimumReleaseAge policy never blocks our own fresh rc releases. pnpm 11
@@ -30,73 +26,74 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/cordis-plugin-loader@1.1.0'
   - '@deepseek-ai/cordis@4.1.0'
   - '@deepseek-ai/cosmokit@1.9.0'
-  - '@deepseek-ai/dsh-agent-default-model@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-agent-preset-registry@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-agent@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-api-gateway@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-api-remotes@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-api-session-controller@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-api-settings-controller@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-app-boot@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-atomic-write@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-attachment@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-brand@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-chunked-list@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-client-connection@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-client-file-upload@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-client-locale@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-client-store@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-client-ui-conversation@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-client-ui-plugin-manager@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-client-ui-renderer@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-client-ui-settings@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-client-ui-slots@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-commands@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-compaction-image-offload@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-compaction@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-config-editor@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-credentials@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-deque@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-file-reference@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-fs-patch@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-fs@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-home-paths@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-launch-environment@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-llm@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-native-command@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-official-bundles@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-package-manifest@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-sandbox@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-scope@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-session-format-catalog@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-session-format-v0-to-v1@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-session-format-v1-to-v2@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-session-format-v2-to-v3@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-session-format-v3-to-v4@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-session-format@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-session-persistence@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-session-projection@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-session-query@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-session-title@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-session@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-settings@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-skill@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-storage-domain@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-storage@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-subagent@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-system-prompt@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-timeout@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-tool-todo@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-tools@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-typert-protocol@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-typert-registry@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-user-approval@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-util-crypto@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-util-time@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-util-values@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-util-workspace-path@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-working-directory@0.2.2-rc.1'
-  - '@deepseek-ai/dsh-workspace@0.2.2-rc.1'
+  - '@deepseek-ai/dsh-agent-default-model@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-agent-preset-registry@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-agent@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-api-gateway@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-api-remotes@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-api-session-controller@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-api-settings-controller@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-app-boot@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-atomic-write@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-attachment@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-brand@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-chunked-list@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-client-connection@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-client-file-upload@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-client-locale@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-client-store@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-client-ui-conversation@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-client-ui-plugin-manager@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-client-ui-renderer@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-client-ui-settings@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-client-ui-slots@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-commands@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-compaction-image-offload@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-compaction@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-config-editor@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-credentials@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-deque@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-error@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-file-reference@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-fs-patch@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-fs@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-home-paths@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-launch-environment@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-llm@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-native-command@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-official-bundles@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-package-manifest@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-sandbox@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-scope@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-session-format-catalog@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-session-format-v0-to-v1@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-session-format-v1-to-v2@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-session-format-v2-to-v3@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-session-format-v3-to-v4@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-session-format@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-session-persistence@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-session-projection@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-session-query@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-session-title@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-session@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-settings@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-skill@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-storage-domain@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-storage@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-subagent@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-system-prompt@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-timeout@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-tool-todo@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-tools@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-typert-protocol@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-typert-registry@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-user-approval@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-util-crypto@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-util-time@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-util-values@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-util-workspace-path@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-working-directory@0.2.2-rc.3'
+  - '@deepseek-ai/dsh-workspace@0.2.2-rc.3'
   - '@deepseek-ai/schemastery@3.19.0'
 
 # The published @deepseek-ai/dsh-client-ui-primitives@0.1.7-rc.1
@@ -112,10 +109,16 @@ minimumReleaseAgeExclude:
 # 0.1.7-rc.2 adds first-party `@deepseek-ai/dsh-util-code-language` to the
 # ui-primitives runtime import set while the published manifest again omits
 # it (monorepo-only workspace:~ wiring).
+# Re-judged at the 0.2.2-rc.3 line: ui-primitives@0.2.2-rc.3 still publishes an
+# empty `dependencies` (every runtime module sits in devDependencies, now also
+# incl. `@deepseek-ai/dsh-util-file-drag`), so the repair stands; the first-party
+# pins track the rc.3 line. ui-primitives is not part of this repo's resolved
+# graph (the client bundle keeps it external), so the block is dormant here.
 packageExtensions:
   '@deepseek-ai/dsh-client-ui-primitives':
     dependencies:
-      '@deepseek-ai/dsh-util-code-language': '^0.2.2-rc.1'
+      '@deepseek-ai/dsh-util-code-language': '^0.2.2-rc.3'
+      '@deepseek-ai/dsh-util-file-drag': '^0.2.2-rc.3'
       clsx: '^2.0.0'
       diff: '^9.0.0'
       anser: '^2.3.5'
