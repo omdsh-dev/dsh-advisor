@@ -2,6 +2,10 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.7.2] - 2026-11-15
+
+- 3696d18 Merge pull request #153 from omdsh-dev/chore/dsh-0.2.2-rc.3
+
 ## [0.7.1] - 2026-11-06
 
 - 94d2be6 Merge pull request #151 from omdsh-dev/fix/single-dock-row
