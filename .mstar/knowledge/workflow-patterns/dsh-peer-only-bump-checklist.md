@@ -1,7 +1,7 @@
 ---
 module: dsh peer-only bump checklist (registry line + peer floors + lockfile + release-age exemptions)
 date: 2026-08-21
-last_updated: 2026-11-06
+last_updated: 2026-11-15
 plan_id: dsh-advisor-dsh-0.2.2-rc1-upgrade
 problem_type: workflow_issue
 category: workflow-patterns
@@ -24,8 +24,14 @@ applies_when:
 
 ## Context
 
-dsh-advisor has bumped its `@deepseek-ai/dsh-*` peerDependencies five times
-(rc.6 → rc.7 → rc.8 → 0.1.1-rc.1 → 0.2.2-rc.1). When the upstream release's
+dsh-advisor has bumped its `@deepseek-ai/dsh-*` peerDependencies six times
+(rc.6 → rc.7 → rc.8 → 0.1.1-rc.1 → 0.2.2-rc.1 → 0.2.2-rc.3). The 0.2.2-rc.1 →
+0.2.2-rc.3 corridor (1109 non-merge commits) reorganized packages, config keys
+and BFF method names but touched none of the agent/session/llm/typert/client
+surfaces this plugin consumes: all 13 items of its UPGRADE-ADAPTATION
+checklist were N/A, the resolved peer floors (cordis ~4.1.0,
+schemastery ~3.19.0) did not move, and the bump stayed mechanical with
+`drift: none`. When the upstream release's
 breaking changes do not touch any API the plugin consumes, the bump is
 mechanical and follows a fixed checklist. The 0.1.1-rc.1 release (172
 commits) renamed `credentials/updated` → `credentials/reference-updated`,
@@ -79,7 +85,10 @@ to `^4.1.0` / `^3.19.0` and the hardcoded schemastery assertion in
   diff.
 - The re-resolution pulls NEW transitive first-party peers into the
   lockfile (rc.8 → 0.1.1-rc.1 added dsh-permission-presets, dsh-sandbox,
-  dsh-sandbox-policy, dsh-shell, dsh-subprocess).
+  dsh-sandbox-policy, dsh-shell, dsh-subprocess; 0.2.2-rc.1 → 0.2.2-rc.3
+  added exactly one, `dsh-error`). The lockfile package set is the only
+  authority here — do not infer additions from the release notes' package
+  rename/delete list.
 
 ### 3. Sync minimumReleaseAgeExclude
 
@@ -113,8 +122,14 @@ justification is the resolved graph, so re-read it at each bump:
   which resolves 3.1.9 (the fixed 3.x line) on a fresh resolution, so the
   override was deleted.
 - An override stays while an upstream package still pins the bad version
-  exactly. `zod` remains because the `dsh-*` peers pin `zod: 4.4.3`
-  exactly, which no range override can exclude.
+  exactly. `zod` remained at 0.2.2-rc.1 because the `dsh-*` peers pinned
+  `zod: 4.4.3` exactly, which no range override can exclude.
+- **Re-verify the pin, not just the override's presence.** At 0.2.2-rc.3 the
+  peers moved to an exact `zod: 4.6.6` and the override dropped out. That
+  deletion *downgraded* the resolved graph from `zod@4.6.7` (the range
+  override had lifted it) back to the upstream exact pin `4.6.6` — same
+  minor line, no known vulnerability, but a real graph change worth recording
+  instead of reading "override removed" as "nothing moved".
 
 Record the reason in the file's comment next to the override, not only in
 the bump's report.
