@@ -984,8 +984,12 @@ export class AdvisorSettingsStore {
       : this.clampInt(pending.draft.noteMaxChars, DEFAULT_ADVISOR_NOTE_MAX_CHARS, MIN_ADVISOR_NOTE_MAX_CHARS, MAX_ADVISOR_NOTE_MAX_CHARS)
     if (nextBound !== pending.draft.nextPromptMaxChars || noteBound !== pending.draft.noteMaxChars) {
       this.store.update((s) => {
-        if (nextBound !== undefined) s.draft.nextPromptMaxChars = nextBound
-        if (noteBound !== undefined) s.draft.noteMaxChars = noteBound
+        // Replace the draft reference like every other write in this store.
+        s.draft = {
+          ...s.draft,
+          ...(nextBound === undefined ? {} : { nextPromptMaxChars: nextBound }),
+          ...(noteBound === undefined ? {} : { noteMaxChars: noteBound }),
+        }
         s.dirty = this.recomputeDirty(s.draft)
       })
     }
