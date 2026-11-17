@@ -69,6 +69,10 @@ describe('plain-value entry (integration harness form, behavior identical to tod
       systemPrompt: '',
       immuneTurns: 5,
       maxDeltaMessages: 60,
+      // GitHub issue #155: the two text bounds are schema-defaulted numbers on
+      // the resolved contract.
+      nextPromptMaxChars: 120,
+      noteMaxChars: 768,
       proseFallback: false,
     })
   })

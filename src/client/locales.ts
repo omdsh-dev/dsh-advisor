@@ -29,6 +29,12 @@ export const en = {
   systemPromptHint: 'Leave empty to use the default system prompt',
   immuneTurns: 'Immune turns',
   maxDeltaMessages: 'Max delta messages',
+  // GitHub issue #155: the two text bounds. Positive integers with a floor
+  // (50 / 128); an empty input means "leave unchanged".
+  nextPromptMaxChars: 'Next-prompt character limit',
+  nextPromptMaxCharsHint: 'Character limit for the stored next-prompt suggestion (50–2000). Empty leaves it unchanged.',
+  noteMaxChars: 'Advice-note character limit',
+  noteMaxCharsHint: 'Character limit for the delivered advisor note (128–4096). Empty leaves it unchanged.',
   proseFallback: 'Prose fallback',
   proseFallbackHint: 'When no JSON frame is found, deliver the prose reply as a low-severity note — for models that answer in prose instead of JSON.',
   reasoningEffort: 'Thinking effort',
@@ -123,6 +129,11 @@ export const zh: typeof en = {
   systemPromptHint: '留空则使用默认系统提示词',
   immuneTurns: '免疫轮次',
   maxDeltaMessages: '最大增量消息数',
+  // GitHub issue #155：两个文本上限。正整数且有下限（50 / 128）；留空表示不改。
+  nextPromptMaxChars: '下一提示字数上限',
+  nextPromptMaxCharsHint: '存储的下一提示建议的字数上限（50–2000）。留空表示不改。',
+  noteMaxChars: '建议消息字数上限',
+  noteMaxCharsHint: '投递的顾问建议消息的字数上限（128–4096）。留空表示不改。',
   proseFallback: '散文回退',
   proseFallbackHint: '未找到 JSON 帧时，将散文回复作为低严重级建议投递——适用于以散文而非 JSON 作答的模型。',
   reasoningEffort: '思考权重',

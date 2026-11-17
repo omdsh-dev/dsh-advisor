@@ -41,7 +41,7 @@ import type { NextPromptManagerOptions } from '../src/next-prompt'
 import type { AdvisorLlm } from '../src/advisor-runtime'
 import type { Delta } from '../src/transcript'
 import type { ResolvedAdvisorConfig } from '../src/config'
-import { DEFAULT_NEXT_PROMPT_SYSTEM_PROMPT } from '../src/prompts'
+import { nextPromptSystemPrompt } from '../src/prompts'
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -58,6 +58,8 @@ const baseConfig = (): ResolvedAdvisorConfig => ({
   systemPrompt: '',
   immuneTurns: 3,
   maxDeltaMessages: 60,
+  nextPromptMaxChars: 120,
+  noteMaxChars: 768,
   nextPrompt: true,
   defaultEnabled: true,
 })
@@ -245,7 +247,8 @@ describe('gate (contract 1)', () => {
     expect(options).toMatchObject({
       provider: 'test-provider',
       model: 'test-model',
-      system: DEFAULT_NEXT_PROMPT_SYSTEM_PROMPT,
+      // GitHub issue #155: the serving budget rides the system prompt.
+      system: nextPromptSystemPrompt(120),
     })
     // An ordinary conversation request — the purpose marker stays unset.
     expect(options.purpose).toBeUndefined()
@@ -587,7 +590,10 @@ describe('shaping (contract 5)', () => {
     ['NONE', null],
     ['   ', null],
     ['', null],
-    ['a'.repeat(130), 'a'.repeat(120)],
+    // A single over-long word has no word boundary to land on: the bound falls
+    // back to a hard cut that reserves one code point for the `…` marker
+    // (GitHub issue #155 — the marker counts toward the bound).
+    ['a'.repeat(130), `${'a'.repeat(119)}…`],
     // C0 control characters (qc2 F-003): NUL-range and ESC/BS are stripped,
     // while whitespace C0 (\r) survives as the collapsed single space.
     ['fix\x1B[31mthe\x08\rbug', 'fix[31mthe bug'],
@@ -611,9 +617,9 @@ describe('shaping (contract 5)', () => {
     // exactly 120 code points (121 UTF-16 units) — kept whole, where a
     // unit-boundary slice would store the rocket's lone high surrogate.
     [`${'a'.repeat(119)}🚀`, `${'a'.repeat(119)}🚀`],
-    // The cap counts code points: 200 rockets truncate to 120 rockets (240
-    // UTF-16 units), not to 120 units.
-    ['🚀'.repeat(200), '🚀'.repeat(120)],
+    // The cap counts code points: 200 rockets truncate to 119 rockets + the `…`
+    // marker (120 code points, 239 UTF-16 units), not to 120 units.
+    ['🚀'.repeat(200), `${'🚀'.repeat(119)}…`],
   ]
 
   it.each(shapingCases)('stores the shaped single-line suggestion for %j', async (raw, expected) => {
@@ -637,12 +643,13 @@ describe('shaping (contract 5)', () => {
 
     const stored = manager.getSuggestion('s').suggestion
     expect(stored).not.toBeNull()
-    // 120 code points — the cap counts characters, not UTF-16 units.
+    // 120 code points — the bound counts characters, not UTF-16 units.
     expect(Array.from(stored!)).toHaveLength(120)
-    // The astral character at the old unit boundary (119 a's + 1 unit into
-    // the first rocket) is kept WHOLE: the stored text ends on the intact
-    // pair, and no high/low surrogate is unpaired anywhere.
-    expect(stored!.endsWith('🚀')).toBe(true)
+    // GitHub issue #155: the over-long reply ends with the `…` marker (the
+    // single 120-code-point run has no word boundary to cut on, so the hard
+    // cut applies) and no surrogate is unpaired — a unit-boundary slice would
+    // have split the first rocket.
+    expect(stored!.endsWith('…')).toBe(true)
     expect(stored).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/)
   })
 })
@@ -742,5 +749,66 @@ describe('reads and disposal (contract 6)', () => {
     llm.open(1)
     await settle()
     expect(manager.getSuggestion('s')).toEqual({ suggestion: 'fresh suggestion' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GitHub issue #155 — the suggestion bound is configurable
+// ---------------------------------------------------------------------------
+
+describe('configurable text bound (GitHub issue #155)', () => {
+  /** A 187-char reply with word breaks — the reproduction from the issue. */
+  const longReply = 'Добавь проверку типов перед коммитом и прогони тесты на всех платформах, потом обнови документацию и напиши заметку о задержке, потом добавь тест'
+
+  it('applies a custom bound to both the prompt budget and the stored text', async () => {
+    const llm = new FakeLlm([{ chunks: textReply(longReply) }])
+    const { manager } = makeManager(llm, () => ({ ...baseConfig(), nextPromptMaxChars: 60 }))
+
+    manager.onCompletedTurnEnd('s')
+    manager.onDelta('s', delta('### Session update\n\n**agent**: did work'))
+    await settle()
+
+    const stored = manager.getSuggestion('s').suggestion
+    expect(stored).not.toBeNull()
+    // 60 code points including the marker, cut on a word boundary.
+    expect(Array.from(stored!).length).toBeLessThanOrEqual(60)
+    expect(stored!.endsWith('…')).toBe(true)
+    expect(longReply.startsWith(stored!.slice(0, -1))).toBe(true)
+    // The same snapshot fed the prompt: the model was asked to fit 60 chars.
+    expect(llm.calls[0]!.system).toBe(nextPromptSystemPrompt(60))
+    expect(llm.calls[0]!.system).toContain('within 60 characters')
+  })
+
+  it('states the default budget in the prompt', async () => {
+    const llm = new FakeLlm([{ chunks: textReply('ship it') }])
+    const { manager } = makeManager(llm)
+
+    manager.onCompletedTurnEnd('s')
+    manager.onDelta('s', delta('### Session update\n\n**agent**: did work'))
+    await settle()
+
+    expect(manager.getSuggestion('s')).toEqual({ suggestion: 'ship it' })
+    expect(llm.calls[0]!.system).toBe(nextPromptSystemPrompt(120))
+    expect(llm.calls[0]!.system).toContain('within 120 characters')
+  })
+
+  it('reads the bound live per attempt — a config edit applies to the next prediction', async () => {
+    let bound = 120
+    const llm = new FakeLlm([{ chunks: textReply(longReply) }, { chunks: textReply(longReply) }])
+    const { manager } = makeManager(llm, () => ({ ...baseConfig(), nextPromptMaxChars: bound }))
+
+    manager.onCompletedTurnEnd('s')
+    manager.onDelta('s', delta('### Session update\n\n**agent**: did work'))
+    await settle()
+    expect(Array.from(manager.getSuggestion('s').suggestion!).length).toBeLessThanOrEqual(120)
+    expect(manager.getSuggestion('s').suggestion!.endsWith('…')).toBe(true)
+
+    bound = 200
+    manager.onCompletedTurnEnd('s')
+    manager.onDelta('s', delta('### Session update\n\n**agent**: did more work'))
+    await settle()
+    // The widened bound keeps the whole 187-code-point reply — no marker.
+    expect(manager.getSuggestion('s').suggestion).toBe(longReply)
+    expect(llm.calls[1]!.system).toBe(nextPromptSystemPrompt(200))
   })
 })

@@ -1597,3 +1597,43 @@ function minimalTurn(): EventSpec[] {
     { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
   ]
 }
+
+// ---------------------------------------------------------------------------
+// GitHub issue #155 — the note bound is configurable (`noteMaxChars`)
+// ---------------------------------------------------------------------------
+
+describe('AdvisorRuntime — configurable note bound (GitHub issue #155)', () => {
+  it('bounds the note with the configured value, not the 768 default', async () => {
+    const llm = new FakeLlm([{ chunks: textReply(JSON.stringify({ note: 'Я'.repeat(900), severity: 'nit' })) }])
+    const { runtime, notes } = makeRuntime(llm, { noteMaxChars: 128 })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(notes).toHaveLength(1)
+    expect(Array.from(notes[0]!.note)).toHaveLength(128)
+    expect(notes[0]!.note.endsWith('…')).toBe(true)
+  })
+
+  it('bounds the prose fallback note by the same configured value', async () => {
+    const llm = new FakeLlm([{ chunks: textReply('plain prose '.repeat(200)) }])
+    const { runtime, notes } = makeRuntime(llm, { proseFallback: true, noteMaxChars: 128 })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(notes).toHaveLength(1)
+    expect(Array.from(notes[0]!.note).length).toBeLessThanOrEqual(128)
+    expect(notes[0]!.note.endsWith('…')).toBe(true)
+  })
+
+  it('extractAdviceNote honors a custom bound directly', () => {
+    const long = 'Я'.repeat(900)
+    expect(Array.from(extractAdviceNote(JSON.stringify({ note: long, severity: 'nit' }), 128)!.note)).toHaveLength(128)
+  })
+
+  it('extractProseFallbackNote honors a custom bound directly', () => {
+    const long = 'Я'.repeat(900)
+    expect(Array.from(extractProseFallbackNote(long, 128)!.note)).toHaveLength(128)
+  })
+})

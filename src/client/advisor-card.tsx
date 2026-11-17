@@ -74,6 +74,7 @@ import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ApplyFailure, AdvisorSettingsState, AdvisorSettingsStore } from './advisor-store.ts'
 import type { AdvisorKey } from './locales.ts'
 import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from '../prompts.ts'
+import { MIN_ADVISOR_NOTE_MAX_CHARS, MIN_NEXT_PROMPT_MAX_CHARS } from '../text-limit.ts'
 import styles from './advisor-card.module.css'
 
 /** Injected dependencies of {@link AdvisorCard} (slot `inject`). The `hooks`
@@ -452,6 +453,46 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
                 controller.setMaxDeltaMessages(event.target.value === '' ? undefined : Number(event.target.value))
               }}
             />
+          </div>
+        </div>
+        {/* Text bounds (GitHub issue #155): the two user-visible caps were
+            hardcoded and cut the text silently. Both are positive integers
+            with a schema floor — clearing an input means "leave unchanged",
+            like the numeric fields above, never "no bound". */}
+        <div className={styles['numberFields']}>
+          <div className={styles['field']}>
+            <label htmlFor="advisor-next-prompt-max-chars" className={styles['fieldLabel']}>{t('nextPromptMaxChars')}</label>
+            <input
+              id="advisor-next-prompt-max-chars"
+              aria-label={t('nextPromptMaxChars')}
+              className={styles['input']}
+              type="number"
+              min={MIN_NEXT_PROMPT_MAX_CHARS}
+              step={1}
+              value={draft.nextPromptMaxChars ?? ''}
+              disabled={busy}
+              onChange={(event) => {
+                controller.setNextPromptMaxChars(event.target.value === '' ? undefined : Number(event.target.value))
+              }}
+            />
+            <p className={styles['hint']}>{t('nextPromptMaxCharsHint')}</p>
+          </div>
+          <div className={styles['field']}>
+            <label htmlFor="advisor-note-max-chars" className={styles['fieldLabel']}>{t('noteMaxChars')}</label>
+            <input
+              id="advisor-note-max-chars"
+              aria-label={t('noteMaxChars')}
+              className={styles['input']}
+              type="number"
+              min={MIN_ADVISOR_NOTE_MAX_CHARS}
+              step={1}
+              value={draft.noteMaxChars ?? ''}
+              disabled={busy}
+              onChange={(event) => {
+                controller.setNoteMaxChars(event.target.value === '' ? undefined : Number(event.target.value))
+              }}
+            />
+            <p className={styles['hint']}>{t('noteMaxCharsHint')}</p>
           </div>
         </div>
       </div>
