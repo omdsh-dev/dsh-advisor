@@ -71,6 +71,7 @@ import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { createEmissionGuard } from './emission-guard.js'
 import type { EmissionGuard } from './emission-guard.js'
 import type { AdvisorReasoningEffortState } from './commands.js'
+import { DEFAULT_ADVISOR_NOTE_MAX_CHARS, limitText } from './text-limit.js'
 import type { Delta } from './transcript.js'
 
 // ---------------------------------------------------------------------------
@@ -157,6 +158,14 @@ export interface AdvisorRuntimeOptions {
    */
   readonly proseFallback?: boolean
   /**
+   * Bound on the delivered advice note, in CODE POINTS (GitHub issue #155,
+   * config key `noteMaxChars` threaded through by `index.ts`): `0` disables
+   * the bound, any positive value caps the extracted note with a `…` marker on
+   * a word boundary. Default {@link ADVISOR_NOTE_MAX_CHARS} (768) — the
+   * historical hardcoded cap.
+   */
+  readonly noteMaxChars?: number
+  /**
    * Configured reasoning effort (plan dsh-advisor-reasoning-effort RD-1/RD-2,
    * config key `reasoningEffort` threaded through by `index.ts`): a
    * model-declared effort id. Absent/empty = AUTOMATIC — the runtime sends the
@@ -198,8 +207,11 @@ export interface AdvisorRuntimeOptions {
  * writes is the model's business (thinking blocks are discarded); what gets
  * injected into the primary session is bounded here. Latency stays bounded
  * by the 60 s call deadline (`callTimeoutMs`).
+ *
+ * By default this cap is {@link ADVISOR_NOTE_MAX_CHARS}; the config key
+ * `noteMaxChars` overrides it and `0` disables it (GitHub issue #155).
  */
-export const ADVISOR_NOTE_MAX_CHARS = 768
+export const ADVISOR_NOTE_MAX_CHARS = DEFAULT_ADVISOR_NOTE_MAX_CHARS
 
 const DEFAULT_RETRY_BACKOFF_MS = 1_000
 const DEFAULT_MAX_QUEUED = 32
@@ -262,10 +274,11 @@ function* balancedObjects(text: string): Generator<string> {
  * reserved for transport errors, KD-2). The note is capped at
  * {@link ADVISOR_NOTE_MAX_CHARS} with a '…' marker (qc3 F-2 — a rogue reply
  * must not translate into an unbounded injection into the primary session;
- * since the 2026-10-18 ruling this cap is the ONLY output bound). Never
- * throws.
+ * since the 2026-10-18 ruling this cap is the ONLY output bound). The bound is
+ * the `maxChars` parameter (config key `noteMaxChars`, GitHub issue #155,
+ * floored at 128 by the schema). Never throws.
  */
-export function extractAdviceNote(reply: string): AdviceNote | undefined {
+export function extractAdviceNote(reply: string, maxChars: number = ADVISOR_NOTE_MAX_CHARS): AdviceNote | undefined {
   for (const frame of balancedObjects(reply)) {
     let parsed: unknown
     try {
@@ -280,9 +293,7 @@ export function extractAdviceNote(reply: string): AdviceNote | undefined {
     const severity = record.severity
     const trimmed = note.trim()
     return {
-      note: trimmed.length > ADVISOR_NOTE_MAX_CHARS
-        ? `${trimmed.slice(0, ADVISOR_NOTE_MAX_CHARS - 1)}…`
-        : trimmed,
+      note: limitText(trimmed, maxChars),
       severity: severity === 'concern' || severity === 'blocker' ? severity : 'nit',
     }
   }
@@ -306,22 +317,21 @@ const SURROUNDING_FENCE_PATTERN = /^```[^\n]*\n([\s\S]*?)\n?```$/
  * frame yields a usable note still delivers that note.
  *
  * Cleanup: trim → strip ONE surrounding markdown fence (an unterminated or
- * non-surrounding fence is kept as-is) → cap at {@link ADVISOR_NOTE_MAX_CHARS}
- * with a '…' marker (the same injection bound as {@link extractAdviceNote} —
- * the only output bound). An empty result (whitespace-only reply, fence-only
+ * non-surrounding fence is kept as-is) → bound at `maxChars` CODE POINTS with
+ * a '…' marker on a word boundary (the same injection bound as
+ * {@link extractAdviceNote} — the only output bound; `maxChars` 0 keeps the
+ * full text). An empty result (whitespace-only reply, fence-only
  * reply) is NOT
  * prose: the caller classifies it as an EMPTY drop (KD-I3), never as an
  * unparsed/prose case. Severity is always `nit` — prose carries no structured
  * severity. Never throws.
  */
-export function extractProseFallbackNote(reply: string): AdviceNote | undefined {
+export function extractProseFallbackNote(reply: string, maxChars: number = ADVISOR_NOTE_MAX_CHARS): AdviceNote | undefined {
   const match = SURROUNDING_FENCE_PATTERN.exec(reply.trim())
   const text = (match?.[1] ?? reply).trim()
   if (text.length === 0) return undefined
   return {
-    note: text.length > ADVISOR_NOTE_MAX_CHARS
-      ? `${text.slice(0, ADVISOR_NOTE_MAX_CHARS - 1)}…`
-      : text,
+    note: limitText(text, maxChars),
     severity: 'nit',
   }
 }
@@ -454,6 +464,8 @@ export class AdvisorRuntime {
   private readonly sessionId: SessionId
   private readonly systemPrompt: string
   private readonly proseFallback: boolean
+  /** Delivered-note bound in code points; see {@link AdvisorRuntimeOptions.noteMaxChars}. */
+  private readonly noteMaxChars: number
   /** Configured effort id, normalized: `undefined` = automatic (smallest declared). */
   private readonly reasoningEffort: string | undefined
   private readonly retryBackoffMs: number
@@ -514,6 +526,7 @@ export class AdvisorRuntime {
     this.sessionId = options.sessionId
     this.systemPrompt = options.systemPrompt
     this.proseFallback = options.proseFallback ?? false
+    this.noteMaxChars = options.noteMaxChars ?? DEFAULT_ADVISOR_NOTE_MAX_CHARS
     // Empty/whitespace = automatic, identical to an absent option: the config
     // snapshot already normalizes it, and re-checking here keeps a direct
     // construction from sending '' or warning about a blank value.
@@ -838,7 +851,7 @@ export class AdvisorRuntime {
     // debug-only. Drops still return 'no-note': KD-2 extraction failures are
     // output-quality issues, not transport failures (no KD-5 retry, no
     // consecutive-drop counting).
-    let note = extractAdviceNote(text)
+    let note = extractAdviceNote(text, this.noteMaxChars)
     if (note === undefined) {
       if (text.trim().length === 0) {
         this.recordEmptyReply(finish)
@@ -850,7 +863,7 @@ export class AdvisorRuntime {
       // prose body become a nit note and re-enter the normal guard/delivery
       // pipeline below. With the flag off the reply is dropped exactly as
       // before (default behavior unchanged).
-      if (this.proseFallback) note = extractProseFallbackNote(text)
+      if (this.proseFallback) note = extractProseFallbackNote(text, this.noteMaxChars)
       if (note === undefined) {
         this.recordUnparsedReply()
         return { kind: 'no-note' }

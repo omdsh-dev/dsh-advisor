@@ -144,6 +144,8 @@ describe('no settings service (entry fallback)', () => {
         systemPrompt: '',
         immuneTurns: 5,
         maxDeltaMessages: 60,
+        nextPromptMaxChars: 120,
+        noteMaxChars: 768,
         proseFallback: false,
         nextPrompt: true,
         defaultEnabled: true,
@@ -200,6 +202,10 @@ describe('with a settings service (set writes the entry config)', () => {
       systemPrompt: 'entry prompt',
       immuneTurns: 5,
       maxDeltaMessages: 60,
+      // GitHub issue #155: both text bounds are schema-defaulted numbers, so
+      // they ride every resolved read.
+      nextPromptMaxChars: 120,
+      noteMaxChars: 768,
       proseFallback: false,
       nextPrompt: true,
       defaultEnabled: true,
@@ -238,6 +244,8 @@ describe('with a settings service (set writes the entry config)', () => {
         systemPrompt: '',
         immuneTurns: 3,
         maxDeltaMessages: 10,
+        nextPromptMaxChars: 120,
+        noteMaxChars: 768,
         proseFallback: false,
         nextPrompt: true,
         defaultEnabled: true,
@@ -267,6 +275,8 @@ describe('with a settings service (set writes the entry config)', () => {
         systemPrompt: 'entry prompt',
         immuneTurns: 3,
         maxDeltaMessages: 10,
+        nextPromptMaxChars: 120,
+        noteMaxChars: 768,
         proseFallback: false,
         nextPrompt: true,
         defaultEnabled: true,
@@ -308,6 +318,8 @@ describe('with a settings service (set writes the entry config)', () => {
       systemPrompt: 'edited',
       immuneTurns: 3,
       maxDeltaMessages: 60,
+      nextPromptMaxChars: 120,
+      noteMaxChars: 768,
       proseFallback: false,
       nextPrompt: true,
       defaultEnabled: true,
@@ -575,6 +587,8 @@ describe('typertGateway endpoint claims + payload contract', () => {
           systemPrompt: 'entry prompt',
           immuneTurns: 5,
           maxDeltaMessages: 60,
+          nextPromptMaxChars: 120,
+          noteMaxChars: 768,
           proseFallback: false,
           nextPrompt: true,
           defaultEnabled: true,
@@ -887,6 +901,8 @@ describe('composed plugin (apply wires the gateway)', () => {
       systemPrompt: 'entry prompt',
       immuneTurns: 5,
       maxDeltaMessages: 60,
+      nextPromptMaxChars: 120,
+      noteMaxChars: 768,
       proseFallback: false,
       nextPrompt: true,
       defaultEnabled: true,
@@ -917,6 +933,8 @@ describe('composed plugin (apply wires the gateway)', () => {
       systemPrompt: 'entry prompt',
       immuneTurns: 5,
       maxDeltaMessages: 60,
+      nextPromptMaxChars: 120,
+      noteMaxChars: 768,
       proseFallback: false,
       nextPrompt: true,
       defaultEnabled: true,
@@ -1148,5 +1166,29 @@ describe('AdvisorConfigGateway.modelReasoning (capability endpoint arms)', () =>
       })
     }
     expect(resolveModelInfo).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GitHub issue #155 — text bounds on the settings wire
+// ---------------------------------------------------------------------------
+
+describe('text bounds round-trip (GitHub issue #155)', () => {
+  it('writes and reads back both bounds at their schema floors', async () => {
+    const ctx = new Context()
+    const entry = new MemoryEntryConfig(entryConfig({ provider: 'deepseek', model: 'deepseek-chat' }))
+    const bridge = installAdvisorSettings(ctx, entry.config)
+    const gateway = new AdvisorConfigGateway(ctx, bridge)
+    await provideSettingsDouble(ctx, entry)
+    await waitCaptured(ctx, gateway)
+
+    await gateway.set({ noteMaxChars: 128, nextPromptMaxChars: 50 })
+
+    const read = gateway.get()
+    expect(read.config.noteMaxChars).toBe(128)
+    expect(read.config.nextPromptMaxChars).toBe(50)
+    // The pair is untouched by a bounds-only patch.
+    expect(read.config.provider).toBe('deepseek')
+    expect(read.config.model).toBe('deepseek-chat')
   })
 })

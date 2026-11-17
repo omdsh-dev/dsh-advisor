@@ -86,6 +86,8 @@ function baseConfig(overrides: Partial<AdvisorComposedConfig> = {}): AdvisorComp
     enabled: false,
     immuneTurns: 3,
     maxDeltaMessages: 60,
+    nextPromptMaxChars: 120,
+    noteMaxChars: 768,
     defaultEnabled: true,
     systemPromptSet: false,
     systemPromptSummary: '',

@@ -29,7 +29,8 @@ import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type { AdvisorLlm, AdvisorRuntimeLogger } from './advisor-runtime.js'
 import type { AdvisorSuggestionFace } from './gateway.js'
 import type { ResolvedAdvisorConfig } from './config.js'
-import { DEFAULT_NEXT_PROMPT_SYSTEM_PROMPT } from './prompts.js'
+import { nextPromptSystemPrompt } from './prompts.js'
+import { DEFAULT_ADVISOR_NOTE_MAX_CHARS, DEFAULT_NEXT_PROMPT_MAX_CHARS, limitText } from './text-limit.js'
 import type { Delta } from './transcript.js'
 
 // ---------------------------------------------------------------------------
@@ -37,13 +38,15 @@ import type { Delta } from './transcript.js'
 // ---------------------------------------------------------------------------
 
 /**
- * Hard cap for one stored/served next-prompt suggestion (contract 5): the
- * text is always single-line and never longer than this — counted in CODE
- * POINTS, not UTF-16 code units (an astral emoji is one character, two
- * units; qc2 F-003). A verbose/rogue predictor reply must not grow the web
- * surface (T3) unboundedly.
+ * Default bound for one stored/served next-prompt suggestion (contract 5):
+ * the text is always single-line and, while the bound is active, never longer
+ * than it — counted in CODE POINTS, not UTF-16 code units (an astral emoji is
+ * one character, two units; qc2 F-003). The bound is CONFIGURABLE since
+ * GitHub issue #155 (`nextPromptMaxChars`, floored at 50 by the schema): a
+ * verbose/rogue predictor reply must not grow the web surface (T3), while an
+ * operator can shorten or modestly grow the bound.
  */
-export const NEXT_PROMPT_MAX_CHARS = 120
+export const NEXT_PROMPT_MAX_CHARS = DEFAULT_NEXT_PROMPT_MAX_CHARS
 
 /**
  * Whole-call deadline for one prediction `llm.stream` — deliberately tighter
@@ -154,12 +157,14 @@ const INVISIBLE_MARK_PATTERN =
  * surrounding code fence → strip ONE layer of surrounding quotes/backticks →
  * collapse every whitespace run (newlines included) to single spaces → reject
  * the empty result and the literal `NONE` (the "nothing predictable" marker
- * the system prompt pins) → truncate to {@link NEXT_PROMPT_MAX_CHARS} CODE
- * POINTS (never a UTF-16 slice: a unit-boundary cut could split a surrogate
- * pair and store a lone surrogate that renders as U+FFFD). Returns
- * `undefined` for a dropped reply. Never throws.
+ * the system prompt pins) → bound to `maxChars` CODE POINTS when the bound is
+ * active (never a UTF-16 slice: a unit-boundary cut could split a surrogate
+ * pair and store a lone surrogate that renders as U+FFFD; the cut lands on a
+ * word boundary with a `…` marker, so a shortened suggestion never reads as a
+ * complete one — GitHub issue #155). Returns `undefined` for a dropped
+ * reply. Never throws.
  */
-function shapeNextPrompt(raw: string): string | undefined {
+function shapeNextPrompt(raw: string, maxChars: number = NEXT_PROMPT_MAX_CHARS): string | undefined {
   let text = raw.replace(C0_CONTROL_PATTERN, '').replace(INVISIBLE_MARK_PATTERN, '').trim()
   const fence = SURROUNDING_FENCE_PATTERN.exec(text)
   if (fence !== null) text = fence[1]!.trim()
@@ -181,11 +186,11 @@ function shapeNextPrompt(raw: string): string | undefined {
   // Case-insensitive: the prompt pins the literal `NONE`, but a lowercase
   // "none" means the same nothing-predictable signal.
   if (text.toUpperCase() === 'NONE') return undefined
-  // Code-point truncation: count code points, not UTF-16 code units, so a
-  // surrogate pair (any astral character, e.g. an emoji) is never split —
-  // a unit-boundary cut would store a lone surrogate that renders as U+FFFD.
-  const points = Array.from(text)
-  return points.length > NEXT_PROMPT_MAX_CHARS ? points.slice(0, NEXT_PROMPT_MAX_CHARS).join('') : text
+  // Code-point bound (GitHub issue #155): the shared helper counts code points,
+  // cuts on a word boundary and appends `…` within the bound. A unit-boundary
+  // cut would store a lone surrogate that renders as U+FFFD, which is why the
+  // bound is never a UTF-16 slice.
+  return limitText(text, maxChars)
 }
 
 // ---------------------------------------------------------------------------
@@ -337,6 +342,11 @@ export class NextPromptManager {
         immuneTurns: 0,
         maxDeltaMessages: 60,
         nextPrompt: false,
+        // Issue #155 bounds: fail-closed placeholder values are inert (the
+        // disabled gate blocks every prediction) — keep the schema defaults
+        // for consistency with the resolver contract.
+        nextPromptMaxChars: DEFAULT_NEXT_PROMPT_MAX_CHARS,
+        noteMaxChars: DEFAULT_ADVISOR_NOTE_MAX_CHARS,
         // Fail-closed placeholder (GitHub issue #124 adds the plain-boolean
         // field): the disabled gate already blocks every prediction, so the
         // concrete value is inert — keep the schema default for consistency.
@@ -367,7 +377,10 @@ export class NextPromptManager {
    * mid-chain (`/advisor off`, `nextPrompt: false`) aborts the chain
    * immediately — no further model call goes out — and a CHANGED
    * provider/model pair aborts too (this prediction is never re-routed; the
-   * next turn predicts fresh under the new pair).
+   * next turn predicts fresh under the new pair). The text bound rides the
+   * same per-attempt read (GitHub issue #155): one `nextPromptMaxChars`
+   * snapshot per attempt feeds BOTH the prompt budget and the shaping, so a
+   * mid-flight settings edit can never split an attempt across two bounds.
    */
   private async predict(
     sessionId: string,
@@ -393,8 +406,13 @@ export class NextPromptManager {
         return // the pair changed mid-chain — do not re-route this prediction
       }
       pair = attemptPair
-      const raw = await this.callOnce(context, attemptPair.provider, attemptPair.model, sessionId)
-      text = raw === undefined ? undefined : shapeNextPrompt(raw)
+      // ONE bound snapshot per attempt (GitHub issue #155): the same value
+      // feeds the prompt budget and the shaping step, so a settings edit that
+      // lands mid-call cannot mix two different bounds inside one attempt;
+      // the next attempt reads the then-live value.
+      const attemptMaxChars = config.nextPromptMaxChars
+      const raw = await this.callOnce(context, attemptPair.provider, attemptPair.model, sessionId, attemptMaxChars)
+      text = raw === undefined ? undefined : shapeNextPrompt(raw, attemptMaxChars)
       if (text !== undefined) break
     }
     if (text === undefined) {
@@ -415,12 +433,18 @@ export class NextPromptManager {
    * retry budget covers them; there is no finish-reason contract here (the
    * collected text is the whole best-effort result).
    */
-  private async callOnce(context: string, provider: string, model: string, sessionId: string): Promise<string | undefined> {
+  private async callOnce(
+    context: string,
+    provider: string,
+    model: string,
+    sessionId: string,
+    maxChars: number,
+  ): Promise<string | undefined> {
     let text = ''
     using deadlineHandle = deadline(undefined, this.callTimeoutMs, NEXT_PROMPT_CALL_TIMEOUT)
     const signal = deadlineHandle.signal
     try {
-      const stream = this.options.llm().stream(this.buildOptions(context, provider, model, signal, sessionId))
+      const stream = this.options.llm().stream(this.buildOptions(context, provider, model, signal, sessionId, maxChars))
       const iterator = stream[Symbol.asyncIterator]()
       for (;;) {
         const next = await raceIteratorNext(iterator, signal)
@@ -440,11 +464,21 @@ export class NextPromptManager {
     return text
   }
 
-  private buildOptions(context: string, provider: string, model: string, signal: AbortSignal, sessionId: string): GenerateOptions {
+  private buildOptions(
+    context: string,
+    provider: string,
+    model: string,
+    signal: AbortSignal,
+    sessionId: string,
+    maxChars: number,
+  ): GenerateOptions {
     return {
       provider,
       model,
-      system: DEFAULT_NEXT_PROMPT_SYSTEM_PROMPT,
+      // The serving bound rides the system prompt (GitHub issue #155) so the
+      // model is asked to fit instead of being trimmed afterwards; the shaping
+      // step stays the enforcement.
+      system: nextPromptSystemPrompt(maxChars),
       messages: [createUserMessage({
         content: [{ type: 'text', text: context }],
         source: { kind: 'user' },

@@ -69,6 +69,7 @@ import type { AdviceNote } from './advisor-runtime.js'
 import { AdvisorDelivery, advisorAdviceFace } from './delivery.js'
 import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts.js'
 import { advisorSuggestionFace, NextPromptManager } from './next-prompt.js'
+import { DEFAULT_ADVISOR_NOTE_MAX_CHARS, DEFAULT_NEXT_PROMPT_MAX_CHARS } from './text-limit.js'
 import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { AdvisorSessionOverrides, registerAdvisorCommands, summarizeSystemPrompt, ADVISOR_MODEL_VALIDATION_TIMEOUT_MS } from './commands.js'
 import type {
@@ -275,6 +276,10 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       systemPrompt: raw?.systemPrompt ?? '',
       immuneTurns: raw?.immuneTurns ?? 3,
       maxDeltaMessages: raw?.maxDeltaMessages ?? 60,
+      // GitHub issue #155: both bounds are plain numbers on the resolved
+      // contract — an unreadable/invalid entry keeps the schema defaults.
+      nextPromptMaxChars: raw?.nextPromptMaxChars ?? DEFAULT_NEXT_PROMPT_MAX_CHARS,
+      noteMaxChars: raw?.noteMaxChars ?? DEFAULT_ADVISOR_NOTE_MAX_CHARS,
       // T1 (plan dsh-advisor-next-prompt-n12): the resolved contract types
       // nextPrompt as a plain boolean — an absent raw key means the schema
       // default (true; enabled:false already blocks every prediction call).
@@ -475,6 +480,13 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       effective.model ?? '',
       effective.systemPrompt,
       globalResolved.proseFallback ?? false,
+      // GitHub issue #155: the advice-note bound is a review-call CONSTRUCTION
+      // constant (the runtime reads it at extraction), so an edit rebuilds the
+      // session runtime once — the same rule as proseFallback. Normalized with
+      // the runtime's own default so an absent-vs-explicit-default edit is not
+      // a teardown. `nextPromptMaxChars` is deliberately ABSENT: the predictor
+      // reads it live per attempt, exactly like `nextPrompt`.
+      globalResolved.noteMaxChars ?? DEFAULT_ADVISOR_NOTE_MAX_CHARS,
       // GitHub issue #142: the session pin wins over the global value.
       effectiveReasoningEffort(sessionId) ?? '',
       // `nextPrompt` is deliberately ABSENT (plan dsh-advisor-next-prompt-n12,
@@ -520,6 +532,9 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       sessionId: sessionId as SessionId,
       systemPrompt: globalResolved.systemPrompt || DEFAULT_ADVISOR_SYSTEM_PROMPT,
       proseFallback: globalResolved.proseFallback,
+      // GitHub issue #155: the delivered-note bound (schema floor 128), a
+      // runtime construction constant — see runtimeSignature above.
+      noteMaxChars: globalResolved.noteMaxChars,
       // Plan dsh-advisor-reasoning-effort (RD-1/RD-2): absent/empty = the
       // smallest effort the resolved model declares.
       reasoningEffort: effectiveReasoningEffort(sessionId),
@@ -1049,6 +1064,11 @@ export function apply(ctx: Context, config: AdvisorConfig) {
         model: resolved.model,
         immuneTurns: resolved.immuneTurns,
         maxDeltaMessages: resolved.maxDeltaMessages,
+        // GitHub issue #155: both text bounds ride the same resolved source and
+        // are plain numbers on every resolver arm (schema defaults), so the
+        // readback always renders them (schema-floored positive integers).
+        nextPromptMaxChars: resolved.nextPromptMaxChars,
+        noteMaxChars: resolved.noteMaxChars,
         // qc1 S-1 / FW-1b R-1: the issue-#102 keys ride the same resolved
         // source the renderer reads. Present on the normal path (the schema
         // default fills false on the Loader resolution), absent on the S1

@@ -49,6 +49,14 @@ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SettingsSchemaService } from '@deepseek-ai/dsh-client-ui-settings/client'
+import {
+  DEFAULT_ADVISOR_NOTE_MAX_CHARS,
+  DEFAULT_NEXT_PROMPT_MAX_CHARS,
+  MAX_ADVISOR_NOTE_MAX_CHARS,
+  MAX_NEXT_PROMPT_MAX_CHARS,
+  MIN_ADVISOR_NOTE_MAX_CHARS,
+  MIN_NEXT_PROMPT_MAX_CHARS,
+} from '../text-limit.js'
 /**
  * The schema face the card store uses: ui-settings owns the immutable
  * path writers (`ctx.settingsSchema`); this narrow pick hides the Cordis
@@ -125,6 +133,14 @@ export interface AdvisorConfigView {
    * containment wire that omitted the key still reads the default.
    */
   defaultEnabled?: boolean
+  /**
+   * Bound on the stored next-prompt suggestion in code points (GitHub issue
+   * #155); integer in [50, 2000]. A schema-defaulted number, so the resolved wire
+   * always carries it.
+   */
+  nextPromptMaxChars?: number
+  /** Bound on the delivered advice note in code points (GitHub issue #155); integer in [128, 4096]. */
+  noteMaxChars?: number
   /** Present iff the advisor is disabled by the explicit model gate. */
   disabledReason?: string
 }
@@ -219,6 +235,18 @@ export interface AdvisorDraft {
    * does not pin (an absent key reads the schema default below).
    */
   defaultEnabled?: boolean
+  /**
+   * Bound on the stored next-prompt suggestion in code points (GitHub issue
+   * #155); integer in [50, 2000], default 120. Cleared input → undefined (left
+   * unchanged on apply).
+   */
+  nextPromptMaxChars?: number
+  /**
+   * Bound on the delivered advice note in code points (GitHub issue #155);
+   * integer in [128, 4096], default 768. Cleared input → undefined (left
+   * unchanged on apply).
+   */
+  noteMaxChars?: number
 }
 
 /** Why an Apply failed (copy keys resolve in the card; raw text passes through). */
@@ -302,7 +330,13 @@ export interface AdvisorSettingsState {
 
 /** The schema-defaulted advisor config used when no config resolves. */
 function defaultDraft(): AdvisorDraft {
-  return { systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 }
+  return {
+    systemPrompt: '',
+    immuneTurns: 3,
+    maxDeltaMessages: 60,
+    nextPromptMaxChars: DEFAULT_NEXT_PROMPT_MAX_CHARS,
+    noteMaxChars: DEFAULT_ADVISOR_NOTE_MAX_CHARS,
+  }
 }
 
 /** A non-empty string field (whitespace-only reads as absent, mirroring the hard gate). */
@@ -310,9 +344,16 @@ function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined
 }
 
-/** A bounded integer field (int ≥ 0) with a schema-default fallback. */
-function numberField(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback
+/** A bounded integer field with a schema-default fallback. */
+function numberField(
+  value: unknown,
+  fallback: number,
+  min = 0,
+  max = Number.MAX_SAFE_INTEGER,
+): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, Math.floor(value)))
+    : fallback
 }
 
 /**
@@ -327,6 +368,21 @@ function draftOfConfig(config: AdvisorConfigView | undefined): AdvisorDraft {
     systemPrompt: typeof config?.systemPrompt === 'string' ? config.systemPrompt : '',
     immuneTurns: numberField(config?.immuneTurns, 3),
     maxDeltaMessages: numberField(config?.maxDeltaMessages, 60),
+    // GitHub issue #155: the two text bounds are schema-defaulted numbers, so
+    // the wire always carries them; the fallbacks mirror the schema defaults
+    // for the degraded wires (S1 containment).
+    nextPromptMaxChars: numberField(
+      config?.nextPromptMaxChars,
+      DEFAULT_NEXT_PROMPT_MAX_CHARS,
+      MIN_NEXT_PROMPT_MAX_CHARS,
+      MAX_NEXT_PROMPT_MAX_CHARS,
+    ),
+    noteMaxChars: numberField(
+      config?.noteMaxChars,
+      DEFAULT_ADVISOR_NOTE_MAX_CHARS,
+      MIN_ADVISOR_NOTE_MAX_CHARS,
+      MAX_ADVISOR_NOTE_MAX_CHARS,
+    ),
     // The scalar fields show the effective values: the gateway returns the
     // resolved config, so the wire carries both keys whenever the resolver
     // defined them (the schema default fills false on the normal path); this
@@ -846,6 +902,38 @@ export class AdvisorSettingsStore {
   }
 
   /**
+   * Set the next-prompt suggestion bound (GitHub issue #155): integer code
+   * points in [50, 2000]. A cleared input omits the key from the patch (the
+   * stored value stands); a non-finite input keeps the current draft value.
+   */
+  setNextPromptMaxChars(value: number | undefined): void {
+    if (value === undefined) {
+      this.clearField('nextPromptMaxChars')
+      return
+    }
+    this.setField('nextPromptMaxChars', this.clampInt(
+      value,
+      this.store.getSnapshot().draft.nextPromptMaxChars ?? DEFAULT_NEXT_PROMPT_MAX_CHARS,
+      MIN_NEXT_PROMPT_MAX_CHARS,
+      MAX_NEXT_PROMPT_MAX_CHARS,
+    ))
+  }
+
+  /** Set the delivered advice-note bound (GitHub issue #155): integer code points in [128, 4096]. */
+  setNoteMaxChars(value: number | undefined): void {
+    if (value === undefined) {
+      this.clearField('noteMaxChars')
+      return
+    }
+    this.setField('noteMaxChars', this.clampInt(
+      value,
+      this.store.getSnapshot().draft.noteMaxChars ?? DEFAULT_ADVISOR_NOTE_MAX_CHARS,
+      MIN_ADVISOR_NOTE_MAX_CHARS,
+      MAX_ADVISOR_NOTE_MAX_CHARS,
+    ))
+  }
+
+  /**
    * Refuse in a read-only environment (store-side defense-in-depth for the
    * W-1 invariant — a write must never be issued when the UI declares the
    * settings service read-only), then validate the draft (KD-S4 gate) and
@@ -972,7 +1060,7 @@ export class AdvisorSettingsStore {
    */
   private patchFor(draft: AdvisorDraft): Record<string, unknown> {
     const patch: Record<string, unknown> = {}
-    const always = ['systemPrompt', 'immuneTurns', 'maxDeltaMessages', 'proseFallback', 'nextPrompt', 'defaultEnabled'] as const
+    const always = ['systemPrompt', 'immuneTurns', 'maxDeltaMessages', 'proseFallback', 'nextPrompt', 'defaultEnabled', 'nextPromptMaxChars', 'noteMaxChars'] as const
     for (const key of always) {
       const next = draft[key]
       // A cleared number input (undefined) means "leave the stored value

@@ -46,6 +46,8 @@ describe('schema defaults (cordis Loader path, spec §5.1)', () => {
       systemPrompt: '',
       immuneTurns: 3,
       maxDeltaMessages: 60,
+      nextPromptMaxChars: 120,
+      noteMaxChars: 768,
       proseFallback: false,
       nextPrompt: true,
       defaultEnabled: true,
@@ -66,6 +68,8 @@ describe('schema defaults (cordis Loader path, spec §5.1)', () => {
       systemPrompt: 'custom reviewer prompt',
       immuneTurns: 5,
       maxDeltaMessages: 10,
+      nextPromptMaxChars: 120,
+      noteMaxChars: 768,
       proseFallback: true,
       nextPrompt: true,
       defaultEnabled: true,
@@ -169,6 +173,8 @@ describe('explicit model gate (S4 / spec §5.2)', () => {
       systemPrompt: 'custom',
       immuneTurns: 5,
       maxDeltaMessages: 0,
+      nextPromptMaxChars: 120,
+      noteMaxChars: 768,
       proseFallback: true,
       nextPrompt: true,
       defaultEnabled: true,
@@ -243,6 +249,8 @@ describe('strict schema — unknown keys rejected (spec §5.2)', () => {
       systemPrompt: '',
       immuneTurns: 3,
       maxDeltaMessages: 60,
+      nextPromptMaxChars: 120,
+      noteMaxChars: 768,
       proseFallback: false,
       nextPrompt: true,
       defaultEnabled: true,
@@ -262,6 +270,8 @@ describe('strict schema — unknown keys rejected (spec §5.2)', () => {
       systemPrompt: '',
       immuneTurns: 3,
       maxDeltaMessages: 60,
+      nextPromptMaxChars: 120,
+      noteMaxChars: 768,
       proseFallback: false,
       nextPrompt: true,
       defaultEnabled: true,
@@ -307,6 +317,8 @@ describe('strict schema — unknown keys rejected (spec §5.2)', () => {
       maxDeltaMessages: 10,
       proseFallback: true,
       reasoningEffort: 'high',
+      nextPromptMaxChars: 120,
+      noteMaxChars: 768,
       nextPrompt: true,
       defaultEnabled: true,
     })
@@ -432,6 +444,57 @@ describe('nextPrompt key (plan dsh-advisor-next-prompt-n12, T1)', () => {
     expect(() => resolveAdvisorConfig({ provider: 'p', model: 'm', nextPrompts: true }))
       .toThrow(/unknown config key "nextPrompts"/)
     expect(() => resolveAdvisorConfig({ provider: 'p', model: 'm', nextPrompt: 'yes' as never }))
+      .toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GitHub issue #155 — configurable text bounds
+// ---------------------------------------------------------------------------
+
+describe('text bounds — configurable truncation limits (GitHub issue #155)', () => {
+  it('defaults both bounds in the Loader schema and on the resolver', () => {
+    const schema = unwrapAdvisorConfig(Config({}))
+    expect(schema.nextPromptMaxChars).toBe(120)
+    expect(schema.noteMaxChars).toBe(768)
+    // The plain-object resolver path fills the same defaults.
+    const resolved = resolveAdvisorConfig({ provider: 'p', model: 'm' })
+    expect(resolved.nextPromptMaxChars).toBe(120)
+    expect(resolved.noteMaxChars).toBe(768)
+  })
+
+  it('keeps explicit values over defaults and accepts both schema floors', () => {
+    const floors = resolveAdvisorConfig({ provider: 'p', model: 'm', nextPromptMaxChars: 50, noteMaxChars: 128 })
+    expect(floors.nextPromptMaxChars).toBe(50)
+    expect(floors.noteMaxChars).toBe(128)
+    const capped = resolveAdvisorConfig({ provider: 'p', model: 'm', nextPromptMaxChars: 500, noteMaxChars: 4_000 })
+    expect(capped.nextPromptMaxChars).toBe(500)
+    expect(capped.noteMaxChars).toBe(4_000)
+  })
+
+  it('treats null like absent — the schema default fills it', () => {
+    const resolved = resolveAdvisorConfig({ provider: 'p', model: 'm', nextPromptMaxChars: null as never, noteMaxChars: null as never })
+    expect(resolved.nextPromptMaxChars).toBe(120)
+    expect(resolved.noteMaxChars).toBe(768)
+  })
+
+  it('rejects 0 — there is no unbounded opt-out', () => {
+    expect(() => Config({ nextPromptMaxChars: 0 })).toThrow()
+    expect(() => Config({ noteMaxChars: 0 })).toThrow()
+  })
+
+  it('rejects values below the floor, above the ceiling and non-integers', () => {
+    expect(() => Config({ nextPromptMaxChars: 49 })).toThrow()
+    expect(() => Config({ nextPromptMaxChars: 2_001 })).toThrow()
+    expect(() => Config({ noteMaxChars: 127 })).toThrow()
+    expect(() => Config({ noteMaxChars: 4_097 })).toThrow()
+    expect(() => Config({ nextPromptMaxChars: '120' as never })).toThrow()
+  })
+
+  it('keeps strict unknown-key rejection for near-miss names', () => {
+    expect(() => resolveAdvisorConfig({ provider: 'p', model: 'm', noteMaxChar: 100 }))
+      .toThrow(/unknown config key "noteMaxChar"/)
+    expect(() => resolveAdvisorConfig({ provider: 'p', model: 'm', nextPromptMaxChars: '120' as never }))
       .toThrow()
   })
 })

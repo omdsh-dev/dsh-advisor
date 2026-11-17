@@ -270,6 +270,10 @@ describe('providers join (KD-S2 configured determination)', () => {
       systemPrompt: '',
       immuneTurns: 3,
       maxDeltaMessages: 60,
+      // GitHub issue #155: the two text bounds seed from the resolved config
+      // (schema-defaulted numbers, so an absent wire key reads the default).
+      nextPromptMaxChars: 120,
+      noteMaxChars: 768,
       proseFallback: false,
       nextPrompt: true,
       defaultEnabled: true,
@@ -972,14 +976,16 @@ describe('gateway availability (KD-G5 — advisorPresent)', () => {
     expect(state.advisorPresent).toBe(false)
     // The pristine (unseeded) draft stays the schema defaults — NOT marked
     // seeded, so the next successful load can still seed.
-    expect(state.draft).toEqual({ systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 })
+    expect(state.draft).toEqual({
+      systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, nextPromptMaxChars: 120, noteMaxChars: 768,
+    })
     // Gateway recovers: the next load seeds the ACTUAL config.
     await store.load()
     state = store.store.getSnapshot()
     expect(state.advisorPresent).toBe(true)
     expect(state.draft).toEqual({
       provider: 'deepseek-official', model: 'ds-a',
-      systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
+      systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20, nextPromptMaxChars: 120, noteMaxChars: 768,
       proseFallback: false,
       nextPrompt: true,
       defaultEnabled: true,
@@ -1027,7 +1033,7 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
     // The draft is exactly the seed again — every edited key rewound.
     expect(draftOf(store)).toEqual({
       provider: 'deepseek-official', model: 'ds-a',
-      systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
+      systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20, nextPromptMaxChars: 120, noteMaxChars: 768,
       proseFallback: false,
       nextPrompt: true,
       defaultEnabled: true,
@@ -1054,7 +1060,7 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
     // The empty apply leaves the rewound draft untouched (no re-seed, no re-write).
     expect(draftOf(store)).toEqual({
       provider: 'deepseek-official', model: 'ds-a',
-      systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60,
+      systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, nextPromptMaxChars: 120, noteMaxChars: 768,
       proseFallback: false,
       nextPrompt: true,
       defaultEnabled: true,
@@ -1122,12 +1128,12 @@ describe('discard (card draft rewind — T2 store add, T3 review)', () => {
     // The rewind target is the default (failed-get) seed — the effective
     // defaults view, still inventing NO provider/model (the gate/wipe hazard
     // this pin guards); the recovery below must still seed the REAL config.
-    expect(draftOf(store)).toEqual({ systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, proseFallback: false, nextPrompt: true, defaultEnabled: true })
+    expect(draftOf(store)).toEqual({ systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, nextPromptMaxChars: 120, noteMaxChars: 768, proseFallback: false, nextPrompt: true, defaultEnabled: true })
     await store.load()
     expect(store.store.getSnapshot().advisorPresent).toBe(true)
     expect(draftOf(store)).toEqual({
       provider: 'deepseek-official', model: 'ds-a',
-      systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20,
+      systemPrompt: 'entry', immuneTurns: 7, maxDeltaMessages: 20, nextPromptMaxChars: 120, noteMaxChars: 768,
       proseFallback: false,
       nextPrompt: true,
       defaultEnabled: true,
@@ -1641,5 +1647,55 @@ describe('thinking-effort capability (plan dsh-advisor-reasoning-effort, task 3)
     await store.apply()
     expect(set).not.toHaveBeenCalled()
     expect(store.store.getSnapshot().applyState.kind).toBe('saved')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GitHub issue #155 — the two text bounds in the card draft
+// ---------------------------------------------------------------------------
+
+describe('text bounds draft (GitHub issue #155)', () => {
+  it('seeds both bounds from the resolved config (absent wire key → schema default)', async () => {
+    const { remote, rpc } = scriptedApi({
+      config: {
+        enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60,
+        nextPromptMaxChars: 60,
+      },
+    })
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    expect(draftOf(store).nextPromptMaxChars).toBe(60)
+    expect(draftOf(store).noteMaxChars).toBe(768)
+  })
+
+  it('writes only the changed bounds on apply', async () => {
+    const { remote, rpc, call } = scriptedApi({
+      config: {
+        enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60,
+        nextPromptMaxChars: 120, noteMaxChars: 768,
+      },
+    })
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    store.setNextPromptMaxChars(60)
+    store.setNoteMaxChars(128)
+    await store.apply()
+    expect(call).toHaveBeenCalledWith('/api', 'advisor/set', {
+      args: { patch: { nextPromptMaxChars: 60, noteMaxChars: 128 } },
+    })
+  })
+
+  it('clamps below the schema floors and keeps the current value for a non-finite one', async () => {
+    const { remote, rpc } = scriptedApi({
+      config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    store.setNextPromptMaxChars(-5)
+    expect(draftOf(store).nextPromptMaxChars).toBe(50)
+    store.setNoteMaxChars(10)
+    expect(draftOf(store).noteMaxChars).toBe(128)
+    store.setNoteMaxChars(Number.NaN)
+    expect(draftOf(store).noteMaxChars).toBe(128)
   })
 })
