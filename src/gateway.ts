@@ -55,7 +55,15 @@ import { parseModelPair } from './commands.js'
 import type { AdvisorModelSource, AdvisorReasoningEffortState } from './commands.js'
 import { resolveAdvisorConfig } from './config.js'
 import type { AdvisorConfig, ResolvedAdvisorConfig } from './config.js'
-import { DEFAULT_ADVISOR_NOTE_MAX_CHARS, DEFAULT_NEXT_PROMPT_MAX_CHARS } from './text-limit.js'
+import {
+  coerceTextBound,
+  DEFAULT_ADVISOR_NOTE_MAX_CHARS,
+  DEFAULT_NEXT_PROMPT_MAX_CHARS,
+  MAX_ADVISOR_NOTE_MAX_CHARS,
+  MAX_NEXT_PROMPT_MAX_CHARS,
+  MIN_ADVISOR_NOTE_MAX_CHARS,
+  MIN_NEXT_PROMPT_MAX_CHARS,
+} from './text-limit.js'
 
 /** Patch shape accepted by `advisor.set` — any subset of the config keys. */
 export type AdvisorConfigPatch = Partial<AdvisorConfig>
@@ -746,8 +754,8 @@ export class AdvisorConfigGateway extends TypertRemoteService {
         // GitHub issue #155: same containment rule for the two text bounds —
         // an absent raw key keeps the schema default, so the S1 fallback never
         // invents a value the resolver would not have chosen.
-        nextPromptMaxChars: raw?.nextPromptMaxChars ?? DEFAULT_NEXT_PROMPT_MAX_CHARS,
-        noteMaxChars: raw?.noteMaxChars ?? DEFAULT_ADVISOR_NOTE_MAX_CHARS,
+        nextPromptMaxChars: coerceTextBound(raw?.nextPromptMaxChars, DEFAULT_NEXT_PROMPT_MAX_CHARS, MIN_NEXT_PROMPT_MAX_CHARS, MAX_NEXT_PROMPT_MAX_CHARS),
+        noteMaxChars: coerceTextBound(raw?.noteMaxChars, DEFAULT_ADVISOR_NOTE_MAX_CHARS, MIN_ADVISOR_NOTE_MAX_CHARS, MAX_ADVISOR_NOTE_MAX_CHARS),
         proseFallback: raw?.proseFallback,
         // The resolver never ran on this arm, so the RD-1 empty = automatic
         // normalization (config.ts) is mirrored here: a raw empty/blank value

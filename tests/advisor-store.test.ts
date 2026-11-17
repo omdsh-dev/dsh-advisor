@@ -1367,6 +1367,25 @@ describe('read-only apply guard (qc2 W-1 — writable flips mid-session)', () =>
     }
     expect(set).not.toHaveBeenCalled()
   })
+
+  it('leaves a staged bound untouched when the write is refused (no clamp before the guard)', async () => {
+    const { remote, rpc, describe, set } = scriptedApi()
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    // A partial entry the per-keystroke floor preserves: not yet in range.
+    store.setNextPromptMaxChars(2)
+    expect(draftOf(store).nextPromptMaxChars).toBe(2)
+    describe.mockReturnValueOnce(Promise.resolve(ok({
+      writable: false,
+      hasDocument: false,
+      namespaces: [deepseekNs(), piAiNs()],
+    })))
+    await store.load()
+    await store.apply()
+    // The refused write must not rewrite the staged value to the floor.
+    expect(draftOf(store).nextPromptMaxChars).toBe(2)
+    expect(set).not.toHaveBeenCalled()
+  })
 })
 
 describe('card scenario (store-level load/save over the gateway channel)', () => {

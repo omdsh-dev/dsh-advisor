@@ -69,7 +69,15 @@ import type { AdviceNote } from './advisor-runtime.js'
 import { AdvisorDelivery, advisorAdviceFace } from './delivery.js'
 import { DEFAULT_ADVISOR_SYSTEM_PROMPT } from './prompts.js'
 import { advisorSuggestionFace, NextPromptManager } from './next-prompt.js'
-import { DEFAULT_ADVISOR_NOTE_MAX_CHARS, DEFAULT_NEXT_PROMPT_MAX_CHARS } from './text-limit.js'
+import {
+  coerceTextBound,
+  DEFAULT_ADVISOR_NOTE_MAX_CHARS,
+  DEFAULT_NEXT_PROMPT_MAX_CHARS,
+  MAX_ADVISOR_NOTE_MAX_CHARS,
+  MAX_NEXT_PROMPT_MAX_CHARS,
+  MIN_ADVISOR_NOTE_MAX_CHARS,
+  MIN_NEXT_PROMPT_MAX_CHARS,
+} from './text-limit.js'
 import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { AdvisorSessionOverrides, registerAdvisorCommands, summarizeSystemPrompt, ADVISOR_MODEL_VALIDATION_TIMEOUT_MS } from './commands.js'
 import type {
@@ -277,9 +285,11 @@ export function apply(ctx: Context, config: AdvisorConfig) {
       immuneTurns: raw?.immuneTurns ?? 3,
       maxDeltaMessages: raw?.maxDeltaMessages ?? 60,
       // GitHub issue #155: both bounds are plain numbers on the resolved
-      // contract — an unreadable/invalid entry keeps the schema defaults.
-      nextPromptMaxChars: raw?.nextPromptMaxChars ?? DEFAULT_NEXT_PROMPT_MAX_CHARS,
-      noteMaxChars: raw?.noteMaxChars ?? DEFAULT_ADVISOR_NOTE_MAX_CHARS,
+      // contract — an unreadable/invalid entry keeps the schema defaults, and
+      // an out-of-range stored value is coerced into the schema range so the
+      // readback never reports a bound nothing honors.
+      nextPromptMaxChars: coerceTextBound(raw?.nextPromptMaxChars, DEFAULT_NEXT_PROMPT_MAX_CHARS, MIN_NEXT_PROMPT_MAX_CHARS, MAX_NEXT_PROMPT_MAX_CHARS),
+      noteMaxChars: coerceTextBound(raw?.noteMaxChars, DEFAULT_ADVISOR_NOTE_MAX_CHARS, MIN_ADVISOR_NOTE_MAX_CHARS, MAX_ADVISOR_NOTE_MAX_CHARS),
       // T1 (plan dsh-advisor-next-prompt-n12): the resolved contract types
       // nextPrompt as a plain boolean — an absent raw key means the schema
       // default (true; enabled:false already blocks every prediction call).

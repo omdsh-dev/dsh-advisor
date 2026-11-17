@@ -777,6 +777,26 @@ describe('typertGateway endpoint claims + payload contract', () => {
     }
   })
 
+  it('the S1 containment fallback coerces stored text bounds into the schema range', async () => {
+    // A stored config the resolver rejected (here: the unknown `bogus` key)
+    // still reports its own numbers — but a value the schema cannot honor
+    // (0, or an over-ceiling one) must not reach the readback as a bound
+    // nothing uses.
+    const harness = await composeGatewayHarness({
+      bogus: 1,
+      nextPromptMaxChars: 0,
+      noteMaxChars: 5_000,
+    } as Partial<AdvisorConfig>)
+    const got = await harness.connection.handler!('advisor/get', { args: {} }, new AbortController().signal, harness.connection.peer)
+    expect(got.ok).toBe(true)
+    if (got.ok) {
+      const config = (got.value as { config: ResolvedAdvisorConfig }).config
+      expect(config.disabledReason).toContain('unknown config key "bogus"')
+      expect(config.nextPromptMaxChars).toBe(50)
+      expect(config.noteMaxChars).toBe(4_096)
+    }
+  })
+
   // -------------------------------------------------------------------------
   // Model capability endpoint (plan dsh-advisor-reasoning-effort T2)
   // -------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import {
   MAX_NEXT_PROMPT_MAX_CHARS,
   MIN_ADVISOR_NOTE_MAX_CHARS,
   MIN_NEXT_PROMPT_MAX_CHARS,
+  coerceTextBound,
   limitText,
 } from '../src/text-limit'
 
@@ -71,5 +72,20 @@ describe('limitText — bounded code-point cut (GitHub issue #155)', () => {
     const once = limitText('word '.repeat(400), 40)
     const twice = limitText(once, 40)
     expect(Array.from(twice).length).toBeLessThanOrEqual(40)
+  })
+})
+
+describe('coerceTextBound — containment arms never report an invalid bound', () => {
+  it('clamps a stored value into the schema range', () => {
+    expect(coerceTextBound(0, 120, 50, 2_000)).toBe(50)
+    expect(coerceTextBound(5_000, 768, 128, 4_096)).toBe(4_096)
+    expect(coerceTextBound(200, 120, 50, 2_000)).toBe(200)
+    expect(coerceTextBound(199.7, 120, 50, 2_000)).toBe(199)
+  })
+
+  it('falls back for a non-number or non-finite value', () => {
+    expect(coerceTextBound(undefined, 120, 50, 2_000)).toBe(120)
+    expect(coerceTextBound('120', 120, 50, 2_000)).toBe(120)
+    expect(coerceTextBound(Number.NaN, 768, 128, 4_096)).toBe(768)
   })
 })

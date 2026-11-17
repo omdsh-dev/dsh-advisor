@@ -46,6 +46,19 @@ export const MAX_ADVISOR_NOTE_MAX_CHARS = 4_096
 const ELLIPSIS = '…'
 
 /**
+ * Coerce an UNVALIDATED stored value into a bound's schema range. The
+ * containment arms (`src/index.ts` `safeFallback`, `src/gateway.ts` readConfig)
+ * report a config the resolver rejected without running the schema, so a
+ * stored `0` or an over-ceiling value would otherwise reach the readback and
+ * the web card as a bound nothing honors.
+ */
+export function coerceTextBound(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, Math.floor(value)))
+    : fallback
+}
+
+/**
  * Bound `text` to `maxChars` CODE POINTS, cutting on a word boundary and
  * appending `…` (the marker counts toward the bound, so the result is always
  * `<= maxChars`).
