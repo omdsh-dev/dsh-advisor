@@ -138,6 +138,7 @@ MVP 有意放弃与 omp 的完整对等。已接受的差距（在 harness 迭�
 - **不隔离不安全的 advisor 输出**——行为异常的 note 可能携带指令性文本；JSON frame + 校验 + advisory-only 框架是仅有的缓解手段，且 note 会原样送达主 transcript（路线图）。
 - **无 `syncBacklog` 追赶等待**——落后很多的 advisor 不会等待主循环；其 backlog 有界且会被丢弃，因此 note 可能在下一次主 turn 开始之后才到达（路线图：context-maintenance batch）。
 - **advisor 上下文有界**——长会话的完整重放会被截断（`maxDeltaMessages`），因此 compaction 后 advisor 可能丢失早期上下文（路线图：下下迭代）。
+- **审阅上下文仅含文本**——image 块以身份占位符（短附件摘要、尺寸、媒体类型）出现，file 块以名称/字节数占位，因此附件字节不会到达评审者；主代理读入 transcript 的内容仍会被审阅。这是刻意的轻量选择；透传图片不受支持。
 
 **旧版本写入的会话——pre-V3 日志不在此修复。** 其中的 advisor note 带有旧的自定义 `source.kind`（`kind: 'advisor'`），dsh 的 V2→V3 会话格式边会拒绝它，因此这些 **pre-V3** 日志无法迁移（原始文件完好，只是打不开）。已经是 V3 的日志仍可正常打开——它们只受上文的「自审例外」影响。修复这些 pre-V3 日志属于上游工作：针对这一类缺陷的统一修复正在 [`omdsh-dev/dsh-llm-fallbacks`](https://github.com/omdsh-dev/dsh-llm-fallbacks) 开发中，**尚未可用**。本版本及之后写入的日志不受影响。
 
