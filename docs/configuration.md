@@ -170,7 +170,7 @@ Dropped: 3 empty (last 2026-09-29T08:15:42.000Z) — the model returned a comple
 
 ### Live 重应用
 
-每次 Loader 提交的 volatile 编辑（`loader/volatile-update`）经 `bridge.onChange` 重派生（`src/index.ts`）：`immuneTurns` / `maxDeltaMessages` 原地更新（delivery / observer）；每个会话 runtime 仅在其「运行影响签名」（provider / model / systemPrompt / proseFallback / reasoningEffort）变化时重建 —— 只改免疫/窗口的编辑不会中断在途调用或丢弃 backlog。S4 门禁每次读取都经解析器重放，配置编辑永远无法启动被门禁阻挡的模型调用。
+每次 Loader 提交的 volatile 编辑（`loader/volatile-update`）经 `bridge.onChange` 重派生（`src/index.ts`）：`immuneTurns` / `maxDeltaMessages` 原地更新（delivery / observer）；每个会话 runtime 仅在其「运行影响签名」（provider / model / systemPrompt / proseFallback / noteMaxChars / reasoningEffort）变化时重建 —— 只改免疫/窗口的编辑不会中断在途调用或丢弃 backlog；改 `noteMaxChars` 与改 `proseFallback` 同类（它是抽取侧的构造常量），会重建 runtime、中止在途调用并丢弃 backlog，而 `nextPromptMaxChars` 不在签名内（预测路径每次尝试实时读取）。S4 门禁每次读取都经解析器重放，配置编辑永远无法启动被门禁阻挡的模型调用。
 
 `defaultEnabled`（GitHub issue #124）**不是** runtime 构造常量、不进入运行影响签名：`onChange` 先按有效开关对候选会话做 reconcile——编辑后 `!effectiveEnabled(sessionId)` 的会话直接 `disposeRuntime`（live 切到 `false` 时，正在运行的会话立即停止评审）；切回 `true` 时，仍持有 override / runtime 的会话经候选循环恢复，而没有 runtime、也没有 override 的会话在**下一个事件**（`agent/created` 或下一条 delta）时重新创建 runtime。已写入的显式 `/advisor off` override 仍然优先于持久化默认值。
 
