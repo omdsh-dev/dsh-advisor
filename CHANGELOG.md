@@ -2,6 +2,11 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.7.3] - 2026-11-17
+
+- e1bc764 Merge pull request #159 from triagmas/docs/runtime-signature-note-max-chars
+- 97c12eb Merge pull request #157 from omdsh-dev/fix/word-boundary-truncation
+
 ## [0.7.2] - 2026-11-15
 
 - 3696d18 Merge pull request #153 from omdsh-dev/chore/dsh-0.2.2-rc.3
