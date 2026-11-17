@@ -692,10 +692,10 @@ export function advisorConfigText(config: AdvisorComposedConfig): string {
   }
   lines.push(`immuneTurns: ${config.immuneTurns}`)
   lines.push(`maxDeltaMessages: ${config.maxDeltaMessages === 0 ? 'unbounded' : config.maxDeltaMessages}`)
-  // GitHub issue #155: the two text bounds are plain numbers on every composed
-  // read, so they always render; 0 reads as unbounded (the opt-out).
-  lines.push(`nextPromptMaxChars: ${config.nextPromptMaxChars === 0 ? 'unbounded' : config.nextPromptMaxChars}`)
-  lines.push(`noteMaxChars: ${config.noteMaxChars === 0 ? 'unbounded' : config.noteMaxChars}`)
+  // GitHub issue #155: the two text bounds are plain positive numbers on every
+  // composed read (schema floors), so they always render.
+  lines.push(`nextPromptMaxChars: ${config.nextPromptMaxChars}`)
+  lines.push(`noteMaxChars: ${config.noteMaxChars}`)
   // The issue-#102 keys (qc1 S-1) render only when the composed read carries
   // them: a fallback-shaped read omits the optional keys, and inventing a
   // default marker there would misreport a store whose real values differ —

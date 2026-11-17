@@ -779,7 +779,7 @@ describe('configurable text bound (GitHub issue #155)', () => {
     expect(llm.calls[0]!.system).toContain('within 60 characters')
   })
 
-  it('keeps the default prompt (no budget line) for a text within the default bound', async () => {
+  it('states the default budget in the prompt', async () => {
     const llm = new FakeLlm([{ chunks: textReply('ship it') }])
     const { manager } = makeManager(llm)
 

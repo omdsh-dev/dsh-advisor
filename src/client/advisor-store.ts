@@ -902,9 +902,11 @@ export class AdvisorSettingsStore {
   }
 
   /**
-   * Set the next-prompt suggestion bound (GitHub issue #155): integer code
-   * points in [50, 2000]. A cleared input omits the key from the patch (the
-   * stored value stands); a non-finite input keeps the current draft value.
+   * Set the next-prompt suggestion bound (GitHub issue #155). Only floors the
+   * value: the input is controlled and fires per keystroke, so clamping to the
+   * range here would rewrite the operator's partial entry (typing "2" would
+   * snap to 50). `apply()` clamps to [50, 2000] once and writes it back. A
+   * cleared input omits the key from the patch (the stored value stands).
    */
   setNextPromptMaxChars(value: number | undefined): void {
     if (value === undefined) {
@@ -914,12 +916,11 @@ export class AdvisorSettingsStore {
     this.setField('nextPromptMaxChars', this.clampInt(
       value,
       this.store.getSnapshot().draft.nextPromptMaxChars ?? DEFAULT_NEXT_PROMPT_MAX_CHARS,
-      MIN_NEXT_PROMPT_MAX_CHARS,
-      MAX_NEXT_PROMPT_MAX_CHARS,
+      0,
     ))
   }
 
-  /** Set the delivered advice-note bound (GitHub issue #155): integer code points in [128, 4096]. */
+  /** Set the delivered advice-note bound (GitHub issue #155); floored only — `apply()` clamps to [128, 4096]. */
   setNoteMaxChars(value: number | undefined): void {
     if (value === undefined) {
       this.clearField('noteMaxChars')
@@ -928,8 +929,7 @@ export class AdvisorSettingsStore {
     this.setField('noteMaxChars', this.clampInt(
       value,
       this.store.getSnapshot().draft.noteMaxChars ?? DEFAULT_ADVISOR_NOTE_MAX_CHARS,
-      MIN_ADVISOR_NOTE_MAX_CHARS,
-      MAX_ADVISOR_NOTE_MAX_CHARS,
+      0,
     ))
   }
 
@@ -946,6 +946,23 @@ export class AdvisorSettingsStore {
    * @returns nothing; the apply state carries the outcome.
    */
   async apply(): Promise<void> {
+    // GitHub issue #155: the two bound inputs floor per keystroke but allow an
+    // out-of-range entry while it is being typed. Clamp once here and write the
+    // result back so the card shows the value that is actually sent.
+    const pending = this.store.getSnapshot()
+    const nextBound = pending.draft.nextPromptMaxChars === undefined
+      ? undefined
+      : this.clampInt(pending.draft.nextPromptMaxChars, DEFAULT_NEXT_PROMPT_MAX_CHARS, MIN_NEXT_PROMPT_MAX_CHARS, MAX_NEXT_PROMPT_MAX_CHARS)
+    const noteBound = pending.draft.noteMaxChars === undefined
+      ? undefined
+      : this.clampInt(pending.draft.noteMaxChars, DEFAULT_ADVISOR_NOTE_MAX_CHARS, MIN_ADVISOR_NOTE_MAX_CHARS, MAX_ADVISOR_NOTE_MAX_CHARS)
+    if (nextBound !== pending.draft.nextPromptMaxChars || noteBound !== pending.draft.noteMaxChars) {
+      this.store.update((s) => {
+        if (nextBound !== undefined) s.draft.nextPromptMaxChars = nextBound
+        if (noteBound !== undefined) s.draft.noteMaxChars = noteBound
+        s.dirty = this.recomputeDirty(s.draft)
+      })
+    }
     const state = this.store.getSnapshot()
     // W-1 (qc2 fix wave): the writable guard comes FIRST — before the client
     // gate check AND the empty-patch shortcut. In read-only the patch cannot

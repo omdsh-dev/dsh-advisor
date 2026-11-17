@@ -159,10 +159,10 @@ export interface AdvisorRuntimeOptions {
   readonly proseFallback?: boolean
   /**
    * Bound on the delivered advice note, in CODE POINTS (GitHub issue #155,
-   * config key `noteMaxChars` threaded through by `index.ts`): `0` disables
-   * the bound, any positive value caps the extracted note with a `…` marker on
-   * a word boundary. Default {@link ADVISOR_NOTE_MAX_CHARS} (768) — the
-   * historical hardcoded cap.
+   * config key `noteMaxChars` threaded through by `index.ts`): caps the
+   * extracted note with a `…` marker on a word boundary. Default
+   * {@link ADVISOR_NOTE_MAX_CHARS} (768); the config schema floors it at 128,
+   * so this option is always a positive bound.
    */
   readonly noteMaxChars?: number
   /**
@@ -209,7 +209,8 @@ export interface AdvisorRuntimeOptions {
  * by the 60 s call deadline (`callTimeoutMs`).
  *
  * By default this cap is {@link ADVISOR_NOTE_MAX_CHARS}; the config key
- * `noteMaxChars` overrides it and `0` disables it (GitHub issue #155).
+ * `noteMaxChars` overrides it within [128, 4096] (GitHub issue #155). There is
+ * no unbounded value: this is the only output bound left.
  */
 export const ADVISOR_NOTE_MAX_CHARS = DEFAULT_ADVISOR_NOTE_MAX_CHARS
 
@@ -319,8 +320,8 @@ const SURROUNDING_FENCE_PATTERN = /^```[^\n]*\n([\s\S]*?)\n?```$/
  * Cleanup: trim → strip ONE surrounding markdown fence (an unterminated or
  * non-surrounding fence is kept as-is) → bound at `maxChars` CODE POINTS with
  * a '…' marker on a word boundary (the same injection bound as
- * {@link extractAdviceNote} — the only output bound; `maxChars` 0 keeps the
- * full text). An empty result (whitespace-only reply, fence-only
+ * {@link extractAdviceNote} — the only output bound). An empty result
+ * (whitespace-only reply, fence-only
  * reply) is NOT
  * prose: the caller classifies it as an EMPTY drop (KD-I3), never as an
  * unparsed/prose case. Severity is always `nit` — prose carries no structured

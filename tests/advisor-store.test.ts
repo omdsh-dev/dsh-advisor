@@ -1685,17 +1685,37 @@ describe('text bounds draft (GitHub issue #155)', () => {
     })
   })
 
-  it('clamps below the schema floors and keeps the current value for a non-finite one', async () => {
+  it('floors per keystroke so a partial entry is not rewritten', async () => {
     const { remote, rpc } = scriptedApi({
       config: { enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
     })
     const store = new AdvisorSettingsStore(remote, rpc, schema)
     await store.load()
+    // Typing "2" on the way to "200" must survive: no range clamp per keystroke.
+    store.setNextPromptMaxChars(2)
+    expect(draftOf(store).nextPromptMaxChars).toBe(2)
     store.setNextPromptMaxChars(-5)
-    expect(draftOf(store).nextPromptMaxChars).toBe(50)
+    expect(draftOf(store).nextPromptMaxChars).toBe(0)
     store.setNoteMaxChars(10)
-    expect(draftOf(store).noteMaxChars).toBe(128)
+    expect(draftOf(store).noteMaxChars).toBe(10)
     store.setNoteMaxChars(Number.NaN)
-    expect(draftOf(store).noteMaxChars).toBe(128)
+    expect(draftOf(store).noteMaxChars).toBe(10)
+  })
+
+  it('clamps an out-of-range bound into the schema range on apply', async () => {
+    const { remote, rpc, call } = scriptedApi({
+      config: {
+        enabled: true, provider: 'x', model: 'y', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60,
+        nextPromptMaxChars: 120, noteMaxChars: 768,
+      },
+    })
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    store.setNextPromptMaxChars(10)
+    store.setNoteMaxChars(5)
+    await store.apply()
+    expect(call).toHaveBeenCalledWith('/api', 'advisor/set', {
+      args: { patch: { nextPromptMaxChars: 50, noteMaxChars: 128 } },
+    })
   })
 })
