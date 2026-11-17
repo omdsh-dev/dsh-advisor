@@ -125,6 +125,14 @@ export interface AdvisorConfigView {
    * containment wire that omitted the key still reads the default.
    */
   defaultEnabled?: boolean
+  /**
+   * Bound on the stored next-prompt suggestion in code points (GitHub issue
+   * #155); 0 = unbounded. A schema-defaulted number, so the resolved wire
+   * always carries it.
+   */
+  nextPromptMaxChars?: number
+  /** Bound on the delivered advice note in code points (GitHub issue #155); 0 = unbounded. */
+  noteMaxChars?: number
   /** Present iff the advisor is disabled by the explicit model gate. */
   disabledReason?: string
 }
@@ -219,6 +227,18 @@ export interface AdvisorDraft {
    * does not pin (an absent key reads the schema default below).
    */
   defaultEnabled?: boolean
+  /**
+   * Bound on the stored next-prompt suggestion in code points (GitHub issue
+   * #155); integer ≥ 0, 0 = unbounded, default 120. Cleared input → undefined
+   * (left unchanged on apply).
+   */
+  nextPromptMaxChars?: number
+  /**
+   * Bound on the delivered advice note in code points (GitHub issue #155);
+   * integer ≥ 0, 0 = unbounded, default 768. Cleared input → undefined (left
+   * unchanged on apply).
+   */
+  noteMaxChars?: number
 }
 
 /** Why an Apply failed (copy keys resolve in the card; raw text passes through). */
@@ -302,7 +322,7 @@ export interface AdvisorSettingsState {
 
 /** The schema-defaulted advisor config used when no config resolves. */
 function defaultDraft(): AdvisorDraft {
-  return { systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 }
+  return { systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60, nextPromptMaxChars: 120, noteMaxChars: 768 }
 }
 
 /** A non-empty string field (whitespace-only reads as absent, mirroring the hard gate). */
@@ -327,6 +347,11 @@ function draftOfConfig(config: AdvisorConfigView | undefined): AdvisorDraft {
     systemPrompt: typeof config?.systemPrompt === 'string' ? config.systemPrompt : '',
     immuneTurns: numberField(config?.immuneTurns, 3),
     maxDeltaMessages: numberField(config?.maxDeltaMessages, 60),
+    // GitHub issue #155: the two text bounds are schema-defaulted numbers, so
+    // the wire always carries them; the fallbacks mirror the schema defaults
+    // for the degraded wires (S1 containment).
+    nextPromptMaxChars: numberField(config?.nextPromptMaxChars, 120),
+    noteMaxChars: numberField(config?.noteMaxChars, 768),
     // The scalar fields show the effective values: the gateway returns the
     // resolved config, so the wire carries both keys whenever the resolver
     // defined them (the schema default fills false on the normal path); this
@@ -846,6 +871,19 @@ export class AdvisorSettingsStore {
   }
 
   /**
+   * Set the next-prompt suggestion bound (GitHub issue #155): integer code
+   * points, 0 = unbounded. A non-finite input keeps the current draft value.
+   */
+  setNextPromptMaxChars(value: number): void {
+    this.setField('nextPromptMaxChars', this.clampInt(value, this.store.getSnapshot().draft.nextPromptMaxChars ?? 120))
+  }
+
+  /** Set the delivered advice-note bound (GitHub issue #155): integer code points, 0 = unbounded. */
+  setNoteMaxChars(value: number): void {
+    this.setField('noteMaxChars', this.clampInt(value, this.store.getSnapshot().draft.noteMaxChars ?? 768))
+  }
+
+  /**
    * Refuse in a read-only environment (store-side defense-in-depth for the
    * W-1 invariant — a write must never be issued when the UI declares the
    * settings service read-only), then validate the draft (KD-S4 gate) and
@@ -972,7 +1010,7 @@ export class AdvisorSettingsStore {
    */
   private patchFor(draft: AdvisorDraft): Record<string, unknown> {
     const patch: Record<string, unknown> = {}
-    const always = ['systemPrompt', 'immuneTurns', 'maxDeltaMessages', 'proseFallback', 'nextPrompt', 'defaultEnabled'] as const
+    const always = ['systemPrompt', 'immuneTurns', 'maxDeltaMessages', 'proseFallback', 'nextPrompt', 'defaultEnabled', 'nextPromptMaxChars', 'noteMaxChars'] as const
     for (const key of always) {
       const next = draft[key]
       // A cleared number input (undefined) means "leave the stored value

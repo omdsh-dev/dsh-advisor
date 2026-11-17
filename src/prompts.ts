@@ -47,3 +47,16 @@ Reply with EXACTLY ONE JSON object and nothing else:
  * best-effort, no retry-worthy signal).
  */
 export const DEFAULT_NEXT_PROMPT_SYSTEM_PROMPT = `You predict a coding-agent session's likely next user prompt. You receive a transcript update of the work just completed. Reply with ONE concise, plausible, single-line next user prompt for this session — no quotes, no markdown, no explanation. If nothing is predictable, reply with exactly NONE.`
+
+/**
+ * The prediction system prompt with the serving text bound spelled out
+ * (GitHub issue #155): the stored suggestion is bounded by
+ * `nextPromptMaxChars`, and stating the budget in the prompt asks the model to
+ * produce a text that fits instead of being trimmed afterwards. Advisory only —
+ * the shaping step remains the enforcement, so a model that ignores the budget
+ * still cannot overrun it. `maxChars <= 0` means no bound: the plain prompt.
+ */
+export function nextPromptSystemPrompt(maxChars: number): string {
+  if (maxChars <= 0) return DEFAULT_NEXT_PROMPT_SYSTEM_PROMPT
+  return `${DEFAULT_NEXT_PROMPT_SYSTEM_PROMPT} Keep the reply within ${maxChars} characters.`
+}

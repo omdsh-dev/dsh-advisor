@@ -742,6 +742,11 @@ export class AdvisorConfigGateway extends TypertRemoteService {
         systemPrompt: raw?.systemPrompt ?? '',
         immuneTurns: raw?.immuneTurns ?? 3,
         maxDeltaMessages: raw?.maxDeltaMessages ?? 60,
+        // GitHub issue #155: same containment rule for the two text bounds —
+        // an absent raw key keeps the schema default (120 / 768), so the S1
+        // fallback never invents an unbounded read.
+        nextPromptMaxChars: raw?.nextPromptMaxChars ?? 120,
+        noteMaxChars: raw?.noteMaxChars ?? 768,
         proseFallback: raw?.proseFallback,
         // The resolver never ran on this arm, so the RD-1 empty = automatic
         // normalization (config.ts) is mirrored here: a raw empty/blank value
@@ -761,12 +766,14 @@ export class AdvisorConfigGateway extends TypertRemoteService {
     // typertGateway wire boundary: absent keys are omitted, never
     // present-as-undefined (the result validator rejects undefined values).
     // Key census (qc1 W-1, issue #102; T2 plan dsh-advisor-reasoning-effort;
-    // T1 plan dsh-advisor-next-prompt-n12; GitHub issue #124): NINE persisted
-    // keys — the live `CONFIG_KEYS` set in src/config.ts: systemPrompt,
-    // immuneTurns, maxDeltaMessages, proseFallback, reasoningEffort, provider,
-    // model, nextPrompt, defaultEnabled. The scalar pair (provider/model) and
-    // reasoningEffort are omitted while unset; the schema-defaulted booleans
-    // (proseFallback, nextPrompt, defaultEnabled) ride every resolved get.
+    // T1 plan dsh-advisor-next-prompt-n12; GitHub issue #124; GitHub issue
+    // #155): ELEVEN persisted keys — the live `CONFIG_KEYS` set in
+    // src/config.ts: systemPrompt, immuneTurns, maxDeltaMessages,
+    // proseFallback, reasoningEffort, provider, model, nextPrompt,
+    // defaultEnabled, nextPromptMaxChars, noteMaxChars. The scalar pair
+    // (provider/model) and reasoningEffort are omitted while unset; the
+    // schema-defaulted booleans (proseFallback, nextPrompt, defaultEnabled)
+    // and numbers (nextPromptMaxChars, noteMaxChars) ride every resolved get.
     // Plus TWO non-persisted live fields: `enabled`/`disabledReason` (the gate
     // state, never stored). No maxTokens key since the 2026-10-18 ruling
     // (budget removed).
@@ -775,6 +782,10 @@ export class AdvisorConfigGateway extends TypertRemoteService {
       systemPrompt: config.systemPrompt,
       immuneTurns: config.immuneTurns,
       maxDeltaMessages: config.maxDeltaMessages,
+      // GitHub issue #155: the two text bounds are schema-defaulted numbers, so
+      // they always ride the wire (0 = unbounded is a real value, never absent).
+      nextPromptMaxChars: config.nextPromptMaxChars,
+      noteMaxChars: config.noteMaxChars,
     }
     if (config.proseFallback !== undefined) wire.proseFallback = config.proseFallback
     if (config.reasoningEffort !== undefined) wire.reasoningEffort = config.reasoningEffort

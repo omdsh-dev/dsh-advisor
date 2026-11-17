@@ -1597,3 +1597,57 @@ function minimalTurn(): EventSpec[] {
     { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
   ]
 }
+
+// ---------------------------------------------------------------------------
+// GitHub issue #155 — the note bound is configurable (`noteMaxChars`)
+// ---------------------------------------------------------------------------
+
+describe('AdvisorRuntime — configurable note bound (GitHub issue #155)', () => {
+  it('keeps the whole note when the bound is 0 (opt-out)', async () => {
+    const longNote = 'Я'.repeat(900)
+    const llm = new FakeLlm([{ chunks: textReply(JSON.stringify({ note: longNote, severity: 'nit' })) }])
+    const { runtime, notes } = makeRuntime(llm, { noteMaxChars: 0 })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(notes).toHaveLength(1)
+    expect(notes[0]!.note).toBe(longNote)
+  })
+
+  it('bounds the note with the configured value, not the 768 default', async () => {
+    const llm = new FakeLlm([{ chunks: textReply(JSON.stringify({ note: 'Я'.repeat(900), severity: 'nit' })) }])
+    const { runtime, notes } = makeRuntime(llm, { noteMaxChars: 40 })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(notes).toHaveLength(1)
+    expect(Array.from(notes[0]!.note)).toHaveLength(40)
+    expect(notes[0]!.note.endsWith('…')).toBe(true)
+  })
+
+  it('bounds the prose fallback note by the same configured value', async () => {
+    const llm = new FakeLlm([{ chunks: textReply('plain prose '.repeat(200)) }])
+    const { runtime, notes } = makeRuntime(llm, { proseFallback: true, noteMaxChars: 50 })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    expect(notes).toHaveLength(1)
+    expect(Array.from(notes[0]!.note).length).toBeLessThanOrEqual(50)
+    expect(notes[0]!.note.endsWith('…')).toBe(true)
+  })
+
+  it('extractAdviceNote honors maxChars 0 and a custom bound directly', () => {
+    const long = 'Я'.repeat(900)
+    expect(extractAdviceNote(JSON.stringify({ note: long, severity: 'nit' }), 0)!.note).toBe(long)
+    expect(Array.from(extractAdviceNote(JSON.stringify({ note: long, severity: 'nit' }), 40)!.note)).toHaveLength(40)
+  })
+
+  it('extractProseFallbackNote honors maxChars 0 and a custom bound directly', () => {
+    const long = 'Я'.repeat(900)
+    expect(extractProseFallbackNote(long, 0)!.note).toBe(long)
+    expect(Array.from(extractProseFallbackNote(long, 40)!.note)).toHaveLength(40)
+  })
+})

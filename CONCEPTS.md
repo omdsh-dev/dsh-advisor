@@ -25,7 +25,7 @@ severity → 通道的路由：nit → `agent.inject`（非唤醒，下一个 st
 *Avoid:* enabled 缺 provider/model 时静默改用默认模型；把门禁降级为 warning
 
 ### JSON frame（建议帧）
-advisor 回复必须恰好是一个 JSON 对象 `{"note": "<text>", "severity": "nit"|"concern"|"blocker"}`（severity 可省略 = nit）。提取：定位回复中第一个平衡 `{…}`（容忍前后散文 / markdown 围栏，跳过字符串字面量内的花括号）后 `JSON.parse`。note 非空字符串校验失败 → drop + log（绝不 crash drain）；解析失败**不重试**（重试预算只留给传输错误）。调用带 token 上限（`ADVISOR_MAX_TOKENS`），单条 note 有长度上限（`ADVISOR_NOTE_MAX_CHARS`，超长以 `…` 截断）。
+advisor 回复必须恰好是一个 JSON 对象 `{"note": "<text>", "severity": "nit"|"concern"|"blocker"}`（severity 可省略 = nit）。提取：定位回复中第一个平衡 `{…}`（容忍前后散文 / markdown 围栏，跳过字符串字面量内的花括号）后 `JSON.parse`。note 非空字符串校验失败 → drop + log（绝不 crash drain）；解析失败**不重试**（重试预算只留给传输错误）。单条 note 有长度上限（配置键 `noteMaxChars`，默认 768 码点，`0` = 无上限；超长在词边界以 `…` 截断），下一提示建议有独立上限（`nextPromptMaxChars`，默认 120）。
 *Avoid:* 让 advisor 自由文本回复（帧契约失效）；解析失败无限重试
 
 ### transcript delta / self-review exclusion（转录增量与自审排除）

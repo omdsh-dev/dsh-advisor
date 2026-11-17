@@ -454,6 +454,47 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
             />
           </div>
         </div>
+        {/* Text bounds (GitHub issue #155): the two user-visible caps were
+            hardcoded and cut the text silently. 0 disables the bound — an
+            empty input counts as 0 (the field's meaningful default), unlike
+            the cleared "leave unchanged" semantics of the numeric fields
+            above. */}
+        <div className={styles['numberFields']}>
+          <div className={styles['field']}>
+            <label htmlFor="advisor-next-prompt-max-chars" className={styles['fieldLabel']}>{t('nextPromptMaxChars')}</label>
+            <input
+              id="advisor-next-prompt-max-chars"
+              aria-label={t('nextPromptMaxChars')}
+              className={styles['input']}
+              type="number"
+              min={0}
+              step={1}
+              value={draft.nextPromptMaxChars ?? ''}
+              disabled={busy}
+              onChange={(event) => {
+                controller.setNextPromptMaxChars(event.target.value === '' ? 0 : Number(event.target.value))
+              }}
+            />
+            <p className={styles['hint']}>{t('nextPromptMaxCharsHint')}</p>
+          </div>
+          <div className={styles['field']}>
+            <label htmlFor="advisor-note-max-chars" className={styles['fieldLabel']}>{t('noteMaxChars')}</label>
+            <input
+              id="advisor-note-max-chars"
+              aria-label={t('noteMaxChars')}
+              className={styles['input']}
+              type="number"
+              min={0}
+              step={1}
+              value={draft.noteMaxChars ?? ''}
+              disabled={busy}
+              onChange={(event) => {
+                controller.setNoteMaxChars(event.target.value === '' ? 0 : Number(event.target.value))
+              }}
+            />
+            <p className={styles['hint']}>{t('noteMaxCharsHint')}</p>
+          </div>
+        </div>
       </div>
       <div className={styles['footer']}>
         {errorText === undefined ? null : <p className={styles['failed']} role="status">{errorText}</p>}

@@ -38,7 +38,7 @@ dsh plugin --profile web update dsh-advisor@latest   # 更新 —— 同一个 -
 
 ### 配置
 
-编辑 profile 补丁层（`~/.dsh/profiles/<profile>/cordis.patch.yml`）里 `advisor` 行的 `config`。九个字段全部是 schema-volatile 的 live 字段（dsh ≥ 0.1.7-rc.1）：web 卡片与 TUI `/settings` 屏幕写入的就是这同一份 entry config——持久化在 profile 补丁层，无需重挂载即生效。（pre-0.1.7 的 `$DSH_HOME/settings.yaml` `advisor:` 分节已不存在：dsh 会在首次启动时把它导入活跃 profile 一次，并将该文件改名为 `.imported`。）
+编辑 profile 补丁层（`~/.dsh/profiles/<profile>/cordis.patch.yml`）里 `advisor` 行的 `config`。十一个字段全部是 schema-volatile 的 live 字段（dsh ≥ 0.1.7-rc.1）：web 卡片与 TUI `/settings` 屏幕写入的就是这同一份 entry config——持久化在 profile 补丁层，无需重挂载即生效。（pre-0.1.7 的 `$DSH_HOME/settings.yaml` `advisor:` 分节已不存在：dsh 会在首次启动时把它导入活跃 profile 一次，并将该文件改名为 `.imported`。）
 
 > **破坏性变更（2026-09-26）：`enabled` 配置键已移除。** 宿主 UI 中插件行的启用/停用开关就是总开关——插件行在运行即启用，无需任何配置键。存量 profile 若仍携带 `enabled:` 行**继续正常工作**：该行会被**静默忽略**（接受但剥离，永不读取、永不回写——2026-09-27 裁决，无需手工删除）；该键已废弃，写入路径不再持久化它。
 
@@ -54,16 +54,18 @@ dsh plugin --profile web update dsh-advisor@latest   # 更新 —— 同一个 -
     proseFallback: false         # 布尔，默认 false —— 无 JSON 帧时将散文回复作为 nit note 投递（opt-in）
     reasoningEffort: ""          # 可选；缺省/"" = 自动 —— 所选模型声明的最小思考权重（取值：该模型声明的 effort id）
     nextPrompt: true             # 布尔，默认 true —— 每个已完成 turn 后预测下一提示，并以提示条形式显示在 web composer 下方（仅 web GUI）
+    nextPromptMaxChars: 120      # 整数 ≥ 0，默认 120 —— 存储的下一提示建议的字数（码点）上限；0 = 无上限（仅 web GUI）
+    noteMaxChars: 768            # 整数 ≥ 0，默认 768 —— 投递的顾问建议消息的字数（码点）上限；0 = 无上限
     defaultEnabled: true         # 布尔，默认 true —— 新会话默认开启；false = 按会话手动启用（用 /advisor on）
 ```
 
 `provider` 与 `model` 为**必填**：任一缺失或为空是一个硬门禁——advisor 不会发起任何模型调用，并报告带原因的禁用状态（disabled-with-reason）；未知配置键会被拒绝。
 
-**没有模型侧 token 预算**（2026-10-18 用户裁决）：OpenAI 兼容 API 上 `max_tokens` 把 reasoning 与正文一并计入，思考型模型下旧 `maxTokens` 预算会间歇性耗尽、正文为空（空回复 → `EMPTY_RESPONSE` → 静默丢 delta）。advisor 调用现在完全不发送 `maxTokens`；输出由抽取侧 `ADVISOR_NOTE_MAX_CHARS`（768 字符）封顶，延迟由 60s 调用 deadline 约束。存量 profile 里残留的 `maxTokens:` 行与已移除的 `enabled` 键同样被静默容忍并剥离。
+**没有模型侧 token 预算**（2026-10-18 用户裁决）：OpenAI 兼容 API 上 `max_tokens` 把 reasoning 与正文一并计入，思考型模型下旧 `maxTokens` 预算会间歇性耗尽、正文为空（空回复 → `EMPTY_RESPONSE` → 静默丢 delta）。advisor 调用现在完全不发送 `maxTokens`；输出由抽取侧的 `noteMaxChars` 上限封顶（默认 768 码点，可配置——`0` 保留全文），延迟由 60s 调用 deadline 约束。下一提示建议有独立上限（`nextPromptMaxChars`，默认 120，`0` = 无上限）；两处截断都落在词边界并追加计入上限的 `…` 标记。存量 profile 里残留的 `maxTokens:` 行与已移除的 `enabled` 键同样被静默容忍并剥离。
 
 若 advisor 已启用、runtime 状态正常却从不说话，请运行 `/advisor status`：非零的 `Dropped:` 行会指明类别——`empty`（空回复）表示模型返回了完成但无正文的响应；`unparsed`（无帧散文）表示正文不含 JSON 帧的回复被丢弃（开启 `proseFallback`，将清理后的散文作为低严重级 note 投递；JSON 帧始终优先）。详见 [docs/configuration.md](docs/configuration.md)。
 
-同一组键可在**三个配置面**读取与编辑（只有一份存储——上面的 advisor entry config；各处使用同一个硬门禁，宿主侧门禁始终是所有路径上的最后防线；仅 web 可用的预测键刻意不进入 `/advisor config` 回读与 TUI 分节——它仅属于 web 配置面）：
+同一组键可在**三个配置面**读取与编辑（只有一份存储——上面的 advisor entry config；各处使用同一个硬门禁，宿主侧门禁始终是所有路径上的最后防线；仅 web 可用的预测键 `nextPrompt` 刻意不进入 `/advisor config` 回读与 TUI 分节——两个字数上限可在 `/advisor config` 回读、在 web 卡片编辑）：
 
 1. **插件行 config** —— profile 补丁层（`~/.dsh/profiles/<profile>/cordis.patch.yml`）。配置就存放在这里。
 2. **dsh web 的「插件」页 —— dsh-advisor 组合包自己的页面** —— Advisor **卡片**（bundle key `dsh-advisor`），一个**平铺**的设置表单（页面标题/描述来自插件 locale 元数据），含只列出系统内已配置 provider 及其模型的 provider/model 选择框与可选字段。保存写入 advisor entry 的 config（经 config editor 落入 profile 补丁层），运行中的会话立即生效，无需重启。卡片要求 dsh web 构建的 shell 声明了 `plugins.bundle.config` 卡片 slot（dsh ≥ 0.1.7-rc.1）并能加载 `dsh.client` 声明包；它通过官方 `GatewayService` RPC 通道读写该配置（`/api/advisor/get` + `/api/advisor/set`），不受 settings 暴露白名单门控。卡片还会在必填字段为空时阻止保存。

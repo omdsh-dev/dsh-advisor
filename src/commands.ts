@@ -612,6 +612,14 @@ export interface AdvisorComposedConfig {
   /** Delta window; 0 = unbounded (KD-3). */
   readonly maxDeltaMessages: number
   /**
+   * Bound on the stored next-prompt suggestion in code points (GitHub issue
+   * #155); 0 = unbounded. Plain number on every composed read — the resolved
+   * contract applies the schema default — so the renderer always shows it.
+   */
+  readonly nextPromptMaxChars: number
+  /** Bound on the delivered advice note in code points (GitHub issue #155); 0 = unbounded. */
+  readonly noteMaxChars: number
+  /**
    * Opt-in prose fallback switch (KD-I2, issue #102). Present when the
    * composed read carries the key; absent on a fallback-shaped read — the
    * renderer shows the line only when present, never a defaulted value for
@@ -683,6 +691,10 @@ export function advisorConfigText(config: AdvisorComposedConfig): string {
   }
   lines.push(`immuneTurns: ${config.immuneTurns}`)
   lines.push(`maxDeltaMessages: ${config.maxDeltaMessages === 0 ? 'unbounded' : config.maxDeltaMessages}`)
+  // GitHub issue #155: the two text bounds are plain numbers on every composed
+  // read, so they always render; 0 reads as unbounded (the opt-out).
+  lines.push(`nextPromptMaxChars: ${config.nextPromptMaxChars === 0 ? 'unbounded' : config.nextPromptMaxChars}`)
+  lines.push(`noteMaxChars: ${config.noteMaxChars === 0 ? 'unbounded' : config.noteMaxChars}`)
   // The issue-#102 keys (qc1 S-1) render only when the composed read carries
   // them: a fallback-shaped read omits the optional keys, and inventing a
   // default marker there would misreport a store whose real values differ —

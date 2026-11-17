@@ -4,7 +4,8 @@
  * The exported schemastery `Config` schema is what the cordis Loader uses to
  * validate the plugin row config: it applies defaults (`immuneTurns` 3,
  * `maxDeltaMessages` 60, `systemPrompt` "", `proseFallback` false,
- * `nextPrompt` true, `defaultEnabled` true) and enforces types/bounds
+ * `nextPrompt` true, `defaultEnabled` true, `nextPromptMaxChars` 120,
+ * `noteMaxChars` 768) and enforces types/bounds
  * (integers ≥ 0).
  * `reasoningEffort` has NO default — an absent value means
  * "automatic" (the smallest effort the resolved model declares), which no
@@ -13,8 +14,7 @@
  * caps reasoning + content together, so with thinking models the budget
  * intermittently starved the final content — the advisor call now sends no
  * `maxTokens` at all and output is bounded at extraction by
- * `ADVISOR_NOTE_MAX_CHARS`). All nine live fields are declared
- * `.volatile()`:
+ * `noteMaxChars`). Every live field is declared `.volatile()`:
  * the Loader commits edits to them into the running fiber's references WITHOUT
  * a remount (dsh 0.1.7-rc.1 — the settings.yaml user layer is gone), so
  * `apply` receives each field as a `{ get() }` reference and every read must
@@ -40,6 +40,12 @@
  */
 
 import z from '@deepseek-ai/schemastery'
+import {
+  DEFAULT_ADVISOR_NOTE_MAX_CHARS,
+  DEFAULT_NEXT_PROMPT_MAX_CHARS,
+  MAX_ADVISOR_NOTE_MAX_CHARS,
+  MAX_NEXT_PROMPT_MAX_CHARS,
+} from './text-limit.js'
 
 /** Raw plugin row config after Loader defaults — spec §5.1. */
 export interface AdvisorConfig {
@@ -92,6 +98,23 @@ export interface AdvisorConfig {
    */
   readonly nextPrompt?: boolean
   /**
+   * Bound on the stored next-prompt suggestion, in CODE POINTS (GitHub issue
+   * #155); `0` disables the bound. Default 120 — the historical hardcoded cap,
+   * so an absent key keeps the pre-#155 output bound. Read LIVE per prediction
+   * attempt: one snapshot per attempt feeds both the prompt budget and the
+   * shaping step, so an edit needs no runtime rebuild and can never mix two
+   * bounds inside one attempt.
+   */
+  readonly nextPromptMaxChars?: number
+  /**
+   * Bound on the delivered advice note, in CODE POINTS (GitHub issue #155);
+   * `0` disables the bound. Default 768 — the historical hardcoded cap. A
+   * runtime CONSTRUCTION constant (the extraction call site reads it from the
+   * runtime), so it joins `runtimeSignature` in `index.ts`: an edit rebuilds
+   * the session's runtime once, exactly like `proseFallback`.
+   */
+  readonly noteMaxChars?: number
+  /**
    * Session default switch (GitHub issue #124): when true (the schema
    * default) a session with no own enable override runs whenever the pair
    * gate passes — the pre-#124 behavior, byte-identical. When false, such a
@@ -136,6 +159,10 @@ export interface ResolvedAdvisorConfig {
    * the schema default (true) fills it on every resolver path.
    */
   readonly nextPrompt: boolean
+  /** Bound on the stored next-prompt suggestion in code points; 0 = unbounded. */
+  readonly nextPromptMaxChars: number
+  /** Bound on the delivered advice note in code points; 0 = unbounded. */
+  readonly noteMaxChars: number
   /**
    * Session default switch (GitHub issue #124): the schema default (true)
    * fills it on every resolver path; `src/index.ts` `safeEffective` folds it
@@ -161,6 +188,8 @@ const CONFIG_KEYS: ReadonlySet<string> = new Set([
   'proseFallback',
   'reasoningEffort',
   'nextPrompt',
+  'nextPromptMaxChars',
+  'noteMaxChars',
   'defaultEnabled',
 ])
 
@@ -228,6 +257,16 @@ export const Config = z.object({
   // runtime signature (`index.ts`) — a `nextPrompt`-only edit must not
   // rebuild review runtimes (the prediction gate reads it live).
   nextPrompt: z.boolean().default(true).volatile(),
+  // Text bounds (GitHub issue #155): the two user-visible caps were hardcoded
+  // (120 / 768) and cut the text silently. `0` disables the bound — that is
+  // the opt-out; the defaults keep the historical limits. Config-key checklist
+  // dispositions (seam 6): NOT in LEGACY_KEYS — new keys with no stored-profile
+  // history; `nextPromptMaxChars` is NOT in the runtime signature (read live
+  // per attempt), `noteMaxChars` IS (a review-call construction constant).
+  nextPromptMaxChars: z.number().step(1).min(0).max(MAX_NEXT_PROMPT_MAX_CHARS)
+    .default(DEFAULT_NEXT_PROMPT_MAX_CHARS).volatile(),
+  noteMaxChars: z.number().step(1).min(0).max(MAX_ADVISOR_NOTE_MAX_CHARS)
+    .default(DEFAULT_ADVISOR_NOTE_MAX_CHARS).volatile(),
   // Session default switch (GitHub issue #124). Config-key checklist
   // dispositions (seam 6): NOT in LEGACY_KEYS — a NEW key with no
   // stored-profile history; NOT in the runtime signature — not a runtime
@@ -263,6 +302,10 @@ export interface VolatileAdvisorConfig {
   readonly reasoningEffort?: unknown
   /** The schema default (true) fills it on the Loader path; plain entries may omit it. */
   readonly nextPrompt?: unknown
+  /** The schema default (120) fills it on the Loader path; plain entries may omit it. */
+  readonly nextPromptMaxChars?: unknown
+  /** The schema default (768) fills it on the Loader path; plain entries may omit it. */
+  readonly noteMaxChars?: unknown
   /** The schema default (true) fills it on the Loader path; plain entries may omit it. */
   readonly defaultEnabled?: unknown
 }
@@ -316,7 +359,7 @@ export function unwrapAdvisorConfig(raw: VolatileAdvisorConfig): AdvisorConfig {
   // The raw side is loose on purpose: the schema-removed `enabled` and
   // `maxTokens` are not VolatileAdvisorConfig members but can arrive on any
   // plain entry — the cast widens only to let the destructure strip them.
-  const { enabled, provider, model, systemPrompt, immuneTurns, maxDeltaMessages, proseFallback, reasoningEffort, nextPrompt, defaultEnabled, maxTokens, ...rest } =
+  const { enabled, provider, model, systemPrompt, immuneTurns, maxDeltaMessages, proseFallback, reasoningEffort, nextPrompt, nextPromptMaxChars, noteMaxChars, defaultEnabled, maxTokens, ...rest } =
     raw as VolatileAdvisorConfig & { readonly enabled?: unknown; readonly maxTokens?: unknown }
   return {
     ...rest,
@@ -328,6 +371,8 @@ export function unwrapAdvisorConfig(raw: VolatileAdvisorConfig): AdvisorConfig {
     proseFallback: unwrapReference<boolean | undefined>(proseFallback),
     reasoningEffort: normalizeReasoningEffort(unwrapReference<unknown>(reasoningEffort)),
     nextPrompt: unwrapReference<boolean>(nextPrompt),
+    nextPromptMaxChars: unwrapReference<number>(nextPromptMaxChars),
+    noteMaxChars: unwrapReference<number>(noteMaxChars),
     defaultEnabled: unwrapReference<boolean | undefined>(defaultEnabled),
   }
 }
@@ -370,6 +415,11 @@ export function resolveAdvisorConfig(raw: unknown): ResolvedAdvisorConfig {
       ...normalized,
       enabled: true,
       nextPrompt: normalized.nextPrompt ?? true,
+      // GitHub issue #155: both bounds are plain numbers on EVERY resolver
+      // arm — an absent key (plain-object entries) means the schema default,
+      // never undefined on the resolved contract.
+      nextPromptMaxChars: normalized.nextPromptMaxChars ?? DEFAULT_NEXT_PROMPT_MAX_CHARS,
+      noteMaxChars: normalized.noteMaxChars ?? DEFAULT_ADVISOR_NOTE_MAX_CHARS,
       // GitHub issue #124: `defaultEnabled` is a plain boolean on EVERY
       // resolver arm — an absent key (plain-object entries) means the schema
       // default true, never undefined on the resolved contract.
@@ -387,6 +437,8 @@ export function resolveAdvisorConfig(raw: unknown): ResolvedAdvisorConfig {
     ...normalized,
     enabled: false,
     nextPrompt: normalized.nextPrompt ?? true,
+    nextPromptMaxChars: normalized.nextPromptMaxChars ?? DEFAULT_NEXT_PROMPT_MAX_CHARS,
+    noteMaxChars: normalized.noteMaxChars ?? DEFAULT_ADVISOR_NOTE_MAX_CHARS,
     defaultEnabled: normalized.defaultEnabled ?? true,
     disabledReason,
   }
