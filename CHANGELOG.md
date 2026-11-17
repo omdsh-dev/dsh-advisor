@@ -2,6 +2,11 @@
 
 All notable changes to dsh-advisor are documented here. Generated from git log by the release-prep workflow.
 
+## [0.7.4] - 2026-11-17
+
+- 4b0a92e Merge pull request #163 from omdsh-dev/docs/161-zh-readme-parity
+- ba16746 Merge pull request #162 from omdsh-dev/fix/161-image-placeholder
+
 ## [0.7.3] - 2026-11-17
 
 - e1bc764 Merge pull request #159 from triagmas/docs/runtime-signature-note-max-chars
