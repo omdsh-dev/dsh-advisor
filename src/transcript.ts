@@ -144,11 +144,26 @@ function fingerprintOf(events: readonly SessionEvent[], length: number): string 
 }
 
 /** Visible text of one content block (V4 ContentBlock has no tool-result arm —
- * tool results are first-class tool-role messages now). */
+ * tool results are first-class tool-role messages now). Attachment blocks
+ * render as identity placeholders: the review context carries text only, so
+ * the reviewer must learn that an image/file exists without being able to
+ * claim it saw the content. */
 function blockText(block: ContentBlock): string {
   switch (block.type) {
     case 'text':
       return block.text
+    case 'image': {
+      const { attachment } = block
+      const id = attachment.attachmentId
+      // A non-digest id (or a bare `sha256:` prefix) falls back to the id
+      // itself, so the placeholder never claims a digest it does not have.
+      const digest = id.startsWith('sha256:') && id.length >= 15 ? id.slice(0, 15) : id
+      return `[image attachment present: ${digest}, ${attachment.width}x${attachment.height} ${attachment.mediaType}; pixels are not included in this review context]`
+    }
+    case 'file': {
+      const { attachment } = block
+      return `[file attachment present: ${attachment.name}, ${attachment.bytes} bytes; content is not included in this review context]`
+    }
     default:
       // reasoning / tool-call / tool-addition / tool-removal / unknown
       // extensions carry no rendered text here.

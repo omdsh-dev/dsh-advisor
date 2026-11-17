@@ -315,6 +315,7 @@ export function AdvisorCard(props: AdvisorCardProps): ReactNode {
             {modelsEmpty ? <p className={styles['hint']}>{t('noModels')}</p> : null}
             {modelStale ? <p className={styles['hint']}>{t('staleModel')}</p> : null}
             {!providerEmpty && modelEmpty ? <p className={styles['warnHint']}>{t('modelRequired')}</p> : null}
+            <p className={styles['hint']}>{t('textOnlyContextHint')}</p>
           </div>
           <div className={styles['field']}>
             <label htmlFor="advisor-reasoning-effort" className={styles['fieldLabel']}>{t('reasoningEffort')}</label>

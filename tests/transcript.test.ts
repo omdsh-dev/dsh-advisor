@@ -457,6 +457,42 @@ describe('DeltaRenderer — markdown rendering', () => {
     expect(delta!.markdown).toContain('**user**: [tool result] (failed) tests crashed')
   })
 
+  it('renders an image-only user message as an identity placeholder (issue #161)', () => {
+    // An image with no accompanying text used to render `**user**: <empty>`,
+    // which made the reviewer assert the user supplied no screenshot.
+    const imageOnly = {
+      type: 'image',
+      attachment: {
+        attachmentId: 'sha256:0123456789abcdef',
+        mediaType: 'image/png',
+        bytes: 2048,
+        width: 800,
+        height: 600,
+      },
+    } as unknown as ContentBlock
+    const renderer = new DeltaRenderer()
+    const delta = renderer.update(buildEvents([
+      turnStart(1),
+      {
+        type: 'user/message',
+        data: {
+          id: MessageId('user-image'),
+          role: 'user',
+          content: [imageOnly],
+          source: { kind: 'user' },
+        },
+        surfaceOp: 'append',
+      },
+      stepStart(1, 1),
+      assistantMessage('done'),
+      stepEnd(1, 1),
+      turnEnd(1),
+    ]))
+    expect(delta).toBeDefined()
+    expect(delta!.markdown).toContain('image attachment present')
+    expect(delta!.markdown).not.toContain('**user**: <empty>')
+  })
+
   it('excludes reasoning blocks from assistant text (MVP)', () => {
     const renderer = new DeltaRenderer()
     const delta = renderer.update(buildEvents([
