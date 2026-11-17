@@ -1386,6 +1386,20 @@ describe('read-only apply guard (qc2 W-1 — writable flips mid-session)', () =>
     expect(draftOf(store).nextPromptMaxChars).toBe(2)
     expect(set).not.toHaveBeenCalled()
   })
+
+  it('leaves a staged bound untouched when the gate refuses the save', async () => {
+    // No model on the composed config → the KD-S4 gate refuses the apply.
+    const { remote, rpc, set } = scriptedApi({
+      config: { enabled: true, provider: 'x', systemPrompt: '', immuneTurns: 3, maxDeltaMessages: 60 },
+    })
+    const store = new AdvisorSettingsStore(remote, rpc, schema)
+    await store.load()
+    store.setNextPromptMaxChars(30)
+    expect(draftOf(store).nextPromptMaxChars).toBe(30)
+    await store.apply()
+    expect(draftOf(store).nextPromptMaxChars).toBe(30)
+    expect(set).not.toHaveBeenCalled()
+  })
 })
 
 describe('card scenario (store-level load/save over the gateway channel)', () => {

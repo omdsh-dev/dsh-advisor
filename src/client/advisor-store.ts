@@ -963,10 +963,18 @@ export class AdvisorSettingsStore {
       })
       return
     }
+    const gate = gateFailure(state.draft)
+    if (gate !== undefined) {
+      this.store.update((s) => {
+        s.applyState = { kind: 'error', failure: { kind: 'gate', reason: gate } }
+      })
+      return
+    }
     // GitHub issue #155: the two bound inputs floor per keystroke but allow an
-    // out-of-range entry while it is being typed. Clamp once here — AFTER the
-    // read-only guard, so a refused write never rewrites the staged draft — and
-    // write the result back so the card shows the value that is actually sent.
+    // out-of-range entry while it is being typed. Clamp once here — after both
+    // refusing guards (read-only, gate), so a refused save never rewrites the
+    // staged draft — and write the result back so the card shows the value
+    // that is actually sent.
     const pending = this.store.getSnapshot()
     const nextBound = pending.draft.nextPromptMaxChars === undefined
       ? undefined
@@ -982,13 +990,6 @@ export class AdvisorSettingsStore {
       })
     }
     const settled = this.store.getSnapshot()
-    const gate = gateFailure(settled.draft)
-    if (gate !== undefined) {
-      this.store.update((s) => {
-        s.applyState = { kind: 'error', failure: { kind: 'gate', reason: gate } }
-      })
-      return
-    }
     const patch = this.patchFor(settled.draft)
     if (Object.keys(patch).length === 0) {
       this.store.update((s) => {
