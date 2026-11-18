@@ -195,6 +195,19 @@ function renderMessage(message: Message): string {
 }
 
 /**
+ * Whether a derived message belongs on the reviewer surface (spec §4: user /
+ * agent / tool only). DSH commits the primary agent's system prompt as a
+ * `system/message` surface node (node 0) and developer-role content as
+ * `developer/message`; neither is agent work. Rendering them through the
+ * assistant branch shipped the full system prompt to the reviewer model and
+ * to the next-prompt predictor as `**agent**: …` — mis-attributed work, extra
+ * tokens, and a prompt leak into a second request.
+ */
+function isReviewableMessage(message: Message): boolean {
+  return message.role !== 'system' && message.role !== 'developer' && !isAdvisorMessage(message)
+}
+
+/**
  * Find the latest closed turn that entered at least one model step, ignoring
  * balanced no-step turns produced by rejection, empty input, or cancellation.
  * Vendored locally: `@deepseek-ai/dsh-session` removed this export in the
@@ -351,7 +364,7 @@ export class DeltaRenderer {
     const folded = foldSurface(events.slice(0, length))
     for (const seq of folded.nodes) {
       const message = deriveEventMessage(events[seq]!)
-      if (message === null || isAdvisorMessage(message)) continue
+      if (message === null || !isReviewableMessage(message)) continue
       this.surface.push(seq)
       this.messages.set(seq, message)
     }
@@ -368,7 +381,7 @@ export class DeltaRenderer {
     for (let index = start; index < end; index++) {
       const event = events[index]!
       const message = deriveEventMessage(event)
-      if (message === null || isAdvisorMessage(message)) continue
+      if (message === null || !isReviewableMessage(message)) continue
       this.surface.push(event.seq)
       this.messages.set(event.seq, message)
       added.push(message)

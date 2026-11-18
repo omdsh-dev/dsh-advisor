@@ -152,6 +152,45 @@ function toolResultMessage(value: string, isError = false): EventSpec {
   }
 }
 
+/** V4 system prompt: the loop appends the rendering as surface node 0
+ * (`system/message`) before the step's first `user/message`. It is harness
+ * instruction, not agent work — the reviewer surface must skip it (B1). */
+function systemMessage(value: string): EventSpec {
+  return {
+    type: 'system/message',
+    data: {
+      turn: 1,
+      step: 1,
+      message: {
+        id: MessageId(`system-${value}`),
+        role: 'system',
+        content: [text(value)],
+        source: { kind: 'agent-instructions', form: 'instructions' },
+      },
+    },
+    surfaceOp: 'append',
+  }
+}
+
+/** V4 developer-role content (`developer/message`): policy/tool-change blocks,
+ * also harness instruction rather than agent work (B1). */
+function developerMessage(value: string): EventSpec {
+  return {
+    type: 'developer/message',
+    data: {
+      turn: 1,
+      step: 1,
+      message: {
+        id: MessageId(`developer-${value}`),
+        role: 'developer',
+        content: [text(value)],
+        source: { kind: 'agent-instructions', form: 'instructions' },
+      },
+    },
+    surfaceOp: 'append',
+  }
+}
+
 const turnStart = (turn: number): EventSpec => ({ type: 'turn/start', data: { turn } })
 const stepStart = (turn: number, step: number): EventSpec => ({ type: 'step/start', data: { turn, step } })
 const stepEnd = (turn: number, step: number): EventSpec => ({ type: 'step/end', data: { turn, step } })
@@ -375,6 +414,62 @@ describe('DeltaRenderer — own-message exclusion (self-review guard)', () => {
     expect(delta).toBeDefined()
     expect(delta!.markdown).toContain('**user**: continue the task')
     expect(delta!.markdown).not.toContain('advisor')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// DeltaRenderer — instruction-surface exclusion (system/developer, B1)
+// ---------------------------------------------------------------------------
+
+describe('DeltaRenderer — instruction-surface exclusion (B1)', () => {
+  it('does not feed the system prompt to the reviewer as agent work', () => {
+    // The agent loop commits the rendered system prompt as a `system/message`
+    // surface node; the assistant fallback in renderMessage labelled it
+    // `**agent**:`, so the reviewer graded the harness instructions as the
+    // primary agent's output and the prompt leaked into a second request.
+    const renderer = new DeltaRenderer()
+    const events = buildEvents([
+      systemMessage('You are a careful coding agent.'),
+      turnStart(1),
+      userMessage('fix the bug'),
+      stepStart(1, 1),
+      assistantMessage('Done.'),
+      stepEnd(1, 1),
+      turnEnd(1),
+    ])
+    const delta = renderer.update(events)
+    expect(delta).toBeDefined()
+    expect(delta!.markdown).not.toContain('careful coding agent')
+    expect(delta!.markdown).not.toContain('**agent**: You are')
+    expect(delta!.markdown).toContain('**user**: fix the bug')
+    expect(delta!.markdown).toContain('**agent**: Done.')
+  })
+
+  it('skips developer-role content on append and on a post-compaction replay', () => {
+    const renderer = new DeltaRenderer()
+    renderer.update(buildEvents([
+      systemMessage('System preamble.'),
+      developerMessage('Tool addition: shell.'),
+      ...simpleTurn(1, 'first prompt', 'First reply.'),
+    ]))
+    // A compact rewrite forces the rebuild path — the same ingestion filter
+    // must hold there, or a replay re-sends the instructions.
+    const compacted = buildEvents([
+      systemMessage('System preamble.'),
+      developerMessage('Tool addition: shell.'),
+      ...simpleTurn(1, 'first prompt', 'First reply.'),
+      compactStart(),
+      compactSummary(),
+      userMessage('Summary of earlier work.', { kind: 'user' }, { op: 'replace', startSeq: 1, endSeq: 3 }, [1, 3]),
+      compactEnd(),
+      ...simpleTurn(2, 'continue', 'Continuing.'),
+    ])
+    const delta = renderer.update(compacted)
+    expect(delta).toBeDefined()
+    expect(delta!.markdown).not.toContain('System preamble.')
+    expect(delta!.markdown).not.toContain('Tool addition: shell.')
+    expect(delta!.markdown).toContain('**user**: continue')
+    expect(delta!.markdown).toContain('**agent**: Continuing.')
   })
 })
 
