@@ -1169,9 +1169,10 @@ describe('integration — owner teardown disposers (B3/B4)', () => {
     expect(unregister).not.toHaveBeenCalled()
 
     // The commands child must RETURN the registry disposer, so cordis owns it
-    // as the child's effect: a leaked registration survives the fiber and a
-    // re-apply then hits "already registered" (swallowed) — the command stays
-    // bound to a disposed controller until a full host restart.
+    // as the child fiber's effect: a leaked registration survives the fiber,
+    // and a re-apply then fails with "already registered" — an error cordis
+    // logs and contains (the child fiber fails, `apply` keeps running) — so
+    // the command would stay bound to a disposed controller until a restart.
     await harness.dispose()
     expect(unregister).toHaveBeenCalledTimes(1)
   })
@@ -1187,8 +1188,9 @@ describe('integration — owner teardown disposers (B3/B4)', () => {
     expect(signal?.aborted).toBe(false)
 
     // The reviewer-claim teardown must dispose every per-session runtime, not
-    // just release the global flag: an in-flight call otherwise keeps its
-    // deadline timer and can deliver a note after the fiber is gone.
+    // just release the global flag: disposal is what aborts an in-flight
+    // provider call, so this pins that the abort reaches a call that was
+    // already running when the fiber went away.
     await harness.dispose()
     await vi.waitFor(() => expect(signal?.aborted).toBe(true))
   })

@@ -1242,12 +1242,14 @@ export function apply(ctx: Context, config: AdvisorConfig) {
   // T7: the command child activates ONLY when a command registry is composed
   // (conditional child activation — `commands` must NOT join the top-level
   // `inject` list, T1 fix). `/advisor` toggle/on|off|status (spec §2 S5).
-  // The callback RETURNS the registry disposer: cordis turns a child's return
-  // value into a fiber effect (`cordis/src/registry.ts:176`), so unloading or
-  // reloading the plugin row unregisters `/advisor`. Without the return the
-  // registration leaked past teardown, and a re-apply then hit `command
-  // "advisor" is already registered` — swallowed by the substring catch below
-  // — leaving the command bound to a disposed controller until a full restart.
+  // The callback RETURNS the registry disposer: cordis collects a child's
+  // return value as the child fiber's effect (`cordis/src/fiber.ts:373`), so
+  // unloading or reloading the plugin row unregisters `/advisor`. Without the
+  // return the registration leaked past teardown, and a re-apply then hit
+  // `command "advisor" is already registered`. That error never escapes
+  // `ctx.inject`: cordis logs it and marks the child fiber failed
+  // (`cordis/src/fiber.ts:695`), so `apply` kept running with `/advisor` bound
+  // to a disposed controller until a full restart.
   ctx.inject(['commands'], (commandCtx) => registerAdvisorCommands(commandCtx.commands, controller))
 
   // T1 (plan dsh-advisor-tui-client-n8): the dsh-tui client seam — the

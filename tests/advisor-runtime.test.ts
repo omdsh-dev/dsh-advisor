@@ -227,6 +227,7 @@ const textReply = (text: string): readonly StreamChunk[] => [
   { type: 'text-delta', index: 0, text },
   { type: 'finish', reason: { kind: 'stop' } },
 ]
+
 /**
  * Chunk script for an empty reply — no text deltas, just the terminal finish
  * chunk (the completed-but-no-content class; constructible with either
