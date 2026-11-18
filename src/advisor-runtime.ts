@@ -804,6 +804,18 @@ export class AdvisorRuntime {
     return { kind: 'drop' }
   }
 
+  /**
+   * The single KD-5 timeout verdict (message + `TIMEOUT` code). One helper, not
+   * three literals: `classifyFailure` keys the transient retry on that code, so
+   * a divergent copy at any raise site would silently stop the retry.
+   */
+  private timedOut(): CallResult {
+    return {
+      kind: 'failure',
+      failure: { message: `advisor call timed out after ${this.callTimeoutMs}ms`, code: 'TIMEOUT' },
+    }
+  }
+
   /** One model call: build options, stream text, extract the note (KD-2). */
   private async callModel(delta: Delta): Promise<CallResult> {
     let text = ''
@@ -830,12 +842,7 @@ export class AdvisorRuntime {
       // (the race above is what bounds it): classify HERE instead of opening a
       // provider request that the per-chunk race would abort at once.
       if (deadlineSignal.aborted) {
-        if (timeoutOf(deadlineSignal, ADVISOR_CALL_TIMEOUT) !== undefined) {
-          return {
-            kind: 'failure',
-            failure: { message: `advisor call timed out after ${this.callTimeoutMs}ms`, code: 'TIMEOUT' },
-          }
-        }
+        if (timeoutOf(deadlineSignal, ADVISOR_CALL_TIMEOUT) !== undefined) return this.timedOut()
         return { kind: 'aborted' }
       }
       const stream = this.llm.stream(this.buildOptions(delta, deadlineSignal, reasoningEffort))
@@ -846,12 +853,7 @@ export class AdvisorRuntime {
           // Best-effort teardown of a provider that may still be mid-flight;
           // never await a hung teardown (it may never settle).
           iterator.return?.().catch(() => {})
-          if (timeoutOf(deadlineSignal, ADVISOR_CALL_TIMEOUT) !== undefined) {
-            return {
-              kind: 'failure',
-              failure: { message: `advisor call timed out after ${this.callTimeoutMs}ms`, code: 'TIMEOUT' },
-            }
-          }
+          if (timeoutOf(deadlineSignal, ADVISOR_CALL_TIMEOUT) !== undefined) return this.timedOut()
           return { kind: 'aborted' } // dispose aborted the in-flight call
         }
         if (next.done) break
@@ -871,12 +873,7 @@ export class AdvisorRuntime {
       // terminal failure like any other. A deadline timeout surfaced as a
       // provider abort (rather than through the per-chunk race) is still the
       // transient timeout case — KD-5 retry once → drop.
-      if (timeoutOf(deadlineSignal, ADVISOR_CALL_TIMEOUT) !== undefined) {
-        return {
-          kind: 'failure',
-          failure: { message: `advisor call timed out after ${this.callTimeoutMs}ms`, code: 'TIMEOUT' },
-        }
-      }
+      if (timeoutOf(deadlineSignal, ADVISOR_CALL_TIMEOUT) !== undefined) return this.timedOut()
       if (this.disposed || this.controller.signal.aborted) return { kind: 'aborted' }
       return { kind: 'failure', failure: finish.failure }
     }
