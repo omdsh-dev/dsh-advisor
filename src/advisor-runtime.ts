@@ -433,6 +433,34 @@ function raceIteratorNext<T>(
   })
 }
 
+/**
+ * Race one promise against a deadline signal (same shape as the per-chunk
+ * `raceIteratorNext`, and the copy the gateway/index faces carry): settle with
+ * the promise's result, or `'aborted'` when the signal aborts first. The
+ * reasoning-effort capability lookup needs this because `resolveModelInfo`
+ * only THREADS the signal into the adapter — an adapter whose lookup ignores
+ * cancellation would otherwise wedge the drain past the call deadline
+ * (`draining` stays true, `kickDrain` refuses every later delta, and the
+ * session's advisor dies silently). A late rejection stays handled here.
+ */
+function raceSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | 'aborted'> {
+  if (signal.aborted) return Promise.resolve('aborted')
+  return new Promise<T | 'aborted'>((resolve, reject) => {
+    const onAbort = (): void => resolve('aborted')
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
 // ---------------------------------------------------------------------------
 // AdvisorRuntime
 // ---------------------------------------------------------------------------
@@ -793,11 +821,23 @@ export class AdvisorRuntime {
       // send the configured id when the model declares it, else the smallest
       // declared effort; never fail the call on a resolution error (the
       // option is simply omitted). The resolution is bounded by the call
-      // deadline (n4 QC N-5): the fused signal is threaded through, so a hung
-      // adapter capability lookup that honors cancellation aborts with the
-      // call instead of wedging the drain ahead of the deadline-guarded
-      // stream loop.
+      // deadline (n4 QC N-5): the fused signal is threaded through AND raced
+      // against, so a hung adapter capability lookup aborts with the call —
+      // whether or not the adapter honors cancellation — instead of wedging
+      // the drain ahead of the deadline-guarded stream loop.
       const reasoningEffort = await this.resolveReasoningEffort(deadlineSignal)
+      // A capability lookup that ignored cancellation can outlive the deadline
+      // (the race above is what bounds it): classify HERE instead of opening a
+      // provider request that the per-chunk race would abort at once.
+      if (deadlineSignal.aborted) {
+        if (timeoutOf(deadlineSignal, ADVISOR_CALL_TIMEOUT) !== undefined) {
+          return {
+            kind: 'failure',
+            failure: { message: `advisor call timed out after ${this.callTimeoutMs}ms`, code: 'TIMEOUT' },
+          }
+        }
+        return { kind: 'aborted' }
+      }
       const stream = this.llm.stream(this.buildOptions(delta, deadlineSignal, reasoningEffort))
       const iterator = stream[Symbol.asyncIterator]()
       for (;;) {
@@ -1000,10 +1040,12 @@ export class AdvisorRuntime {
    * n4 QC N-5) is advisory and returns `undefined` WITHOUT caching, so a
    * transient failure retries the resolution on the next call instead of
    * latching "no reasoning efforts" for the runtime's lifetime. The optional
-   * `signal` (the call's deadline signal) is threaded into `resolveModelInfo`,
-   * whose contract allows adapter-owned asynchronous lookup with cancellation
-   * — a hung lookup that honors the signal aborts with the call deadline
-   * instead of wedging the drain.
+   * `signal` (the call's deadline signal) is both threaded into
+   * `resolveModelInfo` and RACED against it: threading alone only works for an
+   * adapter that honors cancellation, so a lookup ignoring it would wedge the
+   * drain past the deadline. On abort the attempt is a transient timeout:
+   * `callModel` classifies it before opening a provider stream, and nothing is
+   * cached.
    *
    * A configured id the model does not declare (a leftover after switching
    * models) falls back to the smallest declared effort and is reported ONCE
@@ -1022,7 +1064,9 @@ export class AdvisorRuntime {
         efforts = []
       } else {
         try {
-          const info = await this.llm.resolveModelInfo(this.provider, this.model, signal)
+          const lookup = this.llm.resolveModelInfo(this.provider, this.model, signal)
+          const info = signal === undefined ? await lookup : await raceSignal(lookup, signal)
+          if (info === 'aborted') return undefined
           efforts = info?.reasoning?.efforts ?? []
         } catch {
           // Failure (adapter throw OR deadline abort — one class): the call

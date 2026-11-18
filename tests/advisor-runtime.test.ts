@@ -197,12 +197,36 @@ class SignalBoundLlm {
   }
 }
 
+/**
+ * Fake whose `resolveModelInfo` IGNORES the abort signal: it returns a promise
+ * that never settles (an adapter may query a metadata endpoint without wiring
+ * cancellation). Before the race in `resolveReasoningEffort`, the runtime
+ * awaited this forever — the call deadline never fired, `draining` stayed true,
+ * and every later delta of the session was refused (B2: the advisor died
+ * silently while the session kept running).
+ */
+class SignalDeafLlm {
+  readonly calls: GenerateOptions[] = []
+  readonly resolveSignals: Array<AbortSignal | undefined> = []
+
+  constructor(private readonly reply: readonly StreamChunk[]) {}
+
+  resolveModelInfo(_provider: string, _model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
+    this.resolveSignals.push(signal)
+    return new Promise<LlmResolvedModelInfo>(() => {})
+  }
+
+  stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    this.calls.push(options)
+    return streamOf(this.reply)
+  }
+}
+
 /** Chunk script for a successful text reply. */
 const textReply = (text: string): readonly StreamChunk[] => [
   { type: 'text-delta', index: 0, text },
   { type: 'finish', reason: { kind: 'stop' } },
 ]
-
 /**
  * Chunk script for an empty reply — no text deltas, just the terminal finish
  * chunk (the completed-but-no-content class; constructible with either
@@ -1169,12 +1193,31 @@ describe('AdvisorRuntime — failure policy (KD-5)', () => {
     // The retry re-resolves with a FRESH, non-aborted signal — the abort was
     // not latched and is not reused (n4 QC N-5 / qc3 S-2).
     expect(llm.resolveSignals[1]!.aborted).toBe(false)
-    // Attempt 2 re-resolved 'off' — the option is back on the retry, the note
-    // is delivered, and the whole drain stayed deadline-bounded.
-    expect(llm.calls).toHaveLength(2)
-    expect(llm.calls[1]!.reasoningEffort).toBe(ReasoningEffortId('off'))
+    // The aborted attempt is classified as a timeout BEFORE it opens a provider
+    // stream (B2 pre-check), so only the retry reaches the adapter — with the
+    // 'off' option resolved on that fresh deadline — and the note is delivered.
+    expect(llm.calls).toHaveLength(1)
+    expect(llm.calls[0]!.reasoningEffort).toBe(ReasoningEffortId('off'))
     expect(notes).toEqual([{ note: 'resolution bounded', severity: 'nit' }])
     expect(runtime.status()).toBe('running')
+  })
+
+  it('bounds a capability lookup that ignores the abort signal — no stream opens past the deadline (B2)', async () => {
+    const llm = new SignalDeafLlm(textReply('{"note":"never reached"}'))
+    const { runtime, notes } = makeRuntime(llm, { callTimeoutMs: 20 })
+
+    runtime.enqueue(delta('update'))
+    await runtime.waitForDrain()
+
+    // The initial attempt and its KD-5 retry both hit the hung lookup and were
+    // classified as timeouts BEFORE opening a provider request: the adapter saw
+    // no stream call at all, and the drain returned to `running` instead of
+    // staying `draining` for the rest of the session.
+    expect(llm.resolveSignals).toHaveLength(2)
+    expect(llm.calls).toHaveLength(0)
+    expect(notes).toEqual([])
+    expect(runtime.status()).toBe('running')
+    expect(runtime.pendingCount).toBe(0)
   })
 
   it('a timeout is a transient failure: the single retry gets a fresh deadline and can succeed', async () => {
