@@ -638,6 +638,11 @@ export function apply(ctx: Context, config: AdvisorConfig) {
     validationTeardown.abort('advisor owner disposed')
     overrides.disposeAll()
     suggestions.disposeAll()
+    // B4: the per-session runtimes are owner work — own abort controllers,
+    // deadline timers and in-flight model calls. Disposing the fiber stops NEW
+    // deltas, but an already-running drain keeps going (and can deliver a note
+    // after unload), so dispose every runtime here as well.
+    for (const sessionId of [...runtimes.keys()]) disposeRuntime(sessionId)
   }, 'advisor: release reviewer claim')
   const observer = new SessionTranscriptObserver({
     maxDeltaMessages: resolved().maxDeltaMessages,
@@ -1236,10 +1241,14 @@ export function apply(ctx: Context, config: AdvisorConfig) {
 
   // T7: the command child activates ONLY when a command registry is composed
   // (conditional child activation — `commands` must NOT join the top-level
-  // `inject` list, T1 fix). `/advisor` toggle/on/off/status (spec §2 S5).
-  ctx.inject(['commands'], (commandCtx) => {
-    registerAdvisorCommands(commandCtx.commands, controller)
-  })
+  // `inject` list, T1 fix). `/advisor` toggle/on|off|status (spec §2 S5).
+  // The callback RETURNS the registry disposer: cordis turns a child's return
+  // value into a fiber effect (`cordis/src/registry.ts:176`), so unloading or
+  // reloading the plugin row unregisters `/advisor`. Without the return the
+  // registration leaked past teardown, and a re-apply then hit `command
+  // "advisor" is already registered` — swallowed by the substring catch below
+  // — leaving the command bound to a disposed controller until a full restart.
+  ctx.inject(['commands'], (commandCtx) => registerAdvisorCommands(commandCtx.commands, controller))
 
   // T1 (plan dsh-advisor-tui-client-n8): the dsh-tui client seam — the
   // `tuiCommandTrees` /advisor provider (zh/en `/`-menu description +

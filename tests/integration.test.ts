@@ -113,6 +113,27 @@ class StubAdapter extends LlmAdapter {
   }
 }
 
+/**
+ * Stub whose stream never emits and never finishes until the caller's
+ * `options.signal` aborts — a provider that honors nothing but still exposes
+ * the signal. Proves owner teardown (B4) reaches a runtime that is ALREADY
+ * draining: without the runtime disposer in the reviewer-claim teardown, the
+ * call would outlive the fiber and could deliver after unload.
+ */
+class HangingAdapter extends StubAdapter {
+  override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    this.requests.push(options)
+    await new Promise<void>((resolve) => {
+      const signal = options.signal
+      if (signal === undefined || signal.aborted) {
+        resolve()
+        return
+      }
+      signal.addEventListener('abort', () => resolve(), { once: true })
+    })
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Composed harness
 // ---------------------------------------------------------------------------
@@ -147,10 +168,11 @@ interface Harness {
 async function composeHarness(
   config: Partial<AdvisorConfig>,
   replies: ReadonlyArray<readonly StreamChunk[]>,
+  adapterOverride?: StubAdapter,
 ): Promise<Harness> {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
-  const adapter = new StubAdapter(replies)
+  const adapter = adapterOverride ?? new StubAdapter(replies)
   ctx.llm.registerAdapter(['stub'], adapter)
   // The plugin declares inject ['sessions', 'agents', 'llm']; `apply` never
   // reads `ctx.sessions`, and reads `ctx.agents.get(...)` only as the KD-4
@@ -1125,5 +1147,49 @@ describe('single-reviewer guard (n4 QC F-6)', () => {
     expect(() => advisorPlugin.apply(ctx, { bogus: 1 } as never))
       .toThrow(/unknown config key "bogus"/)
     expect((globalThis as Record<string, unknown>)['__dshAdvisorReviewer__']).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Owner teardown: the disposers the reviewer fiber owns (B3, B4)
+// ---------------------------------------------------------------------------
+
+describe('integration — owner teardown disposers (B3/B4)', () => {
+  it('withdraws the /advisor command when the owner fiber is disposed (B3)', async () => {
+    const harness = await composeHarness({ provider: 'stub', model: 'stub-model' }, [])
+    const unregister = vi.fn()
+    let registered = 0
+    harness.ctx.provide('commands', {
+      register: (): (() => void) => {
+        registered++
+        return unregister
+      },
+    } as never)
+    await vi.waitFor(() => expect(registered).toBe(1))
+    expect(unregister).not.toHaveBeenCalled()
+
+    // The commands child must RETURN the registry disposer, so cordis owns it
+    // as the child's effect: a leaked registration survives the fiber and a
+    // re-apply then hits "already registered" (swallowed) — the command stays
+    // bound to a disposed controller until a full host restart.
+    await harness.dispose()
+    expect(unregister).toHaveBeenCalledTimes(1)
+  })
+
+  it('aborts a runtime that is already draining when the owner fiber is disposed (B4)', async () => {
+    const hanging = new HangingAdapter([])
+    const harness = await composeHarness({ provider: 'stub', model: 'stub-model' }, [], hanging)
+    const fake = makeFakeAgent()
+    const { session, log } = makeSession()
+    feedSteppedRound(harness.ctx, session, log, fake)
+    await vi.waitFor(() => expect(hanging.requests).toHaveLength(1))
+    const signal = hanging.requests[0]!.signal
+    expect(signal?.aborted).toBe(false)
+
+    // The reviewer-claim teardown must dispose every per-session runtime, not
+    // just release the global flag: an in-flight call otherwise keeps its
+    // deadline timer and can deliver a note after the fiber is gone.
+    await harness.dispose()
+    await vi.waitFor(() => expect(signal?.aborted).toBe(true))
   })
 })
