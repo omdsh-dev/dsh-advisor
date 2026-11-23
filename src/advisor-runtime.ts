@@ -374,11 +374,16 @@ function classifyFailure(failure: LlmFailure): FailureClass {
   // before network I/O — no retry can fix it. The account route has thrown
   // these since rc.2; rc.3's API-key route follows the official listing too,
   // which puts them on the default provider path.
+  // dsh 0.2.2-rc.5 reports a DeepSeek `stop_reason: "refusal"` as
+  // `CONTENT_REFUSED` (it was `MALFORMED_RESPONSE` through rc.3): the provider
+  // declined to answer, so re-sending the same delta cannot change the outcome
+  // — terminal, not transient.
   if (
     failure.code === INVALID_CREDENTIAL_CODE
     || failure.code === 'NO_ADAPTER'
     || failure.code === 'MODEL_UNSUPPORTED'
     || failure.code === 'CLIENT_UPGRADE_REQUIRED'
+    || failure.code === 'CONTENT_REFUSED'
     || PERMANENT_FAILURE_PATTERN.test(failure.message)
   ) {
     return 'permanent'
