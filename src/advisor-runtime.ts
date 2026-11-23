@@ -43,7 +43,8 @@
  *   3 consecutive dropped deltas → flush the pending backlog (never stall);
  *   permanent errors (`invalid_request_error`, model-not-found, "is not
  *   supported when", a listed model this build cannot serve —
- *   `MODEL_UNSUPPORTED` / `CLIENT_UPGRADE_REQUIRED`) → halt the session's
+ *   `MODEL_UNSUPPORTED` / `CLIENT_UPGRADE_REQUIRED` — or a provider refusal —
+ *   `CONTENT_REFUSED`) → halt the session's
  *   advisor; quota/rate-limit → pause
  *   (`quota_exhausted`), batch retained, no auto-resume timer; the in-flight
  *   call is aborted on dispose via the `signal`. `halted` is terminal in
@@ -363,13 +364,11 @@ const PERMANENT_FAILURE_PATTERN = /invalid_request_error|model[_ ]not[_ ]found|i
  */
 function classifyFailure(failure: LlmFailure): FailureClass {
   if (failure.code === EMPTY_RESPONSE_CODE) return 'empty'
-  if (
-    failure.code === QUOTA_EXCEEDED_CODE
-    || failure.code === 'RATE_LIMIT'
-    || isQuotaExceededError(failure.message)
-  ) {
-    return 'quota'
-  }
+  // Explicit permanent codes are decided before any message heuristic: the
+  // provider's explanation text is free-form (a refusal keeps the provider's
+  // `stop_details.explanation`, which may read like a quota message), so a
+  // coded condition must never be downgraded to a resumable quota pause.
+  //
   // dsh model-listing refusals: the build cannot serve a listed model, decided
   // before network I/O — no retry can fix it. The account route has thrown
   // these since rc.2; rc.3's API-key route follows the official listing too,
@@ -384,10 +383,17 @@ function classifyFailure(failure: LlmFailure): FailureClass {
     || failure.code === 'MODEL_UNSUPPORTED'
     || failure.code === 'CLIENT_UPGRADE_REQUIRED'
     || failure.code === 'CONTENT_REFUSED'
-    || PERMANENT_FAILURE_PATTERN.test(failure.message)
   ) {
     return 'permanent'
   }
+  if (
+    failure.code === QUOTA_EXCEEDED_CODE
+    || failure.code === 'RATE_LIMIT'
+    || isQuotaExceededError(failure.message)
+  ) {
+    return 'quota'
+  }
+  if (PERMANENT_FAILURE_PATTERN.test(failure.message)) return 'permanent'
   return 'transient'
 }
 

@@ -1255,11 +1255,15 @@ describe('AdvisorRuntime — failure policy (KD-5)', () => {
     },
   )
 
-  it('halts on a DeepSeek content refusal (CONTENT_REFUSED, dsh 0.2.2-rc.5) without retrying or calling again', async () => {
+  it('halts on a DeepSeek content refusal (CONTENT_REFUSED, dsh 0.2.2-rc.5) even when its explanation reads like a quota error', async () => {
+    // The refusal keeps the provider's free-form `stop_details.explanation`
+    // (upstream audit §2), so the code must outrank the quota message heuristic
+    // — otherwise the refusal would pause with the batch retained and allow a
+    // replay on resume.
     const llm = new FakeLlm([
       {
         chunks: errorReply({
-          message: 'the provider refused to answer this request (blocked image)',
+          message: 'the provider refused to answer this request (blocked image): insufficient_quota',
           code: 'CONTENT_REFUSED',
         }),
       },
