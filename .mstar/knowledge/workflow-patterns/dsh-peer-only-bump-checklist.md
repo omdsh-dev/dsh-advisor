@@ -1,7 +1,7 @@
 ---
 module: dsh peer-only bump checklist (registry line + peer floors + lockfile + release-age exemptions)
 date: 2026-08-21
-last_updated: 2026-11-15
+last_updated: 2026-11-23
 plan_id: dsh-advisor-dsh-0.2.2-rc1-upgrade
 problem_type: workflow_issue
 category: workflow-patterns
@@ -24,14 +24,18 @@ applies_when:
 
 ## Context
 
-dsh-advisor has bumped its `@deepseek-ai/dsh-*` peerDependencies six times
-(rc.6 → rc.7 → rc.8 → 0.1.1-rc.1 → 0.2.2-rc.1 → 0.2.2-rc.3). The 0.2.2-rc.1 →
-0.2.2-rc.3 corridor (1109 non-merge commits) reorganized packages, config keys
-and BFF method names but touched none of the agent/session/llm/typert/client
-surfaces this plugin consumes: all 13 items of its UPGRADE-ADAPTATION
-checklist were N/A, the resolved peer floors (cordis ~4.1.0,
-schemastery ~3.19.0) did not move, and the bump stayed mechanical with
-`drift: none`. When the upstream release's
+dsh-advisor has bumped its `@deepseek-ai/dsh-*` peerDependencies seven times
+(rc.6 → rc.7 → rc.8 → 0.1.1-rc.1 → 0.2.2-rc.1 → 0.2.2-rc.3 → 0.2.2-rc.5). The
+0.2.2-rc.1 → 0.2.2-rc.3 corridor (1109 non-merge commits) reorganized packages,
+config keys and BFF method names but touched none of the
+agent/session/llm/typert/client surfaces this plugin consumes: all 13 items of
+its UPGRADE-ADAPTATION checklist were N/A, the resolved peer floors
+(cordis ~4.1.0, schemastery ~3.19.0) did not move, and the bump stayed
+mechanical with `drift: none`. The 0.2.2-rc.3 → 0.2.2-rc.5 corridor (9
+non-merge commits) kept the first-party package set unchanged but carried one
+consumed-surface change: a DeepSeek `stop_reason: "refusal"` now surfaces as
+`CONTENT_REFUSED` instead of `MALFORMED_RESPONSE`, and only the explicit-code
+classification needed adapting (see Guidance 6). When the upstream release's
 breaking changes do not touch any API the plugin consumes, the bump is
 mechanical and follows a fixed checklist. The 0.1.1-rc.1 release (172
 commits) renamed `credentials/updated` → `credentials/reference-updated`,
@@ -156,6 +160,30 @@ agent/session/llm/typert/client surfaces, so nothing touched `dsh-tools`,
 schedule, SDK-wire, WebServer, storage or attachment APIs. Do not migrate
 APIs the plugin does not use, and do not skip the walk because the previous
 bump was also N/A.
+
+At 0.2.2-rc.3 → 0.2.2-rc.5 exactly one of eight items applied — the failure-code
+change — and it is the template for this check:
+
+- The provider refusal code moved from `MALFORMED_RESPONSE` (a retryable class)
+  to `CONTENT_REFUSED`. `classifyFailure` must put the explicit code in the
+  `permanent` group (halt), because a refusal cannot be fixed by re-sending the
+  delta; leaving it unknown silently degrades it to `transient`.
+- **Explicit codes are evaluated before message heuristics.** The refusal error
+  preserves the provider's free-form `stop_details.explanation`, which is not a
+  fixed string. A refusal explanation that happens to match
+  `isQuotaExceededError` must still halt, not pause-and-retain. Order the
+  classifier: `EMPTY_RESPONSE` → explicit permanent codes (including
+  `CONTENT_REFUSED`) → quota code/message → permanent message pattern →
+  transient.
+- Regression test: make the refusal explanation match the quota heuristic too,
+  and assert `status() === 'halted'`, one model call and no later call. A test
+  with a neutral message does not prove the precedence.
+
+The other rc.5 items are N/A for this plugin: the new `usage` chunk before a
+refusal is not consumed; the dsh `retryPolicy` is not configured (KD-5 is
+plugin-owned); web search provider defaults / `web-search-deepseek.baseURL` /
+settings copy / `WebSearchRequest.llmProvider` are outside this plugin; and
+`SESSION_FORMAT_VERSION` plus both SQLite schema versions are unchanged.
 
 ### 7. Evidence
 

@@ -1254,6 +1254,33 @@ describe('AdvisorRuntime — failure policy (KD-5)', () => {
       expect(llm.calls).toHaveLength(1) // a refusal is not retryable
     },
   )
+
+  it('halts on a DeepSeek content refusal (CONTENT_REFUSED, dsh 0.2.2-rc.5) even when its explanation reads like a quota error', async () => {
+    // The refusal keeps the provider's free-form `stop_details.explanation`
+    // (upstream audit §2), so the code must outrank the quota message heuristic
+    // — otherwise the refusal would pause with the batch retained and allow a
+    // replay on resume.
+    const llm = new FakeLlm([
+      {
+        chunks: errorReply({
+          message: 'the provider refused to answer this request (blocked image): insufficient_quota',
+          code: 'CONTENT_REFUSED',
+        }),
+      },
+    ])
+    const { runtime, notes } = makeRuntime(llm)
+
+    runtime.enqueue(delta('first'))
+    await runtime.waitForDrain()
+    expect(runtime.status()).toBe('halted')
+    expect(notes).toEqual([])
+    expect(llm.calls).toHaveLength(1) // refusing provider: retrying cannot help
+
+    runtime.enqueue(delta('second'))
+    await runtime.waitForDrain()
+    expect(llm.calls).toHaveLength(1) // halted: the later delta never reaches the model
+    expect(runtime.pendingCount).toBe(0)
+  })
 })
 
 // ---------------------------------------------------------------------------
