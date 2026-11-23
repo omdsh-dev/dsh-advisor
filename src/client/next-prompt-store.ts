@@ -64,6 +64,21 @@ export class AdvisorSuggestionController {
   /** A locally accepted/dismissed value stays hidden across polls until the host clears it. */
   private consumedText: string | null = null
 
+  /**
+   * A submission starts a new suggestion generation. The host input machine
+   * exposes `submitting` before returning to plain; this boundary, unlike a
+   * focus/reconnect signal, distinguishes identical text on consecutive turns.
+   * Fence in-flight polls from the preceding turn at the same time.
+   */
+  beginTurn(): void {
+    this.requestSeq += 1
+    this.consumedText = null
+    this.store.update((s) => {
+      s.status = 'idle'
+      s.suggestion = null
+    })
+  }
+
   /** Last consumed refresh-signal epoch (reconnect / focus bumps). */
   private lastSignal: number | undefined
 

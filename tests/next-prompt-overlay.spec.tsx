@@ -167,7 +167,7 @@ function harness(): Harness {
 function ComposerStack(props: { card?: React.ReactNode; children: React.ReactNode }): React.ReactNode {
   return (
     <div>
-      <div data-composer-card="true">{props.card}</div>
+      <div data-composer-card="true">{props.card ?? <div contentEditable data-testid="composer-editor" />}</div>
       <div data-composer-dock="true">{props.children}</div>
     </div>
   )
@@ -290,7 +290,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     try {
       expect(fireEvent.keyDown(outside, { key: 'Tab' })).toBe(true)
       expect(h.setDraft).not.toHaveBeenCalled()
-      const card = view.container.querySelector('[data-composer-card]')!
+      const card = screen.getByTestId('composer-editor')
       expect(fireEvent.keyDown(card, { key: 'Tab', shiftKey: true })).toBe(true)
       expect(h.setDraft).not.toHaveBeenCalled()
       expect(fireEvent.keyDown(card, { key: 'Tab' })).toBe(false)
@@ -304,10 +304,44 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
   it('dismisses the suggestion with Escape inside the composer without filling the draft', async () => {
     const h = harness()
     const view = await mountWithSuggestion(h)
-    const card = view.container.querySelector('[data-composer-card]')!
+    const card = screen.getByTestId('composer-editor')
     expect(fireEvent.keyDown(card, { key: 'Escape' })).toBe(false)
     expect(h.setDraft).not.toHaveBeenCalled()
     expect(h.controller.store.getSnapshot().suggestion).toBeNull()
+  })
+
+  it('does not steal Tab or Escape from nested card buttons and popovers', async () => {
+    const h = harness()
+    const card = <><div contentEditable data-testid="composer-editor" /><button data-testid="nested-button">Options</button><div role="dialog" data-testid="nested-popover"><button data-testid="popover-button">Close</button></div></>
+    const view = render(<ComposerStack card={card}><ComposerDockTip {...h.props} /></ComposerStack>)
+    await waitFor(() => expect(h.rpc.calls).toHaveLength(1))
+    h.rpc.settle(ok({ suggestion: SUGGESTION }))
+    await waitFor(() => expect(h.controller.store.getSnapshot().status).toBe('ready'))
+    view.rerender(<ComposerStack card={card}><ComposerDockTip {...h.props} /></ComposerStack>)
+    for (const target of [screen.getByTestId('nested-button'), screen.getByTestId('popover-button')]) {
+      for (const key of ['Tab', 'Escape']) expect(fireEvent.keyDown(target, { key })).toBe(true)
+    }
+    expect(h.setDraft).not.toHaveBeenCalled()
+    expect(h.controller.store.getSnapshot().suggestion).toBe(SUGGESTION)
+    expect(fireEvent.keyDown(screen.getByTestId('composer-editor'), { key: 'Escape' })).toBe(false)
+    expect(h.controller.store.getSnapshot().suggestion).toBeNull()
+  })
+
+  it('observes submitting as a new-turn boundary and re-allows identical prediction text', async () => {
+    const h = harness()
+    h.rpc.auto = true
+    h.rpc.reply = ok({ suggestion: SUGGESTION })
+    const view = render(<ComposerStack><ComposerDockTip {...h.props} /></ComposerStack>)
+    await waitFor(() => expect(h.controller.store.getSnapshot().suggestion).toBe(SUGGESTION))
+    h.controller.consume()
+    await h.controller.fetch()
+    expect(h.controller.store.getSnapshot().suggestion).toBeNull()
+    h.input.update((s) => { s.phase = 'submitting' })
+    view.rerender(<ComposerStack><ComposerDockTip {...h.props} /></ComposerStack>)
+    h.input.update((s) => { s.phase = 'plain' })
+    view.rerender(<ComposerStack><ComposerDockTip {...h.props} /></ComposerStack>)
+    await h.controller.fetch()
+    expect(h.controller.store.getSnapshot().suggestion).toBe(SUGGESTION)
   })
 
   it('offers only the untyped suffix for a matching draft and accepts it with Tab', async () => {
@@ -320,7 +354,7 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     const card = view.container.querySelector('[data-composer-card]')!
     expect(fireEvent.keyDown(card, { key: 'ArrowRight' })).toBe(true)
     expect(h.setDraft).not.toHaveBeenCalled()
-    expect(fireEvent.keyDown(card, { key: 'Tab' })).toBe(false)
+    expect(fireEvent.keyDown(screen.getByTestId('composer-editor'), { key: 'Tab' })).toBe(false)
     expect(h.setDraft).toHaveBeenCalledWith(SUGGESTION)
   })
 
@@ -352,6 +386,30 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     h.rpc.reply = ok({ suggestion: SUGGESTION })
     await h.controller.fetch()
     expect(h.controller.store.getSnapshot().suggestion).toBe(SUGGESTION)
+  })
+
+  it('permits the same prediction on a subsequent submitted turn without a null RPC reply', async () => {
+    const h = harness()
+    h.rpc.auto = true
+    h.rpc.reply = ok({ suggestion: SUGGESTION })
+    await h.controller.fetch()
+    h.controller.consume()
+    await h.controller.fetch()
+    expect(h.controller.store.getSnapshot().suggestion).toBeNull()
+    h.controller.beginTurn()
+    await h.controller.fetch()
+    expect(h.controller.store.getSnapshot().suggestion).toBe(SUGGESTION)
+  })
+
+  it('ignores stale same-turn polls after accepting the prediction', async () => {
+    const h = harness()
+    h.rpc.auto = true
+    h.rpc.reply = ok({ suggestion: SUGGESTION })
+    await h.controller.fetch()
+    h.controller.consume()
+    await h.controller.fetch()
+    await h.controller.fetch()
+    expect(h.controller.store.getSnapshot().suggestion).toBeNull()
   })
 
   it('fills the draft on a bare ArrowRight and clears the suggestion optimistically', async () => {

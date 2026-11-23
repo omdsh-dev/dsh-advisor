@@ -140,6 +140,15 @@ export function ComposerDockTip(props: ComposerDockTipProps): ReactNode {
   const advice = adviceState.advice
   const draft = input.draft
   const phase = input.phase
+  // A submit, not a focus/reconnect epoch or a changed suggestion string,
+  // marks the new turn. Preserve stale same-turn poll suppression until then.
+  const previousPhase = useRef(phase)
+  useEffect(() => {
+    if (phase === 'submitting' && previousPhase.current !== 'submitting') {
+      suggestionController.beginTurn()
+    }
+    previousPhase.current = phase
+  }, [phase, suggestionController])
   // The flash state: the delivery id currently occupying the single row.
   const [flashId, setFlashId] = useState<number | null>(null)
   const [dismissedId, setDismissedId] = useState<number | null>(null)
@@ -241,8 +250,15 @@ export function ComposerDockTip(props: ComposerDockTipProps): ReactNode {
   useEffect(() => {
     if (suggestion === null) return
     const onKeyDown = (event: KeyboardEvent): void => {
-      const insideComposer = event.target instanceof Element
-        && document.querySelector('[data-composer-card]')?.contains(event.target)
+      // Tab and Escape belong only to the actual text editor, never a
+      // nested button, menu, popover, or a non-editable card wrapper.
+      const target = event.target
+      const editor = target instanceof Element
+        && target.closest('textarea, [contenteditable="true"], [role="textbox"]')
+      const nestedControl = target instanceof Element
+        && target.closest('button, select, a[href], [role="button"], [role="menu"], [role="menuitem"], [role="dialog"]')
+      const insideComposer = !nestedControl && editor
+        && document.querySelector('[data-composer-card]')?.contains(editor)
       if (insideComposer && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
         if (event.key === 'Escape' && !adviceVisibleRef.current
           && suggestion?.startsWith(inputRef.current.draft)
