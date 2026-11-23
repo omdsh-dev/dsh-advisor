@@ -13,7 +13,8 @@ allowBuilds:
 # so a range override no longer excludes anything and was dropped; `pnpm audit`
 # is clean on the resolved graph. fast-uri likewise needs none: ajv 8.20.0
 # declares ^3.0.1, which resolves the fixed 3.1.9 line.
-# Re-judged at 0.2.2-rc.5: dsh-llm still pins zod 4.6.6 exactly and the graph
+# Re-judged at 0.2.2-rc.5: dsh-agent / dsh-agent-preset-registry still pin
+# zod 4.6.6 exactly (dsh-llm declares no zod dependency at all) and the graph
 # resolves fast-uri 3.1.9, so both deletions still stand and `overrides` stays
 # absent.
 
