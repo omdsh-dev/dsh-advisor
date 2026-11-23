@@ -8,9 +8,10 @@
  * stacking, attachment overlap, edge fusion); the tip form has zero overlap
  * with any composer geometry. Pressing ArrowRight still fills the draft.
  *
- * Render gate: the tip renders ONLY while a suggestion waits
- * (`suggestion !== null`) on an EMPTY draft (`draft === ''`) in the plain
- * phase (`phase === 'plain'`). Any other state renders nothing.
+ * Render gate: the tip renders only while a suggestion waits in the plain
+ * phase and either the draft is empty or it is a strict prefix of the
+ * suggestion. For a typed prefix the tip displays just the untyped suffix;
+ * Tab accepts it, while ArrowRight retains normal caret navigation.
  *
  * Fill contract: two accept gestures share one gated fill path — a
  * document-level CAPTURE-phase keydown intercepts ONLY a bare ArrowRight
@@ -167,9 +168,11 @@ export function ComposerDockTip(props: ComposerDockTipProps): ReactNode {
   }, [deliveryId, dismissedId])
   const adviceVisible = flashId !== null && advice !== null
     && advice.deliveryId === flashId && advice.deliveryId !== dismissedId
-  // The render gate: a suggestion waits on an empty draft in the plain phase,
-  // and the transient advice note wins the row while its 2 s flash runs.
-  const suggestionVisible = !adviceVisible && suggestion !== null && draft === '' && phase === 'plain'
+  // The render gate: an empty draft or matching typed prefix in the plain
+  // phase can show a suggestion; the transient advice flash wins the row.
+  const suggestionVisible = !adviceVisible && suggestion !== null && phase === 'plain'
+    && suggestion.startsWith(draft) && suggestion.length > draft.length
+  const visibleSuggestion = suggestionVisible && draft !== '' ? suggestion!.slice(draft.length) : suggestion
 
   // Fetch on mount and on every consumed refresh-signal epoch bump
   // (connection/reset + window focus ride the plugin's shared debounced
@@ -223,7 +226,8 @@ export function ComposerDockTip(props: ComposerDockTipProps): ReactNode {
     if (suggestion === null) return false
     if (adviceVisibleRef.current) return false
     const current = inputRef.current
-    if (current.draft !== '' || current.phase !== 'plain') return false
+    if (current.phase !== 'plain' || !suggestion.startsWith(current.draft)
+      || suggestion.length <= current.draft.length) return false
     inputActions.setDraft(suggestion)
     suggestionController.consume()
     return true
@@ -237,7 +241,24 @@ export function ComposerDockTip(props: ComposerDockTipProps): ReactNode {
   useEffect(() => {
     if (suggestion === null) return
     const onKeyDown = (event: KeyboardEvent): void => {
+      const insideComposer = event.target instanceof Element
+        && document.querySelector('[data-composer-card]')?.contains(event.target)
+      if (insideComposer && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+        if (event.key === 'Escape' && !adviceVisibleRef.current
+          && suggestion?.startsWith(inputRef.current.draft)
+          && suggestion.length > inputRef.current.draft.length
+          && inputRef.current.phase === 'plain') {
+          suggestionController.consume()
+          event.preventDefault()
+          return
+        }
+        if (event.key === 'Tab') {
+          if (fillFromSuggestion()) event.preventDefault()
+          return
+        }
+      }
       if (!isFillTrigger(event)) return
+      if (inputRef.current.draft !== '') return // ArrowRight navigates typed text; Tab accepts a matching suffix
       if (!fillFromSuggestion()) return // violated gate → native ArrowRight semantics
       event.preventDefault()
     }
@@ -289,7 +310,7 @@ export function ComposerDockTip(props: ComposerDockTipProps): ReactNode {
     <div className={styles.tip} data-advisor-tip="" role="status" aria-live="polite" onClick={() => { fillFromSuggestion() }}>
       <span className={styles.tipGlyph} aria-hidden="true">✦</span>
       <span className={styles.tipPrefix}>{t('nextPromptPrefix')}:</span>
-      <span className={styles.tipText}>{suggestion}</span>
+      <span className={styles.tipText}>{visibleSuggestion}</span>
       <span className={styles.tipAccept}>{t('nextPromptAccept')}</span>
     </div>
   )

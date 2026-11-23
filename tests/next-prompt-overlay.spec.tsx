@@ -16,8 +16,8 @@
  * input/textarea/contenteditable elsewhere keeps native semantics.
  *
  * Contract under test (brief behavior contract, one case per bullet):
- * ① render gate: tip renders ONLY when suggestion !== null && draft === ''
- *    && phase === 'plain'; otherwise nothing renders, and a fill attempt
+ * ① render gate: tip renders only when the draft is a strict prefix of the
+ *    suggestion and phase === 'plain'; otherwise nothing renders, and a fill attempt
  *    intercepts nothing (the fill handler re-validates this gate — see ③).
  * ② tip presentation: the localized prefix, the suggestion text, and the
  *    accept control render on one row (the ✦ glyph is presentational). The
@@ -280,6 +280,78 @@ describe('next-prompt dock tip (plan dsh-advisor-next-prompt-n12, task 3; dock-t
     expect(screen.queryByText(SUGGESTION)).toBeNull()
     expect(fireEvent.keyDown(document, { key: 'ArrowRight' })).toBe(true)
     expect(h.setDraft).not.toHaveBeenCalled()
+  })
+
+  it('accepts with unmodified Tab inside the composer without taking Tab from elsewhere', async () => {
+    const h = harness()
+    const view = await mountWithSuggestion(h)
+    const outside = document.createElement('button')
+    document.body.append(outside)
+    try {
+      expect(fireEvent.keyDown(outside, { key: 'Tab' })).toBe(true)
+      expect(h.setDraft).not.toHaveBeenCalled()
+      const card = view.container.querySelector('[data-composer-card]')!
+      expect(fireEvent.keyDown(card, { key: 'Tab', shiftKey: true })).toBe(true)
+      expect(h.setDraft).not.toHaveBeenCalled()
+      expect(fireEvent.keyDown(card, { key: 'Tab' })).toBe(false)
+      expect(h.setDraft).toHaveBeenCalledWith(SUGGESTION)
+      expect(h.controller.store.getSnapshot().suggestion).toBeNull()
+    } finally {
+      outside.remove()
+    }
+  })
+
+  it('dismisses the suggestion with Escape inside the composer without filling the draft', async () => {
+    const h = harness()
+    const view = await mountWithSuggestion(h)
+    const card = view.container.querySelector('[data-composer-card]')!
+    expect(fireEvent.keyDown(card, { key: 'Escape' })).toBe(false)
+    expect(h.setDraft).not.toHaveBeenCalled()
+    expect(h.controller.store.getSnapshot().suggestion).toBeNull()
+  })
+
+  it('offers only the untyped suffix for a matching draft and accepts it with Tab', async () => {
+    const h = harness()
+    const view = await mountWithSuggestion(h)
+    const prefix = SUGGESTION.slice(0, 5)
+    h.input.update((s) => { s.draft = prefix })
+    view.rerender(<ComposerStack><ComposerDockTip {...h.props} /></ComposerStack>)
+    expect(screen.getByText(SUGGESTION.slice(prefix.length))).toBeTruthy()
+    const card = view.container.querySelector('[data-composer-card]')!
+    expect(fireEvent.keyDown(card, { key: 'ArrowRight' })).toBe(true)
+    expect(h.setDraft).not.toHaveBeenCalled()
+    expect(fireEvent.keyDown(card, { key: 'Tab' })).toBe(false)
+    expect(h.setDraft).toHaveBeenCalledWith(SUGGESTION)
+  })
+
+  it('never offers a suffix when the typed draft diverges or already equals the prediction', async () => {
+    const h = harness()
+    const view = await mountWithSuggestion(h)
+    h.input.update((s) => { s.draft = 'unrelated draft' })
+    view.rerender(<ComposerStack><ComposerDockTip {...h.props} /></ComposerStack>)
+    expect(screen.queryByRole('status')).toBeNull()
+    const card = view.container.querySelector('[data-composer-card]')!
+    expect(fireEvent.keyDown(card, { key: 'Tab' })).toBe(true)
+    expect(h.setDraft).not.toHaveBeenCalled()
+    h.input.update((s) => { s.draft = SUGGESTION })
+    view.rerender(<ComposerStack><ComposerDockTip {...h.props} /></ComposerStack>)
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('keeps a dismissed suggestion hidden across refreshes until the host clears it', async () => {
+    const h = harness()
+    h.rpc.auto = true
+    h.rpc.reply = ok({ suggestion: SUGGESTION })
+    await h.controller.fetch()
+    expect(h.controller.store.getSnapshot().suggestion).toBe(SUGGESTION)
+    h.controller.consume()
+    await h.controller.fetch()
+    expect(h.controller.store.getSnapshot().suggestion).toBeNull()
+    h.rpc.reply = ok({ suggestion: null })
+    await h.controller.fetch()
+    h.rpc.reply = ok({ suggestion: SUGGESTION })
+    await h.controller.fetch()
+    expect(h.controller.store.getSnapshot().suggestion).toBe(SUGGESTION)
   })
 
   it('fills the draft on a bare ArrowRight and clears the suggestion optimistically', async () => {
@@ -649,6 +721,9 @@ describe('composer dock tip: one-row advice/suggestion arbitration', () => {
       </ComposerStack>,
     )
     expect(screen.getByText(NOTE)).toBeTruthy()
+    const card = view.container.querySelector('[data-composer-card]')!
+    expect(fireEvent.keyDown(card, { key: 'Escape' })).toBe(true)
+    expect(h.controller.store.getSnapshot().suggestion).toBe(SUGGESTION)
     fireEvent.keyDown(document.body, { key: 'ArrowRight' })
     expect(h.setDraft).not.toHaveBeenCalled()
 

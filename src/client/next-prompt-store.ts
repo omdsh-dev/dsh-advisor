@@ -61,6 +61,8 @@ export class AdvisorSuggestionController {
 
   /** Fence token: a newer fetch makes every older settle stale. */
   private requestSeq = 0
+  /** A locally accepted/dismissed value stays hidden across polls until the host clears it. */
+  private consumedText: string | null = null
 
   /** Last consumed refresh-signal epoch (reconnect / focus bumps). */
   private lastSignal: number | undefined
@@ -112,9 +114,10 @@ export class AdvisorSuggestionController {
       const suggestion = typeof payload.suggestion === 'string' && payload.suggestion.length > 0
         ? payload.suggestion
         : null
+      if (suggestion === null) this.consumedText = null
       this.store.update((s) => {
         s.status = 'ready'
-        s.suggestion = suggestion
+        s.suggestion = suggestion === this.consumedText ? null : suggestion
       })
       return
     }
@@ -134,6 +137,7 @@ export class AdvisorSuggestionController {
    * suggestion until the session's next turn consumes it).
    */
   consume(): void {
+    this.consumedText = this.store.getSnapshot().suggestion
     this.store.update((s) => {
       s.status = 'ready'
       s.suggestion = null
